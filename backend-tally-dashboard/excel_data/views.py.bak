@@ -1,0 +1,120 @@
+# Commented for debugging  00:23 29/8/25
+# # Add new endpoints for dynamic dropdowns and improved employee management
+# @api_view(['GET'])
+# @permission_classes([AllowAny])
+# def get_dropdown_options(request):
+#     """
+#     Get unique values for departments, locations, and branches for the current tenant
+#     """
+#     #Changed for debugging
+#     # try:
+#     #     tenant = getattr(request, 'tenant', None)
+#     #     if not tenant:
+#     #         return Response({"error": "No tenant found"}, status=400)
+
+#     #     # Get unique departments from employees (remove duplicates and empty values)
+#     #     departments_raw = EmployeeProfile.objects.filter(
+#     #         tenant=tenant,
+#     #         department__isnull=False
+#     #     ).exclude(department='').values_list('department', flat=True).distinct()
+
+#     #     # Clean and deduplicate departments but preserve original case
+#     #     departments_clean = set()
+#     #     for dept in departments_raw:
+#     #         if dept and dept.strip():
+#     #             # Just strip whitespace, don't change case to preserve original department names
+#     #             cleaned = dept.strip()
+#     #             departments_clean.add(cleaned)
+
+#     #     # Get unique location branches
+#     #     locations_raw = EmployeeProfile.objects.filter(
+#     #         tenant=tenant,
+#     #         location_branch__isnull=False
+#     #     ).exclude(location_branch='').values_list('location_branch', flat=True).distinct()
+
+#     #     # Clean and deduplicate locations but preserve original case
+#     #     locations_clean = set()
+#     #     for loc in locations_raw:
+#     #         if loc and loc.strip():
+#     #             cleaned = loc.strip()
+#     #             locations_clean.add(cleaned)
+
+#     #     # Get unique designations
+#     #     designations_raw = EmployeeProfile.objects.filter(
+#     #         tenant=tenant,
+#     #         designation__isnull=False
+#     #     ).exclude(designation='').values_list('designation', flat=True).distinct()
+
+#     #     # Clean and deduplicate designations but preserve original case
+#     #     designations_clean = set()
+#     #     for desig in designations_raw:
+#     #         if desig and desig.strip():
+#     #             cleaned = desig.strip()
+#     #             designations_clean.add(cleaned)
+
+#     #     # -----------------------------
+#     #     # NEW: Include City / State
+#     #     # -----------------------------
+
+#     #     # Get unique cities
+#     #     cities_raw = EmployeeProfile.objects.filter(
+#     #         tenant=tenant,
+#     #         city__isnull=False
+#     #     ).exclude(city='').values_list('city', flat=True).distinct()
+
+#     #     cities_clean = set()
+#     #     for city in cities_raw:
+#     #         if city and city.strip():
+#     #             cleaned = city.strip()
+#     #             cities_clean.add(cleaned)
+
+#     #     # Get unique states
+#     #     states_raw = EmployeeProfile.objects.filter(
+#     #         tenant=tenant,
+#     #         state__isnull=False
+#     #     ).exclude(state='').values_list('state', flat=True).distinct()
+
+#     #     states_clean = set()
+#     #     for st in states_raw:
+#     #         if st and st.strip():
+#     #             cleaned = st.strip()
+#     #             states_clean.add(cleaned)
+
+#     #     return Response({
+#     #         'departments': sorted(list(departments_clean)),
+#     #         'locations': sorted(list(locations_clean)),
+#     #         'designations': sorted(list(designations_clean)),
+#     #         'cities': sorted(list(cities_clean)),
+#     #         'states': sorted(list(states_clean))
+#     #     })
+
+#     # except Exception as e:
+#     #     return Response({"error": str(e)}, status=500)
+#     try:
+#         # NOTE: We have removed the tenant check for this public view.
+
+#         # Get all unique departments from all employees
+#     #     departments_clean = set(EmployeeProfile.objects.exclude(department__isnull=True).exclude(department='').values_list('department', flat=True).distinct())
+
+#     #     # Get all unique location branches
+#     #     locations_clean = set(EmployeeProfile.objects.exclude(location_branch__isnull=True).exclude(location_branch='').values_list('location_branch', flat=True).distinct())
+
+#     #     # Get all unique designations
+#     #     designations_clean = set(EmployeeProfile.objects.exclude(designation__isnull=True).exclude(designation='').values_list('designation', flat=True).distinct())
+
+#     #     # Get all unique cities
+#     #     cities_clean = set(EmployeeProfile.objects.exclude(city__isnull=True).exclude(city='').values_list('city', flat=True).distinct())
+
+#     #     # Get all unique states
+#     #     states_clean = set(EmployeeProfile.objects.exclude(state__isnull=True).exclude(state='').values_list('state', flat=True).distinct())
+
+#     #     return Response({
+#     #         'departments': sorted(list(departments_clean)),
+#     #         'locations': sorted(list(locations_clean)),
+#     #         'designations': sorted(list(designations_clean)),
+#     #         'cities': sorted(list(cities_clean)),
+#     #         'states': sorted(list(states_clean))
+#     #     })
+
+#     # except Exception as e:
+#     #     return Response({"error": f"An unexpected error occurred: {str(e)}"}, status=500)

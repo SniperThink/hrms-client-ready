@@ -1,0 +1,290 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Database Index Verification Dashboard</title>
+    <style>
+        body { font-family: Arial, sans-serif; margin: 20px; background: #f5f5f5; }
+        .container { max-width: 1200px; margin: 0 auto; }
+        .section { margin: 20px 0; padding: 20px; background: white; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
+        .success { background-color: #d4edda; border-left: 4px solid #28a745; }
+        .error { background-color: #f8d7da; border-left: 4px solid #dc3545; }
+        .info { background-color: #d1ecf1; border-left: 4px solid #17a2b8; }
+        .warning { background-color: #fff3cd; border-left: 4px solid #ffc107; }
+        pre { background: #f8f9fa; padding: 15px; border-radius: 5px; overflow-x: auto; font-size: 14px; }
+        .test-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
+        .metric { text-align: center; padding: 15px; background: #f8f9fa; border-radius: 5px; }
+        .metric-value { font-size: 24px; font-weight: bold; color: #28a745; }
+        .metric-label { font-size: 14px; color: #666; }
+        button { padding: 12px 24px; background: #007bff; color: white; border: none; border-radius: 5px; cursor: pointer; margin: 5px; }
+        button:hover { background: #0056b3; }
+        button.secondary { background: #6c757d; }
+        button.success { background: #28a745; }
+        .status { font-weight: bold; padding: 5px 10px; border-radius: 3px; }
+        .status.good { background: #d4edda; color: #155724; }
+        .status.bad { background: #f8d7da; color: #721c24; }
+        table { width: 100%; border-collapse: collapse; margin: 15px 0; }
+        th, td { padding: 12px; text-align: left; border-bottom: 1px solid #ddd; }
+        th { background-color: #f8f9fa; font-weight: bold; }
+        tr:hover { background-color: #f5f5f5; }
+        .loading { text-align: center; padding: 20px; color: #666; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🗄️ Database Index Verification Dashboard</h1>
+        
+        <div class="section info">
+            <h3>📋 Quick Index Verification</h3>
+            <p>This dashboard helps you verify that your database indexes are properly created and being used by your HRMS queries.</p>
+            <div style="margin: 15px 0;">
+                <button onclick="testAPI('all_records')">Test all_records API</button>
+                <button onclick="testAPI('directory_data')">Test directory_data API</button>
+                <button onclick="runAllTests()" class="success">Run All Tests</button>
+            </div>
+        </div>
+
+        <div class="section" id="metrics-section">
+            <h3>📊 Performance Metrics</h3>
+            <div class="test-grid">
+                <div class="metric">
+                    <div class="metric-value" id="avg-response-time">-</div>
+                    <div class="metric-label">Avg Response Time (ms)</div>
+                </div>
+                <div class="metric">
+                    <div class="metric-value" id="index-usage">-</div>
+                    <div class="metric-label">Index Usage Rate</div>
+                </div>
+            </div>
+        </div>
+
+        <div class="section" id="api-test-section" style="display: none;">
+            <h3>🧪 API Performance Tests</h3>
+            <div id="api-test-results"></div>
+        </div>
+
+        <div class="section" id="index-verification-section" style="display: none;">
+            <h3>🔍 Index Verification Results</h3>
+            <div id="index-verification-results"></div>
+        </div>
+
+        <div class="section">
+            <h3>🛠️ Manual Verification Methods</h3>
+            
+            <h4>Method 1: Check API Response Times</h4>
+            <p>Look for the <code>timing_breakdown</code> in your API responses:</p>
+            <pre>{
+  "performance": {
+    "timing_breakdown": {
+      "employee_fetch_ms": 15.2,      // Should be &lt; 50ms
+      "monthly_summary_query_ms": 8.7, // Should be &lt; 20ms  
+      "attendance_query_ms": 12.1     // Should be &lt; 30ms
+    }
+  }
+}</pre>
+
+            <h4>Method 2: Database Query Analysis</h4>
+            <p>Run these SQL commands in your database tool:</p>
+            <pre>-- Check if indexes exist
+SHOW INDEX FROM excel_data_dailyattendance WHERE Key_name LIKE 'idx_%';
+
+-- Test query performance
+EXPLAIN SELECT * FROM excel_data_dailyattendance 
+WHERE tenant_id = 1 AND date >= '2025-01-01' LIMIT 100;</pre>
+
+            <h4>Method 3: Performance Comparison</h4>
+            <p>Expected improvements after indexing:</p>
+            <table>
+                <tr><th>API Endpoint</th><th>Before Indexes</th><th>After Indexes</th><th>Improvement</th></tr>
+                <tr><td>all_records</td><td>1500-3000ms</td><td>300-800ms</td><td class="status good">70-80% faster</td></tr>
+                <tr><td>directory_data</td><td>2000-4000ms</td><td>400-1000ms</td><td class="status good">75-85% faster</td></tr>
+                <tr><td>bulk_update_attendance</td><td>3000-8000ms</td><td>800-2000ms</td><td class="status good">70-75% faster</td></tr>
+            </table>
+        </div>
+
+        <div class="section warning">
+            <h3>⚠️ Signs Your Indexes Are NOT Working</h3>
+            <ul>
+                <li><strong>API response times still slow</strong> (> 2 seconds for basic queries)</li>
+                <li><strong>High CPU usage</strong> on database server</li>
+                <li><strong>timing_breakdown shows high query times</strong> (> 100ms for basic queries)</li>
+                <li><strong>EXPLAIN queries show no index usage</strong> (Key column is NULL)</li>
+                <li><strong>Database locks and timeouts</strong> under load</li>
+            </ul>
+        </div>
+
+        <div class="section success">
+            <h3>✅ Signs Your Indexes Are Working</h3>
+            <ul>
+                <li><strong>Dramatically faster API responses</strong> (50-85% improvement)</li>
+                <li><strong>Low query times in timing_breakdown</strong> (< 50ms for most queries)</li>
+                <li><strong>EXPLAIN shows index usage</strong> (Key column shows index name)</li>
+                <li><strong>Better server performance</strong> under concurrent load</li>
+                <li><strong>Reduced memory usage</strong> and faster page loads</li>
+            </ul>
+        </div>
+    </div>
+
+    <script>
+        let testResults = [];
+
+        async function testAPI(apiType) {
+            const section = document.getElementById('api-test-section');
+            const results = document.getElementById('api-test-results');
+            section.style.display = 'block';
+            
+            results.innerHTML = '<div class="loading">🔄 Testing ' + apiType + ' API...</div>';
+
+            try {
+                let url;
+                if (apiType === 'all_records') {
+                    url = '/api/daily-attendance/all_records/?time_period=this_month';
+                } else if (apiType === 'directory_data') {
+                    url = '/api/employees/directory_data/?page=1&page_size=50';
+                }
+
+                const startTime = performance.now();
+                const response = await fetch(url, {
+                    credentials: 'include',
+                    headers: { 'Accept': 'application/json' }
+                });
+                const networkTime = Math.round(performance.now() - startTime);
+
+                if (!response.ok) {
+                    throw new Error(`HTTP ${response.status}`);
+                }
+
+                const data = await response.json();
+                const perf = data.performance || {};
+                const timing = perf.timing_breakdown || {};
+
+                // Determine if indexes are being used effectively
+                let indexEffectiveness = 'Unknown';
+                let indexScore = 0;
+
+                if (apiType === 'all_records') {
+                    const queryTime = timing.monthly_summary_query_ms || 0;
+                    const fetchTime = timing.employee_fetch_ms || 0;
+                    
+                    if (queryTime < 20 && fetchTime < 50) {
+                        indexEffectiveness = 'Excellent';
+                        indexScore = 95;
+                    } else if (queryTime < 50 && fetchTime < 100) {
+                        indexEffectiveness = 'Good';
+                        indexScore = 80;
+                    } else if (queryTime < 100 && fetchTime < 200) {
+                        indexEffectiveness = 'Fair';
+                        indexScore = 60;
+                    } else {
+                        indexEffectiveness = 'Poor';
+                        indexScore = 30;
+                    }
+                }
+
+                // Store result for metrics
+                testResults.push({
+                    api: apiType,
+                    networkTime: networkTime,
+                    backendTime: perf.total_time_ms || 0,
+                    indexScore: indexScore,
+                    effectiveness: indexEffectiveness
+                });
+
+                // Display results
+                results.innerHTML = `
+                    <div class="success">
+                        <h4>✅ ${apiType} API Test Results</h4>
+                        <p><strong>Network Time:</strong> ${networkTime}ms</p>
+                        <p><strong>Backend Time:</strong> ${perf.total_time_ms || 'N/A'}ms</p>
+                        <p><strong>Records:</strong> ${data.count || 'N/A'}</p>
+                        <p><strong>Index Effectiveness:</strong> <span class="status ${indexScore > 70 ? 'good' : 'bad'}">${indexEffectiveness} (${indexScore}%)</span></p>
+                        
+                        ${timing && Object.keys(timing).length > 0 ? `
+                            <h5>Timing Breakdown:</h5>
+                            <ul>
+                                ${Object.entries(timing).map(([key, value]) => 
+                                    `<li><strong>${key}:</strong> ${value}ms</li>`
+                                ).join('')}
+                            </ul>
+                        ` : ''}
+                    </div>
+                `;
+
+                updateMetrics();
+
+            } catch (error) {
+                results.innerHTML = `
+                    <div class="error">
+                        <h4>❌ ${apiType} API Test Failed</h4>
+                        <p><strong>Error:</strong> ${error.message}</p>
+                        <p>Make sure you're logged into the HRMS system and try again.</p>
+                    </div>
+                `;
+            }
+        }
+
+        async function runAllTests() {
+            await testAPI('all_records');
+            setTimeout(async () => {
+                await testAPI('directory_data');
+                showIndexVerification();
+            }, 1000);
+        }
+
+        function updateMetrics() {
+            if (testResults.length === 0) return;
+
+            const avgResponseTime = Math.round(
+                testResults.reduce((sum, r) => sum + r.networkTime, 0) / testResults.length
+            );
+
+            const avgIndexUsage = Math.round(
+                testResults.reduce((sum, r) => sum + r.indexScore, 0) / testResults.length
+            );
+
+            document.getElementById('avg-response-time').textContent = avgResponseTime;
+            document.getElementById('index-usage').textContent = avgIndexUsage + '%';
+        }
+
+        function showIndexVerification() {
+            const section = document.getElementById('index-verification-section');
+            const results = document.getElementById('index-verification-results');
+            section.style.display = 'block';
+
+            if (testResults.length === 0) {
+                results.innerHTML = '<div class="warning">No test results available. Run API tests first.</div>';
+                return;
+            }
+
+            const avgScore = testResults.reduce((sum, r) => sum + r.indexScore, 0) / testResults.length;
+            const allGood = testResults.every(r => r.indexScore > 70);
+
+            results.innerHTML = `
+                <div class="${allGood ? 'success' : 'warning'}">
+                    <h4>${allGood ? '✅' : '⚠️'} Index Verification Summary</h4>
+                    <p><strong>Overall Index Performance:</strong> ${Math.round(avgScore)}%</p>
+                    
+                    <table>
+                        <tr><th>API</th><th>Network Time</th><th>Backend Time</th><th>Index Effectiveness</th></tr>
+                        ${testResults.map(r => `
+                            <tr>
+                                <td>${r.api}</td>
+                                <td>${r.networkTime}ms</td>
+                                <td>${r.backendTime}ms</td>
+                                <td><span class="status ${r.indexScore > 70 ? 'good' : 'bad'}">${r.effectiveness}</span></td>
+                            </tr>
+                        `).join('')}
+                    </table>
+
+                    <h5>🎯 Recommendations:</h5>
+                    <ul>
+                        ${allGood ? 
+                            '<li>✅ Indexes are working well! Your queries are optimized.</li><li>✅ Continue monitoring performance in production.</li>' :
+                            '<li>⚠️ Some queries may need additional optimization.</li><li>💡 Check if all indexes were created successfully.</li><li>🔧 Consider running ANALYZE TABLE commands.</li>'
+                        }
+                    </ul>
+                </div>
+            `;
+        }
+    </script>
+</body>
+</html>

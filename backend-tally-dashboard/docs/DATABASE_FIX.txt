@@ -1,0 +1,24 @@
+# IMMEDIATE DATABASE FIXES
+# ========================
+
+# 1. Check your .env file and ensure you're using the correct Neon connection string
+# Your current DB settings should be:
+
+DB_NAME=neondb
+DB_USER=neondb_owner  
+DB_HOST=ep-lingering-block-a1olkbv3-pooler.ap-southeast-1.aws.neon.tech
+DB_PORT=5432
+DB_PASSWORD=npg_kiW2lJnVcsu8
+
+# 2. Alternative: Use a local PostgreSQL for development
+# Download PostgreSQL: https://www.postgresql.org/download/windows/
+# Then change to:
+DB_NAME=hrms_local
+DB_USER=postgres
+DB_HOST=localhost
+DB_PORT=5432
+DB_PASSWORD=your_local_password
+
+# 3. Expected performance with local DB:
+# • API Response: 200-500ms (vs current 3000ms)
+# • Total Time: 300-600ms (vs current 3100ms)

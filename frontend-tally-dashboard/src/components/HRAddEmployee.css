@@ -1,0 +1,16 @@
+/* Hide default calendar icon in Chrome, Edge, Safari */
+input[type="date"]::-webkit-calendar-picker-indicator {
+  opacity: 0;
+  display: none;
+}
+
+/* Hide default calendar icon in Firefox */
+input[type="date"]::-moz-calendar-picker-indicator {
+  opacity: 0;
+  display: none;
+}
+
+/* Hide default calendar icon in IE/Edge (legacy) */
+input[type="date"]::-ms-input-placeholder {
+  color: transparent;
+} 

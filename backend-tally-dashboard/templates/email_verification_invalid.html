@@ -1,0 +1,54 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Invalid Verification Link</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            line-height: 1.6;
+            color: #333;
+            max-width: 600px;
+            margin: 50px auto;
+            padding: 20px;
+            text-align: center;
+        }
+        .error-container {
+            background-color: #f8d7da;
+            border: 1px solid #f5c6cb;
+            color: #721c24;
+            padding: 30px;
+            border-radius: 8px;
+            margin: 20px 0;
+        }
+        .error-icon {
+            font-size: 48px;
+            color: #dc3545;
+            margin-bottom: 20px;
+        }
+        .button {
+            display: inline-block;
+            background-color: #0B5E59;
+            color: white;
+            padding: 12px 30px;
+            text-decoration: none;
+            border-radius: 5px;
+            margin: 20px 0;
+            font-weight: bold;
+        }
+        .button:hover {
+            background-color: #094947;
+        }
+    </style>
+</head>
+<body>
+    <div class="error-container">
+        <div class="error-icon">❌</div>
+        <h1>Invalid Verification Link</h1>
+        <p>{{ error }}</p>
+        <p>The verification link you clicked is invalid or has been tampered with.</p>
+        <a href="/resend-verification" class="button">Request New Verification Email</a>
+    </div>
+</body>
+</html>

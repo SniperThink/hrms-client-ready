@@ -1,0 +1,195 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>HRMS API Response Debugger</title>
+    <style>
+        body { font-family: Arial, sans-serif; margin: 20px; }
+        .container { max-width: 1200px; margin: 0 auto; }
+        .section { margin: 20px 0; padding: 15px; border: 1px solid #ddd; border-radius: 5px; }
+        .success { background-color: #d4edda; border-color: #c3e6cb; }
+        .error { background-color: #f8d7da; border-color: #f5c6cb; }
+        .info { background-color: #d1ecf1; border-color: #bee5eb; }
+        pre { background: #f8f9fa; padding: 10px; border-radius: 3px; overflow-x: auto; }
+        .timing { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 10px; }
+        .timing-item { padding: 10px; background: #f8f9fa; border-radius: 3px; text-align: center; }
+        button { padding: 10px 20px; background: #007bff; color: white; border: none; border-radius: 3px; cursor: pointer; }
+        button:hover { background: #0056b3; }
+        .status { font-weight: bold; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🔍 HRMS all_records API Debugger</h1>
+        
+        <div class="section info">
+            <h3>📡 API Test</h3>
+            <button onclick="testAPI()">Test all_records API</button>
+            <div id="status" style="margin-top: 10px;"></div>
+        </div>
+
+        <div class="section" id="response-section" style="display: none;">
+            <h3>📊 Response Analysis</h3>
+            <div id="response-analysis"></div>
+        </div>
+
+        <div class="section" id="performance-section" style="display: none;">
+            <h3>⚡ Performance Breakdown</h3>
+            <div id="performance-data"></div>
+        </div>
+
+        <div class="section" id="compatibility-section" style="display: none;">
+            <h3>🎨 Frontend Compatibility</h3>
+            <div id="compatibility-data"></div>
+        </div>
+
+        <div class="section" id="raw-section" style="display: none;">
+            <h3>💾 Raw Response</h3>
+            <pre id="raw-response"></pre>
+        </div>
+    </div>
+
+    <script>
+        async function testAPI() {
+            const statusDiv = document.getElementById('status');
+            statusDiv.innerHTML = '<span class="status">🔄 Testing API...</span>';
+            
+            try {
+                const url = '/api/daily-attendance/all_records/?time_period=this_month';
+                const startTime = performance.now();
+                
+                const response = await fetch(url, {
+                    credentials: 'include', // Include cookies for authentication
+                    headers: {
+                        'Accept': 'application/json',
+                        'Content-Type': 'application/json'
+                    }
+                });
+                
+                const endTime = performance.now();
+                const networkTime = Math.round(endTime - startTime);
+                
+                if (!response.ok) {
+                    throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+                }
+                
+                const data = await response.json();
+                
+                // Update status
+                statusDiv.innerHTML = `<span class="status" style="color: green;">✅ API Response Successful (${networkTime}ms)</span>`;
+                
+                // Show response analysis
+                showResponseAnalysis(data, networkTime);
+                
+            } catch (error) {
+                console.error('API Test Error:', error);
+                statusDiv.innerHTML = `<span class="status" style="color: red;">❌ API Error: ${error.message}</span>`;
+                
+                // Hide sections on error
+                ['response-section', 'performance-section', 'compatibility-section', 'raw-section'].forEach(id => {
+                    document.getElementById(id).style.display = 'none';
+                });
+            }
+        }
+        
+        function showResponseAnalysis(data, networkTime) {
+            // Response Analysis
+            const responseDiv = document.getElementById('response-analysis');
+            const hasResults = 'results' in data;
+            const hasCount = 'count' in data;
+            const hasPerformance = 'performance' in data;
+            const recordCount = data.count || (data.results ? data.results.length : 0);
+            
+            responseDiv.innerHTML = `
+                <div class="timing">
+                    <div class="timing-item">
+                        <strong>Network Time</strong><br>
+                        ${networkTime}ms
+                    </div>
+                    <div class="timing-item">
+                        <strong>Backend Time</strong><br>
+                        ${data.performance?.total_time_ms || 'N/A'}ms
+                    </div>
+                    <div class="timing-item">
+                        <strong>Records</strong><br>
+                        ${recordCount}
+                    </div>
+                </div>
+                <p><strong>Structure Check:</strong></p>
+                <ul>
+                    <li>${hasResults ? '✅' : '❌'} Has 'results' key</li>
+                    <li>${hasCount ? '✅' : '❌'} Has 'count' key</li>
+                    <li>${hasPerformance ? '✅' : '❌'} Has 'performance' key</li>
+                    <li>${recordCount > 0 ? '✅' : '❌'} Has data records</li>
+                </ul>
+            `;
+            
+            // Performance Analysis
+            if (data.performance) {
+                const perf = data.performance;
+                const breakdown = perf.timing_breakdown || {};
+                
+                document.getElementById('performance-data').innerHTML = `
+                    <div class="timing">
+                        <div class="timing-item">
+                            <strong>Employee Fetch</strong><br>
+                            ${breakdown.employee_fetch_ms || 'N/A'}ms
+                        </div>
+                        <div class="timing-item">
+                            <strong>DB Query</strong><br>
+                            ${breakdown.monthly_summary_query_ms || 'N/A'}ms
+                        </div>
+                        <div class="timing-item">
+                            <strong>Processing</strong><br>
+                            ${breakdown.monthly_data_processing_ms || 'N/A'}ms
+                        </div>
+                    </div>
+                    <p><strong>Details:</strong></p>
+                    <ul>
+                        <li>Data Source: ${perf.data_source || 'N/A'}</li>
+                        <li>Optimization: ${perf.optimization || 'N/A'}</li>
+                        <li>Cached: ${perf.cached ? 'Yes' : 'No'}</li>
+                        <li>Employee Cache: ${breakdown.employee_fetch_cache_hit ? 'HIT' : 'MISS'}</li>
+                    </ul>
+                `;
+            }
+            
+            // Compatibility Check
+            const compatibilityDiv = document.getElementById('compatibility-data');
+            const issues = [];
+            
+            if (!hasResults) issues.push("Missing 'results' key");
+            if (data.results && data.results.length > 0) {
+                const firstRecord = data.results[0];
+                const requiredFields = ['year', 'month', 'employee_name', 'total_ot_hours', 'total_late_minutes'];
+                
+                requiredFields.forEach(field => {
+                    if (!(field in firstRecord)) {
+                        issues.push(`Missing '${field}' field`);
+                    }
+                });
+            }
+            
+            compatibilityDiv.innerHTML = `
+                <p><strong>Frontend Compatibility:</strong></p>
+                ${issues.length === 0 ? 
+                    '<p style="color: green;">✅ All compatibility checks passed!</p>' :
+                    '<ul style="color: red;">' + issues.map(issue => `<li>❌ ${issue}</li>`).join('') + '</ul>'
+                }
+                
+                ${data.results && data.results.length > 0 ? `
+                    <p><strong>First Record Fields:</strong></p>
+                    <pre>${JSON.stringify(Object.keys(data.results[0]), null, 2)}</pre>
+                ` : ''}
+            `;
+            
+            // Raw Response
+            document.getElementById('raw-response').textContent = JSON.stringify(data, null, 2);
+            
+            // Show all sections
+            ['response-section', 'performance-section', 'compatibility-section', 'raw-section'].forEach(id => {
+                document.getElementById(id).style.display = 'block';
+            });
+        }
+    </script>
+</body>
+</html>

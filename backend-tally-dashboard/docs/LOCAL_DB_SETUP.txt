@@ -1,0 +1,29 @@
+# LOCAL POSTGRESQL SETUP FOR TESTING
+# =====================================
+
+# 1. INSTALL POSTGRESQL LOCALLY
+# Download from: https://www.postgresql.org/download/windows/
+# Or use chocolatey: choco install postgresql
+
+# 2. UPDATE YOUR .env FILE
+DB_NAME=hrms_local
+DB_USER=postgres
+DB_HOST=localhost
+DB_PORT=5432
+DB_PASSWORD=your_local_password
+
+# 3. CREATE LOCAL DATABASE
+# Open psql and run:
+# CREATE DATABASE hrms_local;
+
+# 4. MIGRATE YOUR DATA
+# python manage.py migrate
+# python manage.py createsuperuser
+
+# 5. EXPECTED PERFORMANCE WITH LOCAL DB:
+# • Health: ~20ms
+# • Login: ~100-200ms  
+# • API: ~150-300ms
+
+# TEMPORARY FIX: Use local PostgreSQL while Neon resolves issues
+# LONG-TERM: Consider upgrading Neon plan or switching to Railway/Render

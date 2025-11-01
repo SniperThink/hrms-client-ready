@@ -1,0 +1,1 @@
+gunicorn --worker-class gevent --worker-connections 1000 --workers 1 --bind 0.0.0.0:8000 --timeout 300 --keep-alive 5 --access-logfile - --error-logfile - dashboard.wsgi:application

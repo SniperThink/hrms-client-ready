@@ -1,0 +1,69 @@
+# Production-Optimized Requirements for Railway Deployment
+# HRMS Backend - Django 5.2
+
+# ============================================
+# CORE DJANGO FRAMEWORK
+# ============================================
+Django==5.2
+psycopg2-binary==2.9.11
+dj-database-url==2.1.0
+whitenoise==6.6.0
+gunicorn==21.2.0
+gevent==24.2.1
+
+# ============================================
+# DJANGO REST FRAMEWORK & AUTH
+# ============================================
+djangorestframework==3.16.1
+djangorestframework-simplejwt==5.5.1
+django-cors-headers==4.9.0
+django-filter==24.2
+
+# ============================================
+# CONFIGURATION MANAGEMENT
+# ============================================
+python-decouple==3.8
+
+# ============================================
+# DATA PROCESSING (Excel/CSV handling)
+# ============================================
+pandas==2.3.3
+numpy==2.3.4
+openpyxl==3.1.5
+et-xmlfile==2.0.0
+
+# ============================================
+# DATE/TIME UTILITIES
+# ============================================
+pytz==2023.3
+python-dateutil==2.9.0.post0
+tzdata==2025.2
+
+# ============================================
+# CELERY & TASK QUEUE (Optional - for scaling)
+# Can be disabled with CELERY_ENABLED=False
+# ============================================
+celery==5.5.3
+redis==6.4.0
+kombu==5.5.4
+amqp==5.3.1
+billiard==4.2.2
+vine==5.1.0
+
+# ============================================
+# CLI UTILITIES (Celery dependencies)
+# ============================================
+click==8.3.0
+click-didyoumean==0.3.1
+click-repl==0.3.0
+click-plugins==1.1.1.2
+prompt-toolkit==3.0.52
+
+# ============================================
+# CORE PYTHON DEPENDENCIES
+# ============================================
+asgiref==3.10.0
+sqlparse==0.5.3
+packaging==25.0
+six==1.17.0
+wcwidth==0.2.14

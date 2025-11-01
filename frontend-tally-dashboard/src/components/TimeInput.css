@@ -1,0 +1,16 @@
+/* Time Input Styling to match Dropdown components - Minimal approach */
+
+/* Only add visual enhancements without interfering with native positioning */
+.time-input-styled {
+  /* Let the browser handle all the positioning naturally */
+}
+
+/* Ensure focus states work properly */
+.time-input-styled:focus {
+  outline: none;
+}
+
+/* Disabled state styling */
+.time-input-styled:disabled {
+  opacity: 0.6;
+}
