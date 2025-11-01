@@ -4,7 +4,7 @@ psycopg2-binary==2.9.11
 dj-database-url==2.1.0
 whitenoise==6.6.0
 gunicorn==21.2.0
-gevent==24.2.1
+gevent==24.11.1
 
 # Django REST Framework
 djangorestframework==3.16.1
