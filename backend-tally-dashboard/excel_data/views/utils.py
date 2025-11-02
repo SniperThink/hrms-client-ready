@@ -396,6 +396,7 @@ def bulk_update_attendance(request):
         created_count = 0
         updated_count = 0
         skipped_count = 0
+        skipped_employees = []  # Track skipped employees with reasons
         errors = []
         
         # PERFORMANCE OPTIMIZATION: Add timing and batch size optimization
@@ -423,6 +424,11 @@ def bulk_update_attendance(request):
                 # Check if employee has joined by this date
                 if employee.date_of_joining and attendance_date < employee.date_of_joining:
                     skipped_count += 1
+                    skipped_employees.append({
+                        'employee_id': employee_id,
+                        'name': record.get('name') or f"{employee.first_name} {employee.last_name}",
+                        'reason': f"Employee has not joined yet (joining date: {employee.date_of_joining})"
+                    })
                     continue
                 
                 # OPTIMIZED: Use pre-calculated off day check
@@ -431,9 +437,20 @@ def bulk_update_attendance(request):
                     employee.off_thursday, employee.off_friday, employee.off_saturday, employee.off_sunday
                 ]
                 
-                if off_day_flags[day_of_week]:
+                # Get status early to check if we should process off-day records
+                status = record.get('status')
+                
+                # Only skip if employee has off day AND status is 'absent' or 'unmarked'
+                # Allow 'off' status to record off days, and 'present' status for extra pay on off days
+                if off_day_flags[day_of_week] and status not in ['off', 'present']:
                     skipped_count += 1
-                    continue  # Skip attendance for off days
+                    day_names = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday']
+                    skipped_employees.append({
+                        'employee_id': employee_id,
+                        'name': record.get('name') or f"{employee.first_name} {employee.last_name}",
+                        'reason': f"Employee has off day on {day_names[day_of_week]} and status is '{status}' (should be 'off' or 'present' for extra pay)"
+                    })
+                    continue  # Skip attendance for off days unless explicitly marking as 'off' or 'present'
                 
                 # OPTIMIZED: Minimal data processing
                 ot_hours = float(record.get('ot_hours', 0))
@@ -442,13 +459,12 @@ def bulk_update_attendance(request):
                 department = record.get('department') or employee.department or 'General'
                 
                 # Handle off-day status optimization
-                if record.get('status') == 'off':
+                if status == 'off':
                     ot_hours = 0
                     late_minutes = 0
                 
                 # OPTIMIZED: Fast status determination
                 # Handle 'present', 'absent', and 'off' statuses
-                status = record.get('status')
                 if status == 'present':
                     attendance_status = 'PRESENT'
                 elif status == 'off':
@@ -611,6 +627,30 @@ def bulk_update_attendance(request):
             cache.delete(key)
             cache_keys_cleared.append(key.split('_')[-2] + '_' + key.split('_')[-1])
         
+        # CRITICAL: Clear all attendance_all_records cache variations (pattern-based)
+        # Cache keys follow pattern: attendance_all_records_{tenant_id}_{param_signature}
+        try:
+            # Try pattern-based deletion if available
+            cache.delete_pattern(f"attendance_all_records_{tenant_id}_*")
+            logger.info(f"✅ Cleared all attendance_all_records cache variations for tenant {tenant_id} (pattern)")
+        except (AttributeError, NotImplementedError):
+            # Fallback: Clear common variations manually
+            common_time_periods = ['last_6_months', 'last_12_months', 'last_5_years', 'this_month', 'custom', 'custom_month', 'custom_range', 'one_day']
+            for period in common_time_periods:
+                # Clear with different param combinations
+                variations = [
+                    f"attendance_all_records_{tenant_id}_{period}_None_None_None_None_rt_1",
+                    f"attendance_all_records_{tenant_id}_{period}_None_None_None_None_rt_0",
+                ]
+                # For one_day and custom_range, also clear with date
+                if period in ['one_day', 'custom_range']:
+                    variations.append(f"attendance_all_records_{tenant_id}_{period}_None_None_{date_str}_{date_str}_rt_1")
+                    variations.append(f"attendance_all_records_{tenant_id}_{period}_None_None_{date_str}_{date_str}_rt_0")
+                
+                for var_key in variations:
+                    cache.delete(var_key)
+            logger.info(f"✅ Cleared attendance_all_records cache variations for tenant {tenant_id} (manual)")
+        
         cache_clear_time = time.time() - cache_start_time
         logger.info(f"LIGHTNING FAST: Cleared {len(critical_cache_keys)} critical cache keys in {cache_clear_time:.3f}s")
         
@@ -634,6 +674,8 @@ def bulk_update_attendance(request):
         
         # Also clear frontend charts cache (pattern matching in background)
         comprehensive_cache_keys.append(f"frontend_charts_{tenant_id}_*")  # Mark for pattern deletion
+        # CRITICAL: Mark attendance_all_records for pattern deletion in background
+        comprehensive_cache_keys.append(f"attendance_all_records_{tenant_id}_*")  # Mark for pattern deletion
         
         # Add employee-specific cache keys
         for employee_id in affected_employee_ids:
@@ -654,6 +696,7 @@ def bulk_update_attendance(request):
                 'created_count': created_count,
                 'updated_count': updated_count,
                 'skipped_count': skipped_count,
+                'skipped_employees': skipped_employees if skipped_employees else None,
                 'date': date_str,
                 'employees_processed': len(attendance_records)
             },
@@ -719,24 +762,46 @@ def bulk_update_attendance(request):
                     cache_keys_cleared_count = 0
                     
                     for cache_key in cache_keys_for_background:
-                        # Handle pattern deletion for frontend_charts
+                        # Handle pattern deletion for cache keys ending with _*
                         if cache_key.endswith('_*'):
                             try:
-                                # Remove the '_*' suffix and use pattern matching
-                                pattern = cache_key
-                                cache.delete_pattern(pattern)
+                                # Try pattern-based deletion
+                                cache.delete_pattern(cache_key)
                                 cache_keys_cleared_count += 1
-                            except AttributeError:
-                                # Fallback: Clear common chart cache keys
+                            except (AttributeError, NotImplementedError):
+                                # Fallback: Clear common variations manually
                                 base_pattern = cache_key.replace('_*', '')
-                                chart_keys = [
-                                    f"{base_pattern}_this_month_All_",
-                                    f"{base_pattern}_last_6_months_All_",
-                                    f"{base_pattern}_last_12_months_All_",
-                                    f"{base_pattern}_last_5_years_All_"
-                                ]
-                                for key in chart_keys:
-                                    cache.delete(key)
+                                
+                                if 'frontend_charts' in cache_key:
+                                    # Frontend charts pattern
+                                    chart_keys = [
+                                        f"{base_pattern}_this_month_All_",
+                                        f"{base_pattern}_last_6_months_All_",
+                                        f"{base_pattern}_last_12_months_All_",
+                                        f"{base_pattern}_last_5_years_All_"
+                                    ]
+                                    for key in chart_keys:
+                                        cache.delete(key)
+                                        cache_keys_cleared_count += 1
+                                elif 'attendance_all_records' in cache_key:
+                                    # Attendance tracker pattern - clear common filter variations
+                                    common_time_periods = ['last_6_months', 'last_12_months', 'last_5_years', 'this_month', 'custom', 'custom_month', 'custom_range', 'one_day']
+                                    for period in common_time_periods:
+                                        variations = [
+                                            f"{base_pattern}_{period}_None_None_None_None_rt_1",
+                                            f"{base_pattern}_{period}_None_None_None_None_rt_0",
+                                        ]
+                                        # For one_day and custom_range, also clear with date
+                                        if period in ['one_day', 'custom_range']:
+                                            variations.append(f"{base_pattern}_{period}_None_None_{date_str}_{date_str}_rt_1")
+                                            variations.append(f"{base_pattern}_{period}_None_None_{date_str}_{date_str}_rt_0")
+                                        
+                                        for var_key in variations:
+                                            cache.delete(var_key)
+                                            cache_keys_cleared_count += 1
+                                else:
+                                    # Generic pattern - just delete the base key
+                                    cache.delete(base_pattern)
                                     cache_keys_cleared_count += 1
                         else:
                             cache.delete(cache_key)

@@ -1,5 +1,7 @@
 # Gunicorn Configuration for HRMS Backend
 # Using sync workers for Python 3.13 compatibility
+# Note: New code suggests gevent for SSE support, but Python 3.13 has gevent compatibility issues
+# SSE features can work with sync workers + threading if needed
 
 import multiprocessing
 import os
@@ -12,6 +14,10 @@ backlog = 2048
 
 # Worker processes
 # Force sync workers for Python 3.13 compatibility (gevent has issues)
+# If SSE support is absolutely required, consider:
+# 1. Downgrading to Python 3.11
+# 2. Using Django Channels with ASGI
+# 3. Implementing SSE with sync workers + threading
 workers = int(os.getenv("GUNICORN_WORKERS", multiprocessing.cpu_count() * 2 + 1))
 worker_class = "sync"  # Force sync workers - do not use gevent with Python 3.13
 threads = int(os.getenv("GUNICORN_THREADS", 4))  # Add threads for concurrency

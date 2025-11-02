@@ -4405,22 +4405,38 @@ class DailyAttendanceViewSet(viewsets.ModelViewSet):
             cached = cache.get(cache_key)
             if cached:
                 # PROGRESSIVE LOADING: Apply offset/limit to cached data
-                cached_records = cached.get('results', [])
+                # CRITICAL: Always get full dataset from cache (cache stores full dataset)
+                # Make a copy to avoid mutating the cached object
+                import copy
+                response_data = copy.deepcopy(cached)
+                cached_records = response_data.get('results', [])
                 total_cached = len(cached_records)
                 
+                # Always update response fields based on current request parameters
                 if limit > 0:
+                    # Paginated request
                     end_index = offset + limit
                     paginated_cached = cached_records[offset:end_index]
-                    cached['results'] = paginated_cached
-                    cached['count'] = len(paginated_cached)
-                    cached['total_count'] = total_cached
-                    cached['offset'] = offset
-                    cached['limit'] = limit
-                    cached['has_more'] = end_index < total_cached
+                    response_data['results'] = paginated_cached
+                    response_data['count'] = len(paginated_cached)
+                    response_data['has_more'] = end_index < total_cached
+                    response_data['offset'] = offset
+                    response_data['limit'] = limit
+                else:
+                    # Return all records (limit=0 means no limit, ignore offset)
+                    # CRITICAL: When limit=0, always return from beginning (offset=0)
+                    response_data['results'] = cached_records  # Return full dataset from start
+                    response_data['count'] = total_cached
+                    response_data['has_more'] = False
+                    response_data['offset'] = 0  # Reset to 0 when returning all
+                    response_data['limit'] = total_cached
                 
-                cached['performance']['cached'] = True
-                cached['performance']['query_time'] = f"{(time.time() - start_time):.3f}s"
-                return Response(cached)
+                # Always update these fields for consistency
+                response_data['total_count'] = total_cached
+                
+                response_data['performance']['cached'] = True
+                response_data['performance']['query_time'] = f"{(time.time() - start_time):.3f}s"
+                return Response(response_data)
         timing_breakdown['cache_check_ms'] = round((time.time() - step_start) * 1000, 2)
 
         # --------------------------------------------------
@@ -5264,6 +5280,13 @@ class DailyAttendanceViewSet(viewsets.ModelViewSet):
         total_count = len(attendance_records)
         
         # Calculate total KPIs across ALL records (for cards)
+        # Count absentees and presentees from ALL records (not paginated)
+        # Count unique employees - each employee should be counted only once
+        absentees_set = set(r['employee_id'] for r in attendance_records if r.get('absent_days', 0) > 0)
+        presentees_set = set(r['employee_id'] for r in attendance_records if r.get('present_days', 0) > 0)
+        absentees_count = len(absentees_set)
+        presentees_count = len(presentees_set)
+        
         total_kpis = {
             'total_employees': total_count,
             'total_ot_hours': sum(r['total_ot_hours'] for r in attendance_records),
@@ -5272,7 +5295,9 @@ class DailyAttendanceViewSet(viewsets.ModelViewSet):
             'total_working_days': sum(r['total_working_days'] for r in attendance_records),
             'avg_attendance_percentage': (sum(r['present_days'] for r in attendance_records) / 
                                          sum(r['total_working_days'] for r in attendance_records) * 100) 
-                                         if sum(r['total_working_days'] for r in attendance_records) > 0 else 0
+                                         if sum(r['total_working_days'] for r in attendance_records) > 0 else 0,
+            'absentees_count': absentees_count,  # Total count from ALL records
+            'presentees_count': presentees_count  # Total count from ALL records
         }
         
         if limit > 0:
@@ -5280,17 +5305,22 @@ class DailyAttendanceViewSet(viewsets.ModelViewSet):
             end_index = offset + limit
             paginated_records = attendance_records[offset:end_index]
             has_more = end_index < total_count
+            response_offset = offset
+            response_limit = limit
         else:
-            # Return all records (no pagination)
+            # Return all records (no pagination, limit=0 means ignore offset)
+            # CRITICAL: When limit=0, always return from beginning (offset=0)
             paginated_records = attendance_records
             has_more = False
+            response_offset = 0  # Reset to 0 when returning all
+            response_limit = total_count
 
         response_data = {
             'results': paginated_records,
             'count': len(paginated_records),
             'total_count': total_count,  # NEW: Total records available
-            'offset': offset,  # NEW: Current offset
-            'limit': limit if limit > 0 else total_count,  # NEW: Applied limit
+            'offset': response_offset,  # NEW: Current offset (0 when limit=0)
+            'limit': response_limit,  # NEW: Applied limit
             'has_more': has_more,  # NEW: More records available
             'kpi_totals': total_kpis,  # NEW: Total KPIs for all data
             'month_context': context_info,

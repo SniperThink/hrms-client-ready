@@ -12,20 +12,30 @@ class ExcelDataConfig(AppConfig):
         # Import signals
         import excel_data.signals  # noqa
         
-        # Start credit scheduler only in production and not during migrations
+        # Start credit scheduler (hybrid approach combining both versions)
+        # Check if we're in the main process and not running migrations
+        should_start = False
+        
         if not settings.DEBUG and 'migrate' not in sys.argv and 'makemigrations' not in sys.argv:
-            # Delay import to avoid database access during app initialization
-            from django.db import connection
-            from django.core.management.color import no_style
+            # Production mode - start scheduler (check RUN_MAIN for Railway compatibility)
+            should_start = os.environ.get('RUN_MAIN') != 'true'
+        elif os.environ.get('RUN_MAIN') == 'true' and settings.DEBUG:
+            # Development mode with reloader - start in reloaded process
+            should_start = True
             
-            # Check if tables exist before starting scheduler
+        if should_start:
             try:
                 from excel_data.credit_scheduler import start_credit_scheduler
                 
-                # Start scheduler - it has its own delay mechanism
+                # Use threading for safe deferred start (Railway compatibility)
                 import threading
+                def delayed_start():
+                    import time
+                    time.sleep(5)  # Wait for full Django initialization
+                    start_credit_scheduler()
+                
                 scheduler_thread = threading.Thread(
-                    target=start_credit_scheduler,
+                    target=delayed_start,
                     daemon=True
                 )
                 scheduler_thread.start()
