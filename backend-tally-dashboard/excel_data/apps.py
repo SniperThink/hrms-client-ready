@@ -1,6 +1,7 @@
 from django.apps import AppConfig
 from django.conf import settings
 import os
+import sys
 
 
 class ExcelDataConfig(AppConfig):
@@ -11,17 +12,24 @@ class ExcelDataConfig(AppConfig):
         # Import signals
         import excel_data.signals  # noqa
         
-        # Defer credit scheduler start to avoid database access during app initialization
-        # Only start in production and not during migrations
-        if not settings.DEBUG and 'migrate' not in os.sys.argv:
-            # Use threading to defer the scheduler start
-            import threading
+        # Start credit scheduler only in production and not during migrations
+        if not settings.DEBUG and 'migrate' not in sys.argv and 'makemigrations' not in sys.argv:
+            # Delay import to avoid database access during app initialization
+            from django.db import connection
+            from django.core.management.color import no_style
             
-            def delayed_start():
-                import time
-                time.sleep(5)  # Wait 5 seconds for app to fully initialize
+            # Check if tables exist before starting scheduler
+            try:
                 from excel_data.credit_scheduler import start_credit_scheduler
-                start_credit_scheduler()
-            
-            # Start scheduler in background thread after delay
-            threading.Thread(target=delayed_start, daemon=True).start()
+                
+                # Start scheduler - it has its own delay mechanism
+                import threading
+                scheduler_thread = threading.Thread(
+                    target=start_credit_scheduler,
+                    daemon=True
+                )
+                scheduler_thread.start()
+            except Exception as e:
+                import logging
+                logger = logging.getLogger(__name__)
+                logger.warning(f"Could not start credit scheduler: {e}")
