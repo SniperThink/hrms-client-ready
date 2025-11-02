@@ -11,9 +11,9 @@ bind = f"0.0.0.0:{port}"
 backlog = 2048
 
 # Worker processes
-# Use sync workers (gevent has compatibility issues with Python 3.13)
+# Force sync workers for Python 3.13 compatibility (gevent has issues)
 workers = int(os.getenv("GUNICORN_WORKERS", multiprocessing.cpu_count() * 2 + 1))
-worker_class = os.getenv("GUNICORN_WORKER_CLASS", "sync")  # Sync workers for stability
+worker_class = "sync"  # Force sync workers - do not use gevent with Python 3.13
 threads = int(os.getenv("GUNICORN_THREADS", 4))  # Add threads for concurrency
 timeout = int(os.getenv("GUNICORN_TIMEOUT", 120))  # 2 minutes
 keepalive = int(os.getenv("GUNICORN_KEEPALIVE", 5))
