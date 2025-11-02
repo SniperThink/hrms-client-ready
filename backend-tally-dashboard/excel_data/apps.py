@@ -11,13 +11,17 @@ class ExcelDataConfig(AppConfig):
         # Import signals
         import excel_data.signals  # noqa
         
-        # Start credit scheduler (only in main process, not in reloader)
-        # Check if we're in the main process (not the reloader process)
-        if os.environ.get('RUN_MAIN') != 'true' and not settings.DEBUG:
-            # Production mode - start scheduler
-            from excel_data.credit_scheduler import start_credit_scheduler
-            start_credit_scheduler()
-        elif os.environ.get('RUN_MAIN') == 'true' and settings.DEBUG:
-            # Development mode with reloader - start in reloaded process
-            from excel_data.credit_scheduler import start_credit_scheduler
-            start_credit_scheduler()
+        # Defer credit scheduler start to avoid database access during app initialization
+        # Only start in production and not during migrations
+        if not settings.DEBUG and 'migrate' not in os.sys.argv:
+            # Use threading to defer the scheduler start
+            import threading
+            
+            def delayed_start():
+                import time
+                time.sleep(5)  # Wait 5 seconds for app to fully initialize
+                from excel_data.credit_scheduler import start_credit_scheduler
+                start_credit_scheduler()
+            
+            # Start scheduler in background thread after delay
+            threading.Thread(target=delayed_start, daemon=True).start()

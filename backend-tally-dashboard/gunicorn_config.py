@@ -1,9 +1,6 @@
 # Gunicorn Configuration for HRMS Backend
 # Optimized for SSE (Server-Sent Events) support
-
-# Import gevent first to avoid MonkeyPatchWarning
-from gevent import monkey
-monkey.patch_all()
+# Note: gevent monkey patching is done in wsgi.py to avoid conflicts
 
 import multiprocessing
 import os
