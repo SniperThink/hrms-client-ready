@@ -79,31 +79,31 @@ logger = logging.getLogger(__name__)
 @api_view(["GET"])
 def dashboard_stats(request):
     """
-
     Get dashboard statistics for current tenant
-
+    TENANT-AWARE: All statistics are filtered by tenant
     """
 
     if not request.user.is_authenticated:
-
         return Response({"error": "Authentication required"}, status=401)
 
+    # Get tenant from request
+    tenant = getattr(request, 'tenant', None)
+    if not tenant:
+        return Response({"error": "No tenant found"}, status=400)
+
     # Get current month/year
-
     current_date = timezone.now()
-
     current_month = current_date.strftime("%B").upper()[:3]
-
     current_year = current_date.year
 
-    # Employee count
+    # Employee count (tenant-specific)
+    total_employees = EmployeeProfile.objects.filter(tenant=tenant, is_active=True).count()
 
-    total_employees = EmployeeProfile.objects.filter(is_active=True).count()
-
-    # Current month salary data
-
+    # Current month salary data (tenant-specific)
     current_month_data = SalaryData.objects.filter(
-        year=current_year, month__icontains=current_month
+        tenant=tenant,
+        year=current_year, 
+        month__icontains=current_month
     )
 
     total_salary_paid = (
@@ -112,10 +112,10 @@ def dashboard_stats(request):
 
     employees_paid = current_month_data.count()
 
-    # Department distribution
-
+    # Department distribution (tenant-specific)
     dept_distribution = (
-        EmployeeProfile.objects.values("department")
+        EmployeeProfile.objects.filter(tenant=tenant)
+        .values("department")
         .annotate(count=Count("id"))
         .order_by("department")
     )
@@ -190,43 +190,52 @@ def health_check(request):
 def get_dropdown_options(request):
     """
     Get unique values for all dropdowns for the public signup page.
+    TENANT-AWARE: If tenant is available, only returns options for that tenant.
     """
     try:
-        # Get all unique, non-empty departments from all employees
+        # Check if tenant is available (from middleware or authenticated user)
+        tenant = getattr(request, 'tenant', None)
+        
+        # Build base queryset - filter by tenant if available
+        base_queryset = EmployeeProfile.objects.all()
+        if tenant:
+            base_queryset = base_queryset.filter(tenant=tenant)
+        
+        # Get all unique, non-empty departments from employees (tenant-specific if tenant available)
         departments_clean = set(
-            EmployeeProfile.objects.exclude(department__isnull=True)
+            base_queryset.exclude(department__isnull=True)
             .exclude(department='')
             .values_list('department', flat=True)
             .distinct()
         )
         
-        # Get all unique, non-empty location branches
+        # Get all unique, non-empty location branches (tenant-specific if tenant available)
         locations_clean = set(
-            EmployeeProfile.objects.exclude(location_branch__isnull=True)
+            base_queryset.exclude(location_branch__isnull=True)
             .exclude(location_branch='')
             .values_list('location_branch', flat=True)
             .distinct()
         )
         
-        # Get all unique, non-empty designations
+        # Get all unique, non-empty designations (tenant-specific if tenant available)
         designations_clean = set(
-            EmployeeProfile.objects.exclude(designation__isnull=True)
+            base_queryset.exclude(designation__isnull=True)
             .exclude(designation='')
             .values_list('designation', flat=True)
             .distinct()
         )
 
-        # Get all unique, non-empty cities
+        # Get all unique, non-empty cities (tenant-specific if tenant available)
         cities_clean = set(
-            EmployeeProfile.objects.exclude(city__isnull=True)
+            base_queryset.exclude(city__isnull=True)
             .exclude(city='')
             .values_list('city', flat=True)
             .distinct()
         )
 
-        # Get all unique, non-empty states
+        # Get all unique, non-empty states (tenant-specific if tenant available)
         states_clean = set(
-            EmployeeProfile.objects.exclude(state__isnull=True)
+            base_queryset.exclude(state__isnull=True)
             .exclude(state='')
             .values_list('state', flat=True)
             .distinct()
@@ -1611,7 +1620,9 @@ class UploadMonthlyAttendanceAPIView(APIView):
             cache_keys = [
                 f"directory_data_{tenant.id}",
                 f"directory_data_full_{tenant.id}",  # Clear full directory cache
-                f"attendance_all_records_{tenant.id}"
+                f"attendance_all_records_{tenant.id}",
+                f"months_with_attendance_{tenant.id}",  # Clear months-with-attendance endpoint cache
+                f"payroll_overview_{tenant.id}"  # Clear payroll overview cache
             ]
             for key in cache_keys:
                 cache.delete(key)

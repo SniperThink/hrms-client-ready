@@ -464,6 +464,11 @@ class SalaryDataViewSet(viewsets.ModelViewSet):
                 'totalLateMinutes': round(total_late_minutes, 2)
             })
         
+        # Reverse trends to show oldest to newest (left to right on chart)
+        salary_trends.reverse()
+        ot_trends.reverse()
+        late_minute_trends.reverse()
+        
         # Top employees by salary
         top_employees = current_salary.order_by('-nett_payable')[:5].values(
             'employee_id', 'nett_payable', 'department'
@@ -1003,7 +1008,8 @@ class SalaryDataViewSet(viewsets.ModelViewSet):
                     _sel_label = f"{start_month} {start_year} - {end_month} {end_year}"
                     _sel_month = f"{start_month} - {end_month}"
                     _sel_year = f"{start_year}-{end_year}" if start_year != end_year else str(start_year)
-                except:
+                except (ValueError, AttributeError, KeyError) as e:
+                    logger.warning(f"Failed to parse custom date range: {e}")
                     _sel_label = "Custom range"
             elif selected_periods and len(selected_periods) > 0:
                 period = list(selected_periods)[0]
@@ -1586,8 +1592,9 @@ class SalaryDataViewSet(viewsets.ModelViewSet):
         salary_trends = []
         ot_trends = []
         
-        # Get trends for all selected periods using ONE optimized query
-        trends_periods = payroll_periods[:6] if len(payroll_periods) >= 6 else payroll_periods
+        # Get trends for all selected periods (not limited to 6 - show all periods in selected range)
+        # Use all selected periods so trends reflect the full time range requested
+        trends_periods = payroll_periods  # payroll_periods parameter already contains selected_periods
         
         if trends_periods:
             # PHASE 2 OPTIMIZATION: Lightning-fast trends with selective field loading
@@ -1652,7 +1659,9 @@ class SalaryDataViewSet(viewsets.ModelViewSet):
                         'averageOTHours': round(float(trend_stat['avg_ot'] or 0), 2)
                     })
             
-            # No need to reverse - data is already in correct order (newest first)
+            # Reverse to show oldest to newest (left to right on chart)
+            salary_trends.reverse()
+            ot_trends.reverse()
         
         query_timings['total_trends_ms'] = round((time.time() - trends_start) * 1000, 2)
         
@@ -2059,12 +2068,9 @@ class SalaryDataViewSet(viewsets.ModelViewSet):
         ot_trends = []
         late_trends = []
         
-        # Get trends for selected periods
-        # For custom_range, show all selected periods; for others, limit to 6
-        if time_period == 'custom_range':
-            trends_periods = payroll_periods  # Use all selected periods
-        else:
-            trends_periods = payroll_periods[:6] if len(payroll_periods) >= 6 else payroll_periods
+        # Get trends for all selected periods (show full range, not limited to 6)
+        # payroll_periods parameter already contains only the selected periods based on time_period
+        trends_periods = payroll_periods  # Use all selected periods to show complete trends
         
         if trends_periods:
             from ..models import ChartAggregatedData
@@ -2135,6 +2141,11 @@ class SalaryDataViewSet(viewsets.ModelViewSet):
                         'month': month_label,
                         'averageLateMinutes': round(float(trend_stat['avg_late'] or 0), 2)
                     })
+            
+            # Reverse trends to show oldest to newest (left to right on chart)
+            salary_trends.reverse()
+            ot_trends.reverse()
+            late_trends.reverse()
         
         query_timings['total_trends_ms'] = round((time.time() - trends_start) * 1000, 2)
         
@@ -2377,8 +2388,9 @@ class SalaryDataViewSet(viewsets.ModelViewSet):
                     all_keys = [key.decode('utf-8') if isinstance(key, bytes) else key for key in all_keys]
                 else:
                     all_keys = []
-            except:
+            except (AttributeError, Exception) as e:
                 # Fallback: check common filter combinations
+                logger.warning(f"Cache pattern matching failed, using fallback: {e}")
                 common_combinations = [
                     f"frontend_charts_{tenant.id}_this_month_All_",
                     f"frontend_charts_{tenant.id}_last_6_months_All_",
@@ -2521,7 +2533,155 @@ class EmployeeProfileViewSet(viewsets.ModelViewSet):
             
             logger.info(f"✨ Cleared payroll, directory, and charts cache for tenant {tenant.id} after employee creation")
 
+    def perform_update(self, serializer):
+        """
+        Update employee and automatically invalidate cache
+        
+        Cache invalidation is also handled by signals, but this ensures
+        explicit cache clearing at the ViewSet level as well.
+        """
+        # Save the employee (this will trigger the signal which clears cache)
+        instance = serializer.save()
+        
+        # Explicit cache clearing (backup to signal)
+        from django.core.cache import cache
+        tenant = getattr(self.request, 'tenant', None)
+        if tenant:
+            # Clear comprehensive caches
+            cache_keys = [
+                f"directory_data_{tenant.id}",
+                f"directory_data_full_{tenant.id}",
+                f"payroll_overview_{tenant.id}",
+                f"attendance_all_records_{tenant.id}",
+                f"all_departments_{tenant.id}",
+            ]
+            
+            # Employee-specific cache
+            if instance.employee_id:
+                cache_keys.append(f"employee_attendance_{tenant.id}_{instance.employee_id}")
+            
+            # Clear all cache keys
+            for key in cache_keys:
+                cache.delete(key)
+            
+            # Clear frontend charts cache
+            try:
+                cache.delete_pattern(f"frontend_charts_{tenant.id}_*")
+            except AttributeError:
+                # Fallback if delete_pattern not available
+                chart_keys = [
+                    f"frontend_charts_{tenant.id}_this_month_All_",
+                    f"frontend_charts_{tenant.id}_last_6_months_All_",
+                    f"frontend_charts_{tenant.id}_last_12_months_All_",
+                    f"frontend_charts_{tenant.id}_last_5_years_All_"
+                ]
+                for key in chart_keys:
+                    cache.delete(key)
+            
+            logger.info(f"✨ Cleared cache for tenant {tenant.id} after employee update (employee_id: {instance.employee_id})")
 
+    def destroy(self, request, *args, **kwargs):
+        """
+        Delete an employee and all their related data (attendance, payroll, advances, etc.)
+        """
+        instance = self.get_object()
+        employee_id = instance.employee_id
+        tenant = getattr(request, 'tenant', None)
+        
+        if not tenant:
+            return Response({
+                'error': 'No tenant found for this request'
+            }, status=status.HTTP_400_BAD_REQUEST)
+        
+        # Delete all related data
+        deleted_data = {
+            'employee_id': employee_id,
+            'deleted_records': {}
+        }
+        
+        # Delete attendance records
+        from ..models import Attendance, DailyAttendance
+        attendance_count = Attendance.objects.filter(tenant=tenant, employee_id=employee_id).count()
+        Attendance.objects.filter(tenant=tenant, employee_id=employee_id).delete()
+        deleted_data['deleted_records']['attendance'] = attendance_count
+        
+        daily_attendance_count = DailyAttendance.objects.filter(tenant=tenant, employee_id=employee_id).count()
+        DailyAttendance.objects.filter(tenant=tenant, employee_id=employee_id).delete()
+        deleted_data['deleted_records']['daily_attendance'] = daily_attendance_count
+        
+        # Delete salary data
+        from ..models import SalaryData
+        salary_count = SalaryData.objects.filter(tenant=tenant, employee_id=employee_id).count()
+        SalaryData.objects.filter(tenant=tenant, employee_id=employee_id).delete()
+        deleted_data['deleted_records']['salary_data'] = salary_count
+        
+        # Delete calculated payroll data
+        from ..models import CalculatedSalary
+        calculated_salary_count = CalculatedSalary.objects.filter(
+            tenant=tenant, 
+            employee_id=employee_id
+        ).count()
+        CalculatedSalary.objects.filter(tenant=tenant, employee_id=employee_id).delete()
+        deleted_data['deleted_records']['calculated_salary'] = calculated_salary_count
+        
+        # Delete advance ledger entries
+        from ..models import AdvanceLedger
+        advance_count = AdvanceLedger.objects.filter(tenant=tenant, employee_id=employee_id).count()
+        AdvanceLedger.objects.filter(tenant=tenant, employee_id=employee_id).delete()
+        deleted_data['deleted_records']['advance_ledger'] = advance_count
+        
+        # Delete payments
+        from ..models import Payment
+        payment_count = Payment.objects.filter(tenant=tenant, employee_id=employee_id).count()
+        Payment.objects.filter(tenant=tenant, employee_id=employee_id).delete()
+        deleted_data['deleted_records']['payment'] = payment_count
+        
+        # Delete monthly attendance summaries
+        from ..models import MonthlyAttendanceSummary
+        summary_count = MonthlyAttendanceSummary.objects.filter(tenant=tenant, employee_id=employee_id).count()
+        MonthlyAttendanceSummary.objects.filter(tenant=tenant, employee_id=employee_id).delete()
+        deleted_data['deleted_records']['monthly_summary'] = summary_count
+        
+        # Delete leaves (this has a foreign key, so will cascade automatically)
+        leaves_count = instance.leaves.count()
+        deleted_data['deleted_records']['leaves'] = leaves_count
+        
+        # Now delete the employee
+        instance.delete()
+        
+        # Clear all caches
+        from django.core.cache import cache
+        cache_keys = [
+            f"directory_data_{tenant.id}",
+            f"directory_data_full_{tenant.id}",
+            f"payroll_overview_{tenant.id}",
+            f"attendance_all_records_{tenant.id}",
+            f"all_departments_{tenant.id}",
+            f"employee_attendance_{tenant.id}_{employee_id}",
+        ]
+        
+        for key in cache_keys:
+            cache.delete(key)
+        
+        # Clear frontend charts cache
+        try:
+            cache.delete_pattern(f"frontend_charts_{tenant.id}_*")
+        except AttributeError:
+            chart_keys = [
+                f"frontend_charts_{tenant.id}_this_month_All_",
+                f"frontend_charts_{tenant.id}_last_6_months_All_",
+                f"frontend_charts_{tenant.id}_last_12_months_All_",
+                f"frontend_charts_{tenant.id}_last_5_years_All_"
+            ]
+            for key in chart_keys:
+                cache.delete(key)
+        
+        logger.info(f"🗑️ Deleted employee {employee_id} and all related data. Summary: {deleted_data['deleted_records']}")
+        
+        return Response({
+            'message': f'Employee {employee_id} and all related data deleted successfully',
+            'deleted_data': deleted_data
+        }, status=status.HTTP_200_OK)
 
     @action(detail=False, methods=['get'])
     def directory_data(self, request):
@@ -3123,14 +3283,16 @@ class EmployeeProfileViewSet(viewsets.ModelViewSet):
                     if pd.notna(row.get('Date of birth')):
                         try:
                             date_of_birth = pd.to_datetime(row['Date of birth']).date()
-                        except:
+                        except (ValueError, TypeError) as e:
+                            logger.warning(f"Failed to parse date of birth '{row.get('Date of birth')}': {e}")
                             pass
                     
                     date_of_joining = datetime.now().date()  # Default to today
                     if pd.notna(row.get('Date of joining')):
                         try:
                             date_of_joining = pd.to_datetime(row['Date of joining']).date()
-                        except:
+                        except (ValueError, TypeError) as e:
+                            logger.warning(f"Failed to parse date of joining '{row.get('Date of joining')}': {e}")
                             pass
                     
                     # Parse shift times with defaults
@@ -3142,8 +3304,10 @@ class EmployeeProfileViewSet(viewsets.ModelViewSet):
                             time_str = str(row['Shift Start Time']).strip()
                             if ':' in time_str:
                                 parts = time_str.split(':')
-                                shift_start_time = dt_time(int(parts[0]), int(parts[1]))
-                        except:
+                                if len(parts) >= 2:
+                                    shift_start_time = dt_time(int(parts[0]), int(parts[1]))
+                        except (ValueError, IndexError, TypeError) as e:
+                            logger.warning(f"Failed to parse shift start time '{row.get('Shift Start Time')}': {e}")
                             pass
                     
                     if pd.notna(row.get('Shift End Time')):
@@ -3151,8 +3315,10 @@ class EmployeeProfileViewSet(viewsets.ModelViewSet):
                             time_str = str(row['Shift End Time']).strip()
                             if ':' in time_str:
                                 parts = time_str.split(':')
-                                shift_end_time = dt_time(int(parts[0]), int(parts[1]))
-                        except:
+                                if len(parts) >= 2:
+                                    shift_end_time = dt_time(int(parts[0]), int(parts[1]))
+                        except (ValueError, IndexError, TypeError) as e:
+                            logger.warning(f"Failed to parse shift end time '{row.get('Shift End Time')}': {e}")
                             pass
                     
                     # Parse numeric fields
@@ -3160,14 +3326,16 @@ class EmployeeProfileViewSet(viewsets.ModelViewSet):
                     if pd.notna(row.get('Basic Salary')):
                         try:
                             basic_salary = float(str(row['Basic Salary']).replace(',', ''))
-                        except:
+                        except (ValueError, TypeError) as e:
+                            logger.warning(f"Failed to parse basic salary '{row.get('Basic Salary')}': {e}")
                             pass
                     
                     tds_percentage = 0
                     if pd.notna(row.get('TDS (%)')):
                         try:
                             tds_percentage = float(str(row['TDS (%)']).replace('%', ''))
-                        except:
+                        except (ValueError, TypeError) as e:
+                            logger.warning(f"Failed to parse TDS percentage '{row.get('TDS (%)')}': {e}")
                             pass
                     
                     # Parse off days
@@ -3424,6 +3592,19 @@ class EmployeeProfileViewSet(viewsets.ModelViewSet):
                 if not last_name or str(last_name).lower() in ['nan', 'none', '']:
                     last_name = ''
                 
+                # Handle date_of_joining from request data
+                date_of_joining = emp_data.get('date_of_joining')
+                if date_of_joining:
+                    # Parse the date string to date object
+                    try:
+                        date_of_joining = datetime.strptime(date_of_joining, '%Y-%m-%d').date()
+                    except (ValueError, TypeError):
+                        logger.warning(f"⚠️  Invalid date_of_joining format for employee {emp_data.get('name', 'Unknown')}: {date_of_joining}, using today's date")
+                        date_of_joining = datetime.now().date()
+                else:
+                    # Default to today's date if not provided
+                    date_of_joining = datetime.now().date()
+                
                 employee_objects.append(EmployeeProfile(
                     tenant=tenant,
                     employee_id=employee_id,
@@ -3442,7 +3623,7 @@ class EmployeeProfileViewSet(viewsets.ModelViewSet):
                     address='',
                     city='',
                     state='',
-                    date_of_joining=datetime.now().date(),
+                    date_of_joining=date_of_joining,
                     shift_start_time=dt_time(9, 0),  # 09:00
                     shift_end_time=dt_time(18, 0),   # 18:00
                     basic_salary=basic_salary,
@@ -3844,8 +4025,9 @@ class AttendanceViewSet(viewsets.ReadOnlyModelViewSet):
                 total_working_days = SalaryCalculationService._calculate_employee_working_days(
                     employee, year, month_names[month - 1]
                 )
-            except:
+            except (IndexError, AttributeError, ValueError) as e:
                 # Fallback: use standard 30 days
+                logger.warning(f"Failed to calculate working days for employee {employee.employee_id}, month {month}: {e}")
                 total_working_days = 30
             
             present_days = float(summary.present_days)
@@ -4410,27 +4592,11 @@ class DailyAttendanceViewSet(viewsets.ModelViewSet):
             is_single_day = start_date_obj == end_date_obj
             
             if is_single_day:
-                # For single day requests, return individual records without aggregation
+                # For single day requests, return individual records WITHOUT aggregation
+                # to preserve the actual attendance_status field (PRESENT/ABSENT/etc.)
                 logger.info(f"Single day request detected for date: {start_date_obj}")
-                daily_agg = daily_qs.values('employee_id', 'date').annotate(
-                    present_days=Sum(
-                        Case(
-                            When(attendance_status__in=['PRESENT', 'PAID_LEAVE'], then=Value(1.0)),
-                            When(attendance_status='HALF_DAY', then=Value(0.5)),
-                            default=Value(0.0),
-                            output_field=FloatField()
-                        )
-                    ),
-                    absent_days=Sum(
-                        Case(
-                            When(attendance_status='ABSENT', then=Value(1.0)),
-                            default=Value(0.0),
-                            output_field=FloatField()
-                        )
-                    ),
-                    ot_hours=Sum('ot_hours'),
-                    late_minutes=Sum('late_minutes')
-                )
+                # Don't aggregate - get raw records to preserve attendance_status
+                daily_agg = daily_qs.values('employee_id', 'date', 'attendance_status', 'ot_hours', 'late_minutes')
             else:
                 # For multi-day requests, aggregate by employee_id
                 daily_agg = daily_qs.values('employee_id').annotate(
@@ -4459,18 +4625,34 @@ class DailyAttendanceViewSet(viewsets.ModelViewSet):
             for row in daily_agg:
                 emp_id = row['employee_id']
                 agg_data = aggregated[emp_id]
-                agg_data['present_days'] += float(row['present_days'] or 0)
-                agg_data['absent_days'] += float(row.get('absent_days') or 0)
+                
+                if is_single_day:
+                    # For single day: use raw attendance_status to calculate present/absent
+                    attendance_status = row.get('attendance_status', 'ABSENT')
+                    if attendance_status in ['PRESENT', 'PAID_LEAVE']:
+                        agg_data['present_days'] += 1.0
+                    elif attendance_status == 'HALF_DAY':
+                        agg_data['present_days'] += 0.5
+                        agg_data['absent_days'] += 0.5
+                    elif attendance_status == 'ABSENT':
+                        agg_data['absent_days'] += 1.0
+                    else:
+                        agg_data['absent_days'] += 1.0  # Default to absent for unknown statuses
+                    
+                    # Store the actual status for the frontend
+                    agg_data['attendance_status'] = attendance_status
+                    agg_data['date'] = row.get('date')
+                else:
+                    # For multi-day: use aggregated values
+                    agg_data['present_days'] += float(row['present_days'] or 0)
+                    agg_data['absent_days'] += float(row.get('absent_days') or 0)
+                
                 agg_data['ot_hours'] += float(row['ot_hours'] or 0)
                 agg_data['late_minutes'] += int(row['late_minutes'] or 0)
                 # Track that this employee has daily attendance data
                 if 'daily_attendance' not in agg_data['data_sources']:
                     agg_data['data_sources'].append('daily_attendance')
                 # Note: total_working_days will be calculated per employee in final response building
-                
-                # For single day requests, also store the date information
-                if is_single_day and 'date' in row:
-                    agg_data['date'] = row['date']
                     
             timing_breakdown['daily_data_processing_ms'] = round((time.time() - process_start) * 1000, 2)
             timing_breakdown['daily_attendance_count'] = len(aggregated)
@@ -5054,7 +5236,8 @@ class DailyAttendanceViewSet(viewsets.ModelViewSet):
                 'total_ot_hours': round(data['ot_hours'], 2),
                 'total_late_minutes': data['late_minutes'],
                 'data_source': data_source,
-                'last_updated': timezone.now().isoformat()
+                'last_updated': timezone.now().isoformat(),
+                'status': data.get('attendance_status', None) if is_single_day_response else None  # Include status for single day
             })
         timing_breakdown['response_building_ms'] = round((time.time() - step_start) * 1000, 2)
         timing_breakdown['total_records_created'] = len(attendance_records)

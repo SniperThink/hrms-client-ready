@@ -4,7 +4,6 @@ import {
   Cell, LineChart, Line, PieChart, Pie, Legend, AreaChart, Area
 } from 'recharts';
 import { fetchSalaryData, SalaryData, TimePeriod, formatSalary, clearSalaryDataCache } from '../services/salaryService';
-import Dropdown, { DropdownOption } from './Dropdown';
 import {
   SkeletonChartGrid
 } from './SkeletonComponents';
@@ -44,10 +43,6 @@ const HROverviewCharts: React.FC<HROverviewChartsProps> = ({
   const [salaryData, setSalaryData] = useState<SalaryData | null>(null);
   const [loading, setLoading] = useState<boolean>(true);
   const [error, setError] = useState<string | null>(null);
-
-  const [availableYears, setAvailableYears] = useState<number[]>([]);
-  const [selectedYearOT, setSelectedYearOT] = useState<number | null>(null);
-  const [selectedYearSalary, setSelectedYearSalary] = useState<number | null>(null);
 
   const [isFiltering, setIsFiltering] = useState<boolean>(false);
 
@@ -91,26 +86,9 @@ const HROverviewCharts: React.FC<HROverviewChartsProps> = ({
     };
   };
 
-  // Helper function to filter data by year
-  const filterDataByYear = (data: Array<{ month?: string }>, year: number | null) => {
-    if (!year || !data) return data;
-    return data.filter(item => {
-      if (!item.month) {
-        // logger.warn('Item missing month property:', item);
-        return false;
-      }
-      const yearMatch = item.month.match(/(\d{4})/);
-      if (yearMatch && yearMatch[1]) {
-        const extractedYear = parseInt(yearMatch[1], 10);
-        return extractedYear === year;
-      }
-      return false;
-    });
-  };
-
-  // Filter OT and Salary trends data by selected years
-  const filteredOTTrends = filterDataByYear(salaryData?.otTrends || [], selectedYearOT);
-  const filteredSalaryTrends = filterDataByYear(salaryData?.salaryTrends || [], selectedYearSalary);
+  // Use full trends data without year filtering
+  const filteredOTTrends = salaryData?.otTrends || [];
+  const filteredSalaryTrends = salaryData?.salaryTrends || [];
 
   useEffect(() => {
     const loadSalaryData = async () => {
@@ -135,42 +113,6 @@ const HROverviewCharts: React.FC<HROverviewChartsProps> = ({
           } catch (e) { }
         }
 
-        // Extract available years from the actual data
-        const years = new Set<number>();
-        const extractYears = (items: Array<{ month?: string }>) => {
-          items.forEach(item => {
-            if (!item.month) return;
-            const monthStr = String(item.month || '');
-            const yearPatterns = [
-              /\s(\d{4})$/,
-              /(\d{4})$/,
-              /-(\d{4})$/,
-              /\/(\d{4})$/,
-            ];
-            for (const pattern of yearPatterns) {
-              const match = monthStr.match(pattern);
-              if (match && match[1]) {
-                const year = parseInt(match[1], 10);
-                if (!isNaN(year)) {
-                  years.add(year);
-                  break;
-                }
-              }
-            }
-          });
-        };
-        if (data.otTrends && data.otTrends.length > 0) {
-          extractYears(data.otTrends);
-        }
-        if (data.salaryTrends && data.salaryTrends.length > 0) {
-          extractYears(data.salaryTrends);
-        }
-        const yearArray = Array.from(years).sort((a, b) => b - a);
-        setAvailableYears(yearArray);
-        if (yearArray.length > 0) {
-          setSelectedYearOT(yearArray[0]);
-          setSelectedYearSalary(yearArray[0]);
-        }
         setError(null);
       } catch {
         setError('Failed to load salary data');
@@ -204,42 +146,6 @@ const HROverviewCharts: React.FC<HROverviewChartsProps> = ({
           const transformedData = transformBackendData(data);
           setSalaryData(transformedData);
 
-          // Extract available years from the actual data
-          const years = new Set<number>();
-          const extractYears = (items: Array<{ month?: string }>) => {
-            items.forEach(item => {
-              if (!item.month) return;
-              const monthStr = String(item.month || '');
-              const yearPatterns = [
-                /\s(\d{4})$/,
-                /(\d{4})$/,
-                /-(\d{4})$/,
-                /\/(\d{4})$/,
-              ];
-              for (const pattern of yearPatterns) {
-                const match = monthStr.match(pattern);
-                if (match && match[1]) {
-                  const year = parseInt(match[1], 10);
-                  if (!isNaN(year)) {
-                    years.add(year);
-                    break;
-                  }
-                }
-              }
-            });
-          };
-          if (data.otTrends && data.otTrends.length > 0) {
-            extractYears(data.otTrends);
-          }
-          if (data.salaryTrends && data.salaryTrends.length > 0) {
-            extractYears(data.salaryTrends);
-          }
-          const yearArray = Array.from(years).sort((a, b) => b - a);
-          setAvailableYears(yearArray);
-          if (yearArray.length > 0) {
-            setSelectedYearOT(yearArray[0]);
-            setSelectedYearSalary(yearArray[0]);
-          }
           setError(null);
         } catch {
           setError('Failed to load salary data');
@@ -334,53 +240,6 @@ const HROverviewCharts: React.FC<HROverviewChartsProps> = ({
     return null;
   };
 
-  const renderOTYearFilter = () => {
-    if (availableYears.length <= 1) return null;
-
-    const yearOptions: DropdownOption[] = [
-      { value: '', label: 'All Years' },
-      ...availableYears.map(year => ({ value: year.toString(), label: year.toString() }))
-    ];
-
-    return (
-      <Dropdown
-        options={yearOptions}
-        value={selectedYearOT?.toString() || ''}
-        onChange={(value) => {
-          setIsFiltering(true);
-          setSelectedYearOT(value ? parseInt(value) : null);
-          // Reset filtering state after a short delay
-          setTimeout(() => setIsFiltering(false), 500);
-        }}
-        className="w-24"
-        placeholder="Year"
-      />
-    );
-  };
-
-  const renderSalaryYearFilter = () => {
-    if (availableYears.length <= 1) return null;
-
-    const yearOptions: DropdownOption[] = [
-      { value: '', label: 'All Years' },
-      ...availableYears.map(year => ({ value: year.toString(), label: year.toString() }))
-    ];
-
-    return (
-      <Dropdown
-        options={yearOptions}
-        value={selectedYearSalary?.toString() || ''}
-        onChange={(value) => {
-          setIsFiltering(true);
-          setSelectedYearSalary(value ? parseInt(value) : null);
-          // Reset filtering state after a short delay
-          setTimeout(() => setIsFiltering(false), 500);
-        }}
-        className="w-24"
-        placeholder="Year"
-      />
-    );
-  };
 
   // Ensure we have valid data to avoid errors
   const departmentData = salaryData.departmentData || [];
@@ -752,10 +611,7 @@ const HROverviewCharts: React.FC<HROverviewChartsProps> = ({
           <div className="grid grid-cols-2 gap-6">
             {/* Average OT Trends Line Chart */}
             <div className="bg-white p-6 rounded-lg shadow-sm border border-gray-100">
-              <div className="flex justify-between items-center mb-6">
-                <h3 className="font-semibold">Avg. OT Trends</h3>
-                {renderOTYearFilter()}
-              </div>
+              <h3 className="font-semibold mb-6">Avg. OT Trends</h3>
               <div className="h-64">
                 {!filteredOTTrends || filteredOTTrends.length === 0 ? (
                   <NoDataMessage message="No OT trends data available" />
@@ -797,15 +653,7 @@ const HROverviewCharts: React.FC<HROverviewChartsProps> = ({
 
             {/* Enhanced Salary Trends Area Chart */}
             <div className="bg-white p-6 rounded-lg shadow-sm border border-gray-100">
-              <div className="flex justify-between items-center mb-6">
-                <h3 className="font-semibold">Salary Trends</h3>
-                <div className="flex items-center gap-3">
-                  {renderSalaryYearFilter()}
-                  <div className="flex items-center text-xs text-gray-500">
-                    <span>Average by month</span>
-                  </div>
-                </div>
-              </div>
+              <h3 className="font-semibold mb-6">Salary Trends</h3>
               <div className="h-64">
                 {!filteredSalaryTrends || filteredSalaryTrends.length === 0 ? (
                   <NoDataMessage message="No salary trends data available" />

@@ -9,7 +9,7 @@ interface MissingEmployee {
   last_name: string;
   department: string;
   row_number: number;
-  joining_date?: string; // YYYY-MM-DD optional date selected by the user
+  date_of_joining?: string; // YYYY-MM-DD optional date selected by the user
 }
 
 interface EmployeeConfirmationModalProps {
@@ -51,7 +51,7 @@ const EmployeeConfirmationModal: React.FC<EmployeeConfirmationModalProps> = ({
       // attach selected joining dates (if any) to the employee objects
       const employeesWithDates = missingEmployees.map((emp) => ({
         ...emp,
-        joining_date: joinDates[emp.employee_id] || undefined,
+        date_of_joining: joinDates[emp.employee_id] || undefined,
       }));
 
       await onConfirm(employeesWithDates);

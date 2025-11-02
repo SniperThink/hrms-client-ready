@@ -435,4 +435,69 @@ def delete_chart_data_from_calculated(sender, instance, **kwargs):
                     cache.delete(f"frontend_charts_{tenant_id}")
                 
     except Exception as e:
-        logger.warning(f"Failed to delete ChartAggregatedData: {e}") 
+        logger.warning(f"Failed to delete ChartAggregatedData: {e}")
+
+
+@receiver(post_save, sender=EmployeeProfile)
+def invalidate_cache_on_employee_update(sender, instance, created, **kwargs):
+    """
+    Automatically invalidate relevant caches when employee details are created or updated.
+    This ensures that directory data, payroll overview, attendance records, and charts
+    reflect the latest employee information immediately.
+    """
+    import logging
+    logger = logging.getLogger(__name__)
+    
+    try:
+        from django.core.cache import cache
+        
+        tenant = instance.tenant
+        tenant_id = tenant.id if tenant else 'default'
+        employee_id = instance.employee_id
+        
+        # Comprehensive list of cache keys to invalidate
+        cache_keys_to_clear = [
+            # Directory data caches
+            f"directory_data_{tenant_id}",
+            f"directory_data_full_{tenant_id}",
+            
+            # Payroll overview cache
+            f"payroll_overview_{tenant_id}",
+            
+            # Attendance caches
+            f"attendance_all_records_{tenant_id}",
+            
+            # Departments cache (in case department changed)
+            f"all_departments_{tenant_id}",
+            
+            # Employee-specific attendance cache
+            f"employee_attendance_{tenant_id}_{employee_id}" if employee_id else None,
+        ]
+        
+        # Remove None values
+        cache_keys_to_clear = [key for key in cache_keys_to_clear if key]
+        
+        # Clear all cache keys
+        for key in cache_keys_to_clear:
+            cache.delete(key)
+        
+        # Clear frontend charts cache (pattern matching)
+        try:
+            cache.delete_pattern(f"frontend_charts_{tenant_id}_*")
+        except AttributeError:
+            # Fallback if delete_pattern not available (database cache doesn't support it)
+            chart_keys = [
+                f"frontend_charts_{tenant_id}_this_month_All_",
+                f"frontend_charts_{tenant_id}_last_6_months_All_",
+                f"frontend_charts_{tenant_id}_last_12_months_All_",
+                f"frontend_charts_{tenant_id}_last_5_years_All_"
+            ]
+            for key in chart_keys:
+                cache.delete(key)
+        
+        action = "Created" if created else "Updated"
+        logger.info(f"🔄 Employee {action}: Cleared cache for employee {employee_id} (tenant {tenant_id}) - {len(cache_keys_to_clear)} cache keys invalidated")
+        
+    except Exception as e:
+        # Soft fail - don't break employee updates if cache clearing fails
+        logger.warning(f"Failed to invalidate cache on employee update: {e}") 

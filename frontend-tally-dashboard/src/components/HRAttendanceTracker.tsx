@@ -850,7 +850,9 @@ const HRAttendanceTracker: React.FC = () => {
                         <td className="px-4 py-3 text-sm">{normalizeDepartment(record.department)}</td>
                         {filterType === 'one_day' ? (
                           <>
-                            <td className="px-4 py-3 text-sm capitalize">{record.status || 'unknown'}</td>
+                            <td className="px-4 py-3 text-sm capitalize">
+                              {record.status || (record.present_days > 0 ? 'present' : (absentDays > 0 ? 'absent' : 'unknown'))}
+                            </td>
                             <td className="px-4 py-3 text-sm">{record.present_days.toFixed(1)}</td>
                             <td className="px-4 py-3 text-sm">{absentDays.toFixed(1)}</td>
                             <td className="px-4 py-3 text-sm">{(typeof record.ot_hours === 'string' ? parseFloat(record.ot_hours) || 0 : record.ot_hours || 0).toFixed(1)}</td>

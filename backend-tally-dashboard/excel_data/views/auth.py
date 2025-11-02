@@ -599,7 +599,7 @@ class TenantSignupView(APIView):
                 from django.conf import settings
                 
                 frontend_url = getattr(settings, 'FRONTEND_URL', 'http://35.154.9.249')
-                subject = f"Welcome to {tenant.name} - Your Account Details"
+                subject = f"Welcome to SniperThink - Your Account Details"
 
                 message = f"""
 Dear {first_name} {last_name},
@@ -618,7 +618,7 @@ Please log in at: {frontend_url}/login
 If you have any questions, please contact support.
 
 Best regards,
-The {tenant.name} Team
+The SniperThink Team
                 """.strip()
 
                 try:

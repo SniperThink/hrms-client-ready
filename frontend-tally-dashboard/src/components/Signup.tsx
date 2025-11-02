@@ -1,6 +1,5 @@
 import React, { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Eye, EyeOff } from 'lucide-react';
 import { signupCompany } from '../services/authService';
 import { CompanySignupRequest } from '../types/auth';
 
@@ -10,34 +9,12 @@ const Signup: React.FC = () => {
     company_name: '',
     subdomain: '',
     email: '',
-    password: '',
+    password: '', // Not used by backend, will be auto-generated
     first_name: '',
     last_name: ''
   });
-  const [confirmPassword, setConfirmPassword] = useState('');
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
-  const [showPassword, setShowPassword] = useState(false);
-  const [showConfirmPassword, setShowConfirmPassword] = useState(false);
-  const [passwordValidation, setPasswordValidation] = useState({
-    length: false,
-    uppercase: false,
-    lowercase: false,
-    number: false,
-    specialChar: false
-  });
-
-  const validatePassword = (password: string) => {
-    const validation = {
-      length: password.length >= 8,
-      uppercase: /[A-Z]/.test(password),
-      lowercase: /[a-z]/.test(password),
-      number: /\d/.test(password),
-      specialChar: /[!@#$%^&*()_+\-=\[\]{};':"\\|,.<>\/?]/.test(password)
-    };
-    setPasswordValidation(validation);
-    return validation;
-  };
 
   const handleInputChange = (field: keyof CompanySignupRequest) => (e: React.ChangeEvent<HTMLInputElement>) => {
     const value = e.target.value;
@@ -53,30 +30,11 @@ const Signup: React.FC = () => {
       
       setFormData(prev => ({ ...prev, subdomain }));
     }
-
-    // Validate password when password field changes
-    if (field === 'password') {
-      validatePassword(value);
-    }
   };
 
   const validateForm = (): string | null => {
     if (!formData.company_name.trim()) return 'Company name is required';
-    if (!formData.subdomain.trim()) return 'Subdomain is required';
-    if (formData.subdomain.length < 3) return 'Subdomain must be at least 3 characters';
-    if (!/^[a-z0-9-]+$/.test(formData.subdomain)) return 'Subdomain can only contain lowercase letters, numbers, and hyphens';
     if (!formData.email.trim()) return 'Email is required';
-    if (!formData.password.trim()) return 'Password is required';
-    
-    // Enhanced password validation
-    const validation = validatePassword(formData.password);
-    if (!validation.length) return 'Password must be at least 8 characters long';
-    if (!validation.uppercase) return 'Password must contain at least one uppercase letter';
-    if (!validation.lowercase) return 'Password must contain at least one lowercase letter';
-    if (!validation.number) return 'Password must contain at least one number';
-    if (!validation.specialChar) return 'Password must contain at least one special character';
-    
-    if (formData.password !== confirmPassword) return 'Passwords do not match';
     if (!formData.first_name.trim()) return 'First name is required';
     if (!formData.last_name.trim()) return 'Last name is required';
     return null;
@@ -97,12 +55,14 @@ const Signup: React.FC = () => {
     try {
       const response = await signupCompany(formData);
       
-      // Store authentication data
+      // Store authentication data (if response includes tokens)
       if (response.access && response.refresh) {
         localStorage.setItem('access', response.access);
         localStorage.setItem('refresh', response.refresh);
       }
-      localStorage.setItem('user', JSON.stringify(response.user));
+      if (response.user) {
+        localStorage.setItem('user', JSON.stringify(response.user));
+      }
       
       // Store tenant information
       if (response.tenant) {
@@ -110,8 +70,8 @@ const Signup: React.FC = () => {
       }
       
       // Show success message
-      alert(`Welcome to ${response.tenant?.name}! Link sent to your mail. Verify your mail to continue to dashboard.`);
-      // Navigate to HR management dashboard
+      alert(`Welcome to ${response.tenant?.name}! A temporary password has been sent to your email. Please check your inbox to log in.`);
+      // Navigate to login page
       navigate('/login');
     } catch (err: unknown) {
       const error = err as Error;
@@ -139,7 +99,6 @@ const Signup: React.FC = () => {
             <img src="/img/rr2.png" alt="Login Visual" className="w-full h-full object-contain mb-4" />
           </div>
           
-          
           <img src="/image.png" alt="Login Visual" className="w-full h-[400px] object-contain mb-4 relative z-10" />
           <img src="/logo.png" alt="SniperThink Logo" className="h-8 w-[230px] mb-4 relative z-10" />
           <h2 className="text-[40px] font-bold text-white mb-2 text-left relative z-10">Analyze. Automate.<br />Accelerate.</h2>
@@ -152,7 +111,7 @@ const Signup: React.FC = () => {
         <form className="w-full max-w-sm space-y-4" onSubmit={handleSubmit}>
           <h2 className="text-3xl font-semibold mb-2 text-center">Create Company Account</h2>
           <p className="text-gray-600 text-center text-sm mb-4">
-            Set up your company's HRMS in minutes
+            Set up your company's HRMS in minutes.
           </p>
           
           <div>
@@ -166,20 +125,6 @@ const Signup: React.FC = () => {
               placeholder="Enter your company name"
             />
           </div>
-          
-          {/* <div>
-            <label className="block text-gray-700 text-sm font-medium">Company Subdomain</label>
-            <input 
-              type="text" 
-              className="mt-1 w-full border rounded px-3 py-2 focus:outline-none focus:ring-2 focus:ring-teal-500" 
-              value={formData.subdomain} 
-              onChange={handleInputChange('subdomain')} 
-              placeholder="yourcompany"
-            />
-            <p className="text-xs text-gray-500 mt-1">
-              This will be your company's unique identifier
-            </p>
-          </div> */}
           
           <div className="grid grid-cols-2 gap-3">
             <div>
@@ -218,109 +163,17 @@ const Signup: React.FC = () => {
             />
           </div>
           
-          <div>
-            <label className="block text-gray-700 text-sm font-medium">Password</label>
-            <div className="relative">
-              <input 
-                type={showPassword ? "text" : "password"} 
-                className="mt-1 w-full border rounded px-3 py-2 pr-10 focus:outline-none focus:ring-2 focus:ring-teal-500" 
-                value={formData.password} 
-                onChange={handleInputChange('password')} 
-                required 
-                placeholder="Create a strong password"
-              />
-              <button
-                type="button"
-                onClick={() => setShowPassword(!showPassword)}
-                className="absolute inset-y-0 right-0 pr-3 flex items-center"
-              >
-                {showPassword ? (
-                  <EyeOff className="h-4 w-4 text-gray-400" />
-                ) : (
-                  <Eye className="h-4 w-4 text-gray-400" />
-                )}
-              </button>
-            </div>
-            
-            {/* Password validation indicators */}
-            {formData.password && (
-              <div className="mt-2 space-y-1">
-                <div className="flex items-center text-xs">
-                  <div className={`w-2 h-2 rounded-full mr-2 ${passwordValidation.length ? 'bg-green-500' : 'bg-gray-300'}`}></div>
-                  <span className={passwordValidation.length ? 'text-green-600' : 'text-gray-500'}>
-                    At least 8 characters
-                  </span>
-                </div>
-                <div className="flex items-center text-xs">
-                  <div className={`w-2 h-2 rounded-full mr-2 ${passwordValidation.uppercase ? 'bg-green-500' : 'bg-gray-300'}`}></div>
-                  <span className={passwordValidation.uppercase ? 'text-green-600' : 'text-gray-500'}>
-                    One uppercase letter
-                  </span>
-                </div>
-                <div className="flex items-center text-xs">
-                  <div className={`w-2 h-2 rounded-full mr-2 ${passwordValidation.lowercase ? 'bg-green-500' : 'bg-gray-300'}`}></div>
-                  <span className={passwordValidation.lowercase ? 'text-green-600' : 'text-gray-500'}>
-                    One lowercase letter
-                  </span>
-                </div>
-                <div className="flex items-center text-xs">
-                  <div className={`w-2 h-2 rounded-full mr-2 ${passwordValidation.number ? 'bg-green-500' : 'bg-gray-300'}`}></div>
-                  <span className={passwordValidation.number ? 'text-green-600' : 'text-gray-500'}>
-                    One number
-                  </span>
-                </div>
-                <div className="flex items-center text-xs">
-                  <div className={`w-2 h-2 rounded-full mr-2 ${passwordValidation.specialChar ? 'bg-green-500' : 'bg-gray-300'}`}></div>
-                  <span className={passwordValidation.specialChar ? 'text-green-600' : 'text-gray-500'}>
-                    One special character
-                  </span>
-                </div>
-              </div>
-            )}
-          </div>
-          
-          <div>
-            <label className="block text-gray-700 text-sm font-medium">Confirm Password</label>
-            <div className="relative">
-              <input 
-                type={showConfirmPassword ? "text" : "password"} 
-                className="mt-1 w-full border rounded px-3 py-2 pr-10 focus:outline-none focus:ring-2 focus:ring-teal-500" 
-                value={confirmPassword} 
-                onChange={e => setConfirmPassword(e.target.value)} 
-                required 
-                placeholder="Confirm your password"
-              />
-              <button
-                type="button"
-                onClick={() => setShowConfirmPassword(!showConfirmPassword)}
-                className="absolute inset-y-0 right-0 pr-3 flex items-center"
-              >
-                {showConfirmPassword ? (
-                  <EyeOff className="h-4 w-4 text-gray-400" />
-                ) : (
-                  <Eye className="h-4 w-4 text-gray-400" />
-                )}
-              </button>
-            </div>
-            
-            {/* Password match indicator */}
-            {confirmPassword && (
-              <div className="mt-2">
-                <div className="flex items-center text-xs">
-                  <div className={`w-2 h-2 rounded-full mr-2 ${formData.password === confirmPassword ? 'bg-green-500' : 'bg-red-500'}`}></div>
-                  <span className={formData.password === confirmPassword ? 'text-green-600' : 'text-red-600'}>
-                    {formData.password === confirmPassword ? 'Passwords match' : 'Passwords do not match'}
-                  </span>
-                </div>
-              </div>
-            )}
-          </div>
-          
           {error && (
             <div className="text-red-600 text-sm bg-red-50 p-3 rounded border border-red-200">
               {error}
             </div>
           )}
+          
+          <div className="bg-teal-50 border border-teal-200 rounded p-3">
+            <p className="text-sm text-teal-800">
+              <strong>Note:</strong> A temporary password will be automatically generated and sent to your email. You'll be required to change it on first login.
+            </p>
+          </div>
           
           <button 
             type="submit" 
@@ -342,4 +195,4 @@ const Signup: React.FC = () => {
   );
 };
 
-export default Signup; 
+export default Signup;
