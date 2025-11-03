@@ -256,8 +256,10 @@ class LogoutView(APIView):
             logger.error(
                 f"Logout error for user {request.user.email if request.user.is_authenticated else 'unknown'}: {e}"
             )
+            # SECURITY: Don't expose internal error details to client
+            logger.error(f"Logout error: {str(e)}", exc_info=True)
             return Response(
-                {"error": "Logout failed", "detail": str(e)},
+                {"error": "Logout failed. Please try again."},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR,
             )
 
@@ -456,6 +458,33 @@ class UserManagementViewSet(viewsets.ModelViewSet):
         # Update user role if provided
         role = request.data.get("role")
         if role:
+            # VALIDATION: Only 1 HR Manager and 1 Admin allowed per tenant
+            # Only check if role is changing to hr_manager or admin
+            if role in ["hr_manager", "admin"] and user.role != role:
+                tenant = user.tenant
+                
+                if role == "hr_manager":
+                    existing_hr_count = CustomUser.objects.filter(
+                        tenant=tenant,
+                        role="hr_manager"
+                    ).exclude(id=user.id).count()  # Exclude current user
+                    if existing_hr_count >= 1:
+                        return Response(
+                            {"error": "Only one HR Manager is allowed per organization. An HR Manager already exists."},
+                            status=status.HTTP_400_BAD_REQUEST,
+                        )
+                
+                elif role == "admin":
+                    existing_admin_count = CustomUser.objects.filter(
+                        tenant=tenant,
+                        role="admin"
+                    ).exclude(id=user.id).count()  # Exclude current user
+                    if existing_admin_count >= 1:
+                        return Response(
+                            {"error": "Only one Admin is allowed per organization. An Admin already exists."},
+                            status=status.HTTP_400_BAD_REQUEST,
+                        )
+            
             user.role = role
             user.save()
 
@@ -599,7 +628,7 @@ class TenantSignupView(APIView):
                 from django.conf import settings
                 
                 frontend_url = getattr(settings, 'FRONTEND_URL', 'http://35.154.9.249')
-                subject = f"Welcome to {tenant.name} - Your Account Details"
+                subject = f"Welcome to SniperThink - Your Account Details"
 
                 message = f"""
 Dear {first_name} {last_name},
@@ -618,7 +647,7 @@ Please log in at: {frontend_url}/login
 If you have any questions, please contact support.
 
 Best regards,
-The {tenant.name} Team
+The SniperThink Team
                 """.strip()
 
                 try:
@@ -637,60 +666,33 @@ The {tenant.name} Team
                 if email_sent:
                     return Response(
                         {
-                            "message": f"Company and admin account created successfully! Credentials have been sent to {admin_email}",
-                            "tenant": {
-                                "id": tenant.id,
-                                "name": tenant.name,
-                                "subdomain": tenant.subdomain,
-                            },
-                            "user": {
-                                "id": admin_user.id,
-                                "email": admin_user.email,
-                                "name": f"{admin_user.first_name} {admin_user.last_name}".strip(),
-                                "role": admin_user.role,
-                                "email_verified": admin_user.email_verified,
-                                "must_change_password": admin_user.must_change_password,
-                            },
-                            "temp_password": temp_password,  # Include for manual sharing if email fails
+                            "message": f"Company and admin account created successfully! Credentials have been sent to {admin_email}",  # Include for manual sharing if email fails
                         },
                         status=status.HTTP_201_CREATED,
                     )
                 else:
                     return Response(
                         {
-                            "message": f"Company and admin account created successfully but email sending failed. Please share these credentials manually:",
-                            "tenant": {
-                                "id": tenant.id,
-                                "name": tenant.name,
-                                "subdomain": tenant.subdomain,
-                            },
-                            "user": {
-                                "id": admin_user.id,
-                                "email": admin_user.email,
-                                "name": f"{admin_user.first_name} {admin_user.last_name}".strip(),
-                                "role": admin_user.role,
-                                "email_verified": admin_user.email_verified,
-                                "must_change_password": admin_user.must_change_password,
-                            },
-                            "temp_password": temp_password,
-                            "manual_share_required": True,
+                            "message": f"Company and admin account created successfully but email sending failed. Please contact administrator to get the credentials.",
                         },
                         status=status.HTTP_201_CREATED,
                     )
 
             except Exception as user_error:
-                logger.error(f"Failed to create admin user: {user_error}")
                 # Rollback tenant creation if user creation fails
                 tenant.delete()
+                # SECURITY: Don't expose internal error details to client
+                logger.error(f"Failed to create admin user: {str(user_error)}", exc_info=True)
                 return Response(
-                    {"error": f"Failed to create admin user: {str(user_error)}"},
+                    {"error": "Failed to create admin user. Please try again or contact support."},
                     status=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 )
 
         except Exception as e:
-
+            # SECURITY: Don't expose internal error details to client
+            logger.error(f"Failed to create company: {str(e)}", exc_info=True)
             return Response(
-                {"error": f"Failed to create company: {str(e)}"},
+                {"error": "Failed to create company. Please try again or contact support."},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR,
             )
 
@@ -1134,6 +1136,32 @@ class UserInvitationViewSet(viewsets.ModelViewSet):
                     status=status.HTTP_400_BAD_REQUEST,
                 )
 
+            # VALIDATION: Only 1 HR Manager and 1 Admin allowed per tenant
+            role = data.get("role")
+            tenant = request.user.tenant
+            
+            if role == "hr_manager":
+                existing_hr_count = CustomUser.objects.filter(
+                    tenant=tenant,
+                    role="hr_manager"
+                ).count()
+                if existing_hr_count >= 1:
+                    return Response(
+                        {"error": "Only one HR Manager is allowed per organization. An HR Manager already exists."},
+                        status=status.HTTP_400_BAD_REQUEST,
+                    )
+            
+            elif role == "admin":
+                existing_admin_count = CustomUser.objects.filter(
+                    tenant=tenant,
+                    role="admin"
+                ).count()
+                if existing_admin_count >= 1:
+                    return Response(
+                        {"error": "Only one Admin is allowed per organization. An Admin already exists."},
+                        status=status.HTTP_400_BAD_REQUEST,
+                    )
+
             # Generate temporary password
 
             temp_password = str(uuid.uuid4())[:8]
@@ -1170,24 +1198,64 @@ class UserInvitationViewSet(viewsets.ModelViewSet):
 
             user.save()
 
-            # Send invitation email (placeholder)
+            # Send invitation email with temporary password
+            # SECURITY: Never return password in API response - only send via email
+            try:
+                from django.core.mail import send_mail
+                from django.conf import settings
+                frontend_url = getattr(settings, 'FRONTEND_URL', 'http://localhost:5173')
+                
+                subject = f"Welcome to {request.user.tenant.name} - Your Account Details"
+                message = f"""
+Dear {data['first_name']} {data['last_name']},
 
-            # send_invitation_email(user, temp_password, request.user)
+You have been invited to join {request.user.tenant.name}'s HR management system.
+
+Your login credentials are:
+Email: {data['email']}
+Temporary Password: {temp_password}
+
+IMPORTANT: You will be required to change your password when you first log in.
+
+Please log in at: {frontend_url}/login
+
+If you have any questions, please contact your administrator.
+
+Best regards,
+{request.user.first_name} {request.user.last_name}
+{request.user.tenant.name}
+                """.strip()
+                
+                send_mail(
+                    subject,
+                    message,
+                    settings.DEFAULT_FROM_EMAIL,
+                    [data['email']],
+                    fail_silently=False,
+                )
+                email_sent = True
+            except Exception as email_error:
+                logger.error(f"Failed to send invitation email: {email_error}")
+                email_sent = False
 
             serializer = self.get_serializer(user)
 
             return Response(
                 {
-                    "message": "User invited successfully",
+                    "message": "User invited successfully. Temporary password has been sent to the user's email.",
                     "user": serializer.data,
-                    "temp_password": temp_password,  # In production, this should be sent via email only
+                    "email_sent": email_sent,
                 },
                 status=status.HTTP_201_CREATED,
             )
 
         except Exception as e:
-
-            return Response({"error": str(e)}, status=status.HTTP_400_BAD_REQUEST)
+            # SECURITY: Don't expose internal error details to client
+            logger.error(f"Error in user invitation: {str(e)}", exc_info=True)
+            return Response(
+                {"error": "Failed to invite user. Please try again or contact support."},
+                status=status.HTTP_400_BAD_REQUEST
+            )
 
     def list(self, request):
         """List all team members"""
@@ -1281,6 +1349,32 @@ class EnhancedInvitationView(APIView):
                     status=status.HTTP_400_BAD_REQUEST,
                 )
 
+            # VALIDATION: Only 1 HR Manager and 1 Admin allowed per tenant
+            role = data.get("role")
+            tenant = request.user.tenant
+            
+            if role == "hr_manager":
+                existing_hr_count = CustomUser.objects.filter(
+                    tenant=tenant,
+                    role="hr_manager"
+                ).count()
+                if existing_hr_count >= 1:
+                    return Response(
+                        {"error": "Only one HR Manager is allowed per organization. An HR Manager already exists."},
+                        status=status.HTTP_400_BAD_REQUEST,
+                    )
+            
+            elif role == "admin":
+                existing_admin_count = CustomUser.objects.filter(
+                    tenant=tenant,
+                    role="admin"
+                ).count()
+                if existing_admin_count >= 1:
+                    return Response(
+                        {"error": "Only one Admin is allowed per organization. An Admin already exists."},
+                        status=status.HTTP_400_BAD_REQUEST,
+                    )
+
             # Generate a secure temporary password
 
             temp_password = "".join(
@@ -1369,16 +1463,7 @@ Best regards,
 
                     return Response(
                         {
-                            "message": f"User created and invitation sent successfully to {email}",
-                            "user": {
-                                "id": user.id,
-                                "email": user.email,
-                                "first_name": user.first_name,
-                                "last_name": user.last_name,
-                                "role": user.role,
-                                "must_change_password": user.must_change_password,
-                            },
-                            "temp_password": temp_password,  # Include for manual sharing if email fails
+                            "message": f"User created and invitation sent successfully to {email}",  # Include for manual sharing if email fails
                         },
                         status=status.HTTP_201_CREATED,
                     )
@@ -1387,34 +1472,25 @@ Best regards,
 
                     return Response(
                         {
-                            "message": f"User created successfully but email sending failed. Please share these credentials manually:",
-                            "user": {
-                                "id": user.id,
-                                "email": user.email,
-                                "first_name": user.first_name,
-                                "last_name": user.last_name,
-                                "role": user.role,
-                                "must_change_password": user.must_change_password,
-                            },
-                            "temp_password": temp_password,
-                            "manual_share_required": True,
+                            "message": f"User created successfully but email sending failed. Please contact administrator to get the credentials.",
                         },
                         status=status.HTTP_201_CREATED,
                     )
 
             except Exception as user_error:
-
+                # SECURITY: Don't expose internal error details to client
+                logger.error(f"Failed to create user: {str(user_error)}", exc_info=True)
                 return Response(
-                    {"error": f"Failed to create user: {str(user_error)}"},
+                    {"error": "Failed to create user. Please try again or contact support."},
                     status=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 )
 
         except Exception as e:
-
-            import traceback
-
+            # SECURITY: Don't expose internal error details to client
+            logger.error(f"Error in invitation acceptance: {str(e)}", exc_info=True)
             return Response(
-                {"error": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR
+                {"error": "Failed to accept invitation. Please try again or contact support."},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
             )
 
 
@@ -1532,9 +1608,11 @@ class AcceptInvitationView(APIView):
             )
 
         except Exception as e:
-
+            # SECURITY: Don't expose internal error details to client
+            logger.error(f"Error in password reset request: {str(e)}", exc_info=True)
             return Response(
-                {"error": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR
+                {"error": "Failed to process password reset request. Please try again."},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
             )
 
 
@@ -1631,9 +1709,11 @@ class RequestPasswordResetView(APIView):
                 )
 
         except Exception as e:
-
+            # SECURITY: Don't expose internal error details to client
+            logger.error(f"Error in password reset request: {str(e)}", exc_info=True)
             return Response(
-                {"error": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR
+                {"error": "Failed to process password reset request. Please try again."},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
             )
 
 
@@ -1691,9 +1771,11 @@ class VerifyOTPView(APIView):
             )
 
         except Exception as e:
-
+            # SECURITY: Don't expose internal error details to client
+            logger.error(f"Error in OTP verification: {str(e)}", exc_info=True)
             return Response(
-                {"error": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR
+                {"error": "Failed to verify OTP. Please try again."},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
             )
 
 
@@ -1788,9 +1870,11 @@ class ResetPasswordView(APIView):
             )
 
         except Exception as e:
-
+            # SECURITY: Don't expose internal error details to client
+            logger.error(f"Error in password reset: {str(e)}", exc_info=True)
             return Response(
-                {"error": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR
+                {"error": "Failed to reset password. Please try again."},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
             )
 
 
@@ -1886,9 +1970,11 @@ class ChangePasswordView(APIView):
             )
 
         except Exception as e:
-
+            # SECURITY: Don't expose internal error details to client
+            logger.error(f"Error in password change: {str(e)}", exc_info=True)
             return Response(
-                {"error": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR
+                {"error": "Failed to change password. Please try again."},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
             )
 
 
@@ -1954,9 +2040,11 @@ class ValidateInvitationTokenView(APIView):
             )
 
         except Exception as e:
-
+            # SECURITY: Don't expose internal error details to client
+            logger.error(f"Error in invitation token validation: {str(e)}", exc_info=True)
             return Response(
-                {"error": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR
+                {"error": "Failed to validate invitation token. Please try again."},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
             )
 
 
@@ -1992,9 +2080,11 @@ class CleanupTokensView(APIView):
             )
 
         except Exception as e:
-
+            # SECURITY: Don't expose internal error details to client
+            logger.error(f"Error in token cleanup: {str(e)}", exc_info=True)
             return Response(
-                {"error": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR
+                {"error": "Failed to cleanup tokens. Please try again."},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
             )
 
 

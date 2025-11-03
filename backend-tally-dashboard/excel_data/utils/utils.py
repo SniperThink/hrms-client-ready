@@ -320,48 +320,108 @@ def run_bulk_aggregation(tenant, attendance_date):
         
         logger.info(f"📊 BACKGROUND AGGREGATION: Processed {records_processed} daily records for {len(aggregated_data)} employees")
         
-        # Calculate working days for each employee
+        # OPTIMIZATION: Pre-calculate common values once (outside loop)
         aggregation_start_time = time.time()
+        import calendar
+        from ..services.salary_service import SalaryCalculationService
+        
+        # Pre-calculate calendar days and month start date (same for all employees)
+        year = attendance_date.year
+        month_num = attendance_date.month
+        days_in_month = calendar.monthrange(year, month_num)[1]
+        attendance_date_month = date(year, month_num, 1)
+        month_names = ['JAN', 'FEB', 'MAR', 'APR', 'MAY', 'JUN', 
+                      'JUL', 'AUG', 'SEP', 'OCT', 'NOV', 'DEC']
+        month_name = month_names[month_num - 1]
+        
+        # OPTIMIZATION: Bulk fetch all employees in ONE query instead of N queries
+        employee_ids_list = list(aggregated_data.keys())
+        employees_dict = {}
+        if employee_ids_list:
+            employees_qs = EmployeeProfile.objects.filter(
+                tenant=tenant,
+                employee_id__in=employee_ids_list,
+                is_active=True
+            ).only(
+                'employee_id', 'date_of_joining', 'off_monday', 'off_tuesday', 
+                'off_wednesday', 'off_thursday', 'off_friday', 'off_saturday', 'off_sunday'
+            )
+            employees_dict = {emp.employee_id: emp for emp in employees_qs}
+        
+        logger.info(f"🚀 OPTIMIZED: Fetched {len(employees_dict)} employees in bulk (vs {len(employee_ids_list)} individual queries)")
+        
+        # OPTIMIZATION: Pre-calculate month boundaries once (used by working days calculation)
+        from datetime import timedelta
+        month_end = date(year, month_num, days_in_month)
+        
+        # Process each employee with pre-fetched data
         attendance_records = []
         errors = []
         
         for emp_id, data in aggregated_data.items():
             try:
-                # Get employee details for working days calculation
-                try:
-                    employee = EmployeeProfile.objects.get(
-                        tenant=tenant, 
-                        employee_id=emp_id, 
-                        is_active=True
-                    )
-                    
-                    # Calculate working days based on DOJ
-                    from ..services.salary_service import SalaryCalculationService
-                    month_names = ['JAN', 'FEB', 'MAR', 'APR', 'MAY', 'JUN', 
-                                 'JUL', 'AUG', 'SEP', 'OCT', 'NOV', 'DEC']
-                    total_working_days = SalaryCalculationService._calculate_employee_working_days(
-                        employee, attendance_date.year, month_names[attendance_date.month - 1]
-                    )
-                except EmployeeProfile.DoesNotExist:
+                # Get employee from pre-fetched dictionary (no DB query)
+                employee = employees_dict.get(emp_id)
+                
+                if employee:
+                    # OPTIMIZED: Calculate working days with pre-computed values
+                    try:
+                        # Fast-path: Build off-day set once
+                        off_days = set()
+                        if bool(employee.off_monday): off_days.add(0)
+                        if bool(employee.off_tuesday): off_days.add(1)
+                        if bool(employee.off_wednesday): off_days.add(2)
+                        if bool(employee.off_thursday): off_days.add(3)
+                        if bool(employee.off_friday): off_days.add(4)
+                        if bool(employee.off_saturday): off_days.add(5)
+                        if bool(employee.off_sunday): off_days.add(6)
+                        
+                        # Determine start date based on DOJ
+                        doj = employee.date_of_joining
+                        if isinstance(doj, str):
+                            try:
+                                from datetime import datetime as _dt
+                                doj = _dt.fromisoformat(doj).date()
+                            except Exception:
+                                doj = None
+                        
+                        # Determine start date based on DOJ
+                        if not doj:
+                            start_date = attendance_date_month
+                        elif doj > month_end:
+                            total_working_days = 0
+                            start_date = None  # Skip calculation
+                        else:
+                            # DOJ is in or before the month
+                            if doj.year == year and doj.month == month_num and doj > attendance_date_month:
+                                start_date = doj
+                            else:
+                                start_date = attendance_date_month
+                        
+                        # Calculate working days if we have a valid start date
+                        if start_date is not None:
+                            working_days = 0
+                            current_date = start_date
+                            while current_date <= month_end:
+                                if current_date.weekday() not in off_days:
+                                    working_days += 1
+                                current_date += timedelta(days=1)
+                            total_working_days = working_days
+                        # else: total_working_days already set to 0 above
+                            
+                    except Exception as e:
+                        # Fallback: use calendar days if calculation fails
+                        total_working_days = days_in_month
+                        logger.warning(f"⚠️ Could not calculate working days for employee {emp_id}: {str(e)}")
+                else:
                     # Fallback: use calendar days if employee not found
-                    import calendar
-                    total_working_days = calendar.monthrange(attendance_date.year, attendance_date.month)[1]
+                    total_working_days = days_in_month
                     logger.warning(f"⚠️ Employee {emp_id} not found, using calendar days for working days calculation")
-                except Exception as e:
-                    # Fallback: use standard 30 days if calculation fails
-                    total_working_days = 30
-                    logger.warning(f"⚠️ Could not calculate working days for employee {emp_id}: {str(e)}")
                 
                 # Calculate absent days
                 absent_days = max(0, total_working_days - data['present_days'])
                 
                 # Create monthly attendance record
-                attendance_date_month = date(attendance_date.year, attendance_date.month, 1)
-                
-                # Get calendar days for the month
-                import calendar
-                days_in_month = calendar.monthrange(attendance_date.year, attendance_date.month)[1]
-                
                 attendance_records.append(Attendance(
                     tenant=tenant,
                     employee_id=emp_id,
@@ -437,58 +497,67 @@ def run_bulk_aggregation(tenant, attendance_date):
         
         db_time = time.time() - db_start_time
         
-        # Clear relevant caches - COMPREHENSIVE CACHE INVALIDATION
+        # Clear relevant caches - OPTIMIZED CACHE INVALIDATION
         cache_start_time = time.time()
         from django.core.cache import cache
         
         tenant_id = tenant.id if tenant else 'default'
         date_str = attendance_date.strftime('%Y-%m-%d')
         
-        # Clear all attendance-related caches
-        cache_keys_to_clear = [
+        # OPTIMIZATION: Only clear critical cache keys immediately
+        # Less critical caches will be cleared on-demand when accessed
+        critical_cache_keys = [
             f"payroll_overview_{tenant_id}",
             f"months_with_attendance_{tenant_id}",
             f"attendance_all_records_{tenant_id}",
             f"monthly_attendance_summary_{tenant_id}_{attendance_date.year}_{attendance_date.month}",
             f"dashboard_stats_{tenant_id}",
-            f"directory_data_{tenant_id}",
-            f"directory_data_full_{tenant_id}",
         ]
         
-        # Clear eligible employees caches for all dates in the month
-        import calendar
-        from datetime import date as _date
-        days_in_month = calendar.monthrange(attendance_date.year, attendance_date.month)[1]
-        for day in range(1, days_in_month + 1):
-            day_date = _date(attendance_date.year, attendance_date.month, day)
-            day_str = day_date.strftime('%Y-%m-%d')
-            cache_keys_to_clear.extend([
-                f"eligible_employees_{tenant_id}_{day_str}",
-                f"eligible_employees_progressive_{tenant_id}_{day_str}_initial",
-                f"eligible_employees_progressive_{tenant_id}_{day_str}_remaining",
-                f"total_eligible_count_{tenant_id}_{day_str}",
+        # OPTIMIZATION: Use pattern deletion for attendance_all_records (clears all variations at once)
+        try:
+            cache.delete_pattern(f"attendance_all_records_{tenant_id}_*")
+            logger.debug(f"✅ Cleared attendance_all_records pattern for tenant {tenant_id}")
+        except (AttributeError, NotImplementedError):
+            # Fallback: Clear base key
+            cache.delete(f"attendance_all_records_{tenant_id}")
+        
+        # OPTIMIZATION: Use pattern deletion for eligible_employees (much faster than 30+ individual deletes)
+        try:
+            cache.delete_pattern(f"eligible_employees_{tenant_id}_*")
+            cache.delete_pattern(f"eligible_employees_progressive_{tenant_id}_*")
+            cache.delete_pattern(f"total_eligible_count_{tenant_id}_*")
+            logger.debug(f"✅ Cleared eligible_employees patterns for tenant {tenant_id}")
+        except (AttributeError, NotImplementedError):
+            # Fallback: Only clear critical date caches (not all days)
+            # Clear first day of month (most commonly accessed)
+            month_start_str = date(attendance_date.year, attendance_date.month, 1).strftime('%Y-%m-%d')
+            critical_cache_keys.extend([
+                f"eligible_employees_{tenant_id}_{month_start_str}",
+                f"eligible_employees_progressive_{tenant_id}_{month_start_str}_initial",
             ])
         
-        # Clear all cache keys
-        for cache_key in cache_keys_to_clear:
-            cache.delete(cache_key)
-        
-        # Clear frontend charts cache (pattern matching)
+        # OPTIMIZATION: Use pattern deletion for frontend charts
         try:
             cache.delete_pattern(f"frontend_charts_{tenant_id}_*")
-        except AttributeError:
+            logger.debug(f"✅ Cleared frontend_charts pattern for tenant {tenant_id}")
+        except (AttributeError, NotImplementedError):
             # Fallback: Clear common chart cache keys
             chart_keys = [
                 f"frontend_charts_{tenant_id}_this_month_All_",
                 f"frontend_charts_{tenant_id}_last_6_months_All_",
-                f"frontend_charts_{tenant_id}_last_12_months_All_",
-                f"frontend_charts_{tenant_id}_last_5_years_All_"
             ]
-            for key in chart_keys:
-                cache.delete(key)
+            critical_cache_keys.extend(chart_keys)
+        
+        # Clear critical cache keys
+        for cache_key in critical_cache_keys:
+            cache.delete(cache_key)
+        
+        # OPTIMIZATION: Directory data caches are less critical, clear them lazily
+        # They will be refreshed on next access
         
         cache_time = time.time() - cache_start_time
-        logger.info(f"🗑️ BULK AGGREGATION: Cleared {len(cache_keys_to_clear)} cache keys in {cache_time:.3f}s")
+        logger.info(f"🗑️ OPTIMIZED CACHE CLEAR: Cleared {len(critical_cache_keys)} critical keys + patterns in {cache_time:.3f}s")
         
         total_time = time.time() - start_time
         

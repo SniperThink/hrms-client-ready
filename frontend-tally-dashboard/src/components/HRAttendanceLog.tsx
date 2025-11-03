@@ -354,9 +354,50 @@ const HRAttendanceLog: React.FC = () => {
         remainingEmployees.forEach((emp: Employee) => {
           // Only add if not already present (to preserve user changes)
           if (!newEntries.has(emp.employee_id)) {
-            // Priority: If employee has off day, always set status to 'off'
-            const status: 'present' | 'absent' | 'off' = (emp.has_off_day || emp.default_status === 'off') ? 'off' : (emp.default_status === 'present' ? 'present' : 'absent');
-            newEntries.set(emp.employee_id, createAttendanceEntry(emp, status));
+            // Determine status with same priority as initializeAttendanceEntries
+            let status: 'present' | 'absent' | 'off' | 'unmarked';
+            
+            // Priority 1: Check current_attendance.status first (saved data from backend)
+            if (emp.current_attendance?.status) {
+              const savedStatus = emp.current_attendance.status.toLowerCase();
+              if (savedStatus === 'present' || savedStatus === 'absent' || savedStatus === 'off') {
+                status = savedStatus as 'present' | 'absent' | 'off';
+              } else {
+                status = 'unmarked';
+              }
+            }
+            // Priority 2: Use default_status from backend
+            else if (emp.default_status === 'present') {
+              status = 'present';
+            } else if (emp.default_status === 'absent') {
+              status = 'absent';
+            } else if (emp.default_status === 'off') {
+              status = 'off';
+            }
+            // Priority 3: If employee has off day and no existing data, default to 'off'
+            else if (emp.has_off_day) {
+              status = 'off';
+            }
+            // Default: unmarked
+            else {
+              status = 'unmarked';
+            }
+            
+            const entry = createAttendanceEntry(emp, status);
+            
+            // If there's existing attendance data from backend, use the actual values
+            if (emp.current_attendance && status !== 'unmarked') {
+              entry.ot_hours = emp.current_attendance.ot_hours || 0;
+              entry.late_minutes = emp.current_attendance.late_minutes || 0;
+              if (emp.current_attendance.check_in) {
+                entry.clock_in = emp.current_attendance.check_in;
+              }
+              if (emp.current_attendance.check_out) {
+                entry.clock_out = emp.current_attendance.check_out;
+              }
+            }
+            
+            newEntries.set(emp.employee_id, entry);
           }
         });
 
@@ -406,7 +447,9 @@ const HRAttendanceLog: React.FC = () => {
 
   // Helper function to initialize attendance entries
   const initializeAttendanceEntries = (employees: Employee[]) => {
-    const initialEntries = new Map<string, AttendanceEntry>();
+    // Preserve existing entries to maintain user changes (especially for off-day employees marked as present)
+    const existingEntries = new Map(attendanceEntries);
+    const newEntries = new Map<string, AttendanceEntry>();
     
     logger.info( '🔍 Initializing attendance entries for', employees.length, 'employees');
     
@@ -418,31 +461,61 @@ const HRAttendanceLog: React.FC = () => {
         has_off_day: emp.has_off_day
       });
       
-      // Use existing attendance data from backend if available
+      // Check if we have an existing entry (preserve user changes)
+      const existingEntry = existingEntries.get(emp.employee_id);
+      
+      // Determine status with priority:
+      // 1. Saved data from backend (current_attendance.status) - highest priority
+      // 2. Existing user changes (if no saved data)
+      // 3. Default status from backend
+      // 4. Default to 'off' for off-day employees (only if no saved data)
       let status: 'present' | 'absent' | 'off' | 'unmarked';
       
-      // Priority: If employee has off day, always set status to 'off'
-      if (emp.has_off_day || emp.default_status === 'off') {
-        status = 'off';
-      } else if (emp.default_status === 'present') {
-        // Employee has existing attendance marked as present
+      // Priority 1: Check current_attendance.status first (saved data from backend)
+      // This preserves "present" status for off-day employees that were saved
+      if (emp.current_attendance?.status) {
+        const savedStatus = emp.current_attendance.status.toLowerCase();
+        if (savedStatus === 'present' || savedStatus === 'absent' || savedStatus === 'off') {
+          status = savedStatus as 'present' | 'absent' | 'off';
+          logger.info( `🔍 Using saved status from backend for ${emp.employee_id}: ${status}`);
+        } else {
+          status = 'unmarked';
+        }
+      }
+      // Priority 2: Preserve existing user changes if no saved backend data
+      else if (existingEntry) {
+        status = existingEntry.status;
+        logger.info( `🔍 Preserving existing user change for ${emp.employee_id}: ${status}`);
+      }
+      // Priority 3: Use default_status from backend
+      else if (emp.default_status === 'present') {
         status = 'present';
       } else if (emp.default_status === 'absent') {
-        // Employee has existing attendance marked as absent
         status = 'absent';
-      } else if (emp.default_status === null || emp.default_status === undefined) {
-        // No existing attendance data, leave unmarked
-        status = 'unmarked';
-      } else {
-        // Fallback: treat unknown status as unmarked
+      } else if (emp.default_status === 'off') {
+        status = 'off';
+      }
+      // Priority 4: If employee has off day and no existing data, default to 'off'
+      else if (emp.has_off_day) {
+        status = 'off';
+      }
+      // Priority 5: No existing attendance data, leave unmarked
+      else {
         status = 'unmarked';
       }
       
-      logger.info( `🔍 Setting status for ${emp.employee_id}: ${status}`);
+      logger.info( `🔍 Final status for ${emp.employee_id}: ${status}`);
       
+      // If we have an existing entry AND no saved backend data, preserve the entire entry
+      if (existingEntry && !emp.current_attendance?.status) {
+        newEntries.set(emp.employee_id, existingEntry);
+        return; // Skip creating new entry, preserve user's changes
+      }
+      
+      // Create new entry with determined status
       const entry = createAttendanceEntry(emp, status);
       
-      // If there's existing attendance data, use the actual values
+      // If there's existing attendance data from backend, use the actual values
       if (emp.current_attendance && status !== 'unmarked') {
         entry.ot_hours = emp.current_attendance.ot_hours || 0;
         entry.late_minutes = emp.current_attendance.late_minutes || 0;
@@ -460,11 +533,11 @@ const HRAttendanceLog: React.FC = () => {
         });
       }
       
-      initialEntries.set(emp.employee_id, entry);
+      newEntries.set(emp.employee_id, entry);
     });
     
-    logger.info( '🔍 Final attendance entries:', Array.from(initialEntries.entries()).slice(0, 3));
-    setAttendanceEntries(initialEntries);
+    logger.info( '🔍 Final attendance entries:', Array.from(newEntries.entries()).slice(0, 3));
+    setAttendanceEntries(newEntries);
   };
 
   // Helper function to create attendance entry

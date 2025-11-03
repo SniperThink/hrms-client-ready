@@ -77,6 +77,8 @@ const HRAttendanceTracker: React.FC = () => {
     total_present_days: number;
     total_working_days: number;
     avg_attendance_percentage: number;
+    absentees_count?: number;
+    presentees_count?: number;
   } | null>(null);
 
   const filterTypeOptions: DropdownOption[] = [
@@ -236,10 +238,13 @@ const HRAttendanceTracker: React.FC = () => {
       setTotalCount(apiResponse.total_count || 0);
       setHasMore(apiResponse.has_more || false);
       
-      // Store KPI totals from backend (for cards) - only on initial load
-      if (!loadMore && apiResponse.kpi_totals) {
+      // Store KPI totals from backend (for cards) - update on every response
+      // These totals are calculated from ALL records, not just the paginated subset
+      if (apiResponse.kpi_totals) {
         setKpiTotals(apiResponse.kpi_totals);
-        logger.info( '📊 KPI Totals from backend:', apiResponse.kpi_totals);
+        if (!loadMore) {
+          logger.info( '📊 KPI Totals from backend:', apiResponse.kpi_totals);
+        }
       }
       
       const newRecords = apiResponse.results || [];
@@ -371,13 +376,22 @@ const HRAttendanceTracker: React.FC = () => {
       const newRecords = apiResponse.results || [];
       const transformedData = transformStandardToAttendanceRecords(newRecords);
       
-      // Append remaining data
-      setAttendanceData(prev => [...prev, ...transformedData]);
+      // CRITICAL: When limit=0, backend returns ALL records from start (offset=0)
+      // So we should REPLACE the data, not append, to avoid duplicates
+      // Check if backend returned all records (offset=0 and count matches total_count)
+      if (apiResponse.offset === 0 && apiResponse.count === apiResponse.total_count) {
+        // Backend returned all records from the beginning, replace data
+        setAttendanceData(transformedData);
+        logger.info( `✅ Replaced with all ${transformedData.length} records from cache (limit=0 returned full dataset)!`);
+      } else {
+        // Append remaining data (pagination case)
+        setAttendanceData(prev => [...prev, ...transformedData]);
+        logger.info( `✅ Appended ${transformedData.length} more records from cache!`);
+      }
+      
       setHasMore(false);
       setOffset(totalRecords);
-      
-      logger.info( `✅ Loaded all remaining ${transformedData.length} records from cache!`);
-      logger.info( `📦 Total loaded: ${attendanceData.length + transformedData.length}/${totalRecords}`);
+      logger.info( `📦 Total loaded: ${transformedData.length}/${totalRecords}`);
       
     } catch (error) {
       logger.error('Error fetching remaining records:', error);
@@ -715,6 +729,7 @@ const HRAttendanceTracker: React.FC = () => {
                 maxDate={new Date()}
                 placeholder="Select date"
                 className="w-36"
+                alignRight={true}
               />
             </div>
           )}
@@ -738,15 +753,25 @@ const HRAttendanceTracker: React.FC = () => {
           <>
             <div className="bg-white shadow rounded-lg p-4 text-center">
               <div className="text-sm text-gray-500">Total Employees</div>
-              <div className="text-2xl font-semibold text-[#0B5E59]">{totalEmployees}</div>
+              <div className="text-2xl font-semibold text-[#0B5E59]">
+                {kpiTotals && !isFiltered ? kpiTotals.total_employees : totalEmployees}
+              </div>
             </div>
             <div className="bg-white shadow rounded-lg p-4 text-center">
               <div className="text-sm text-gray-500">Present</div>
-              <div className="text-2xl font-semibold text-green-600">{finalData.filter(r => r.present_days > 0).length}</div>
+              <div className="text-2xl font-semibold text-green-600">
+                {kpiTotals && !isFiltered && kpiTotals.presentees_count !== undefined
+                  ? kpiTotals.presentees_count
+                  : finalData.filter(r => r.present_days > 0).length}
+              </div>
             </div>
             <div className="bg-white shadow rounded-lg p-4 text-center">
               <div className="text-sm text-gray-500">Absent</div>
-              <div className="text-2xl font-semibold text-red-600">{finalData.filter(r => r.absent_days > 0).length}</div>
+              <div className="text-2xl font-semibold text-red-600">
+                {kpiTotals && !isFiltered && kpiTotals.absentees_count !== undefined
+                  ? kpiTotals.absentees_count
+                  : finalData.filter(r => r.absent_days > 0).length}
+              </div>
             </div>
             <div className="bg-white shadow rounded-lg p-4 text-center">
               <div className="text-sm text-gray-500">Selected Date</div>
@@ -794,8 +819,6 @@ const HRAttendanceTracker: React.FC = () => {
                   {filterType === 'one_day' ? (
                     <>
                       <th className="text-left text-sm font-medium text-gray-600 px-4 py-3">Status</th>
-                      <th className="text-left text-sm font-medium text-gray-600 px-4 py-3">Present Days</th>
-                      <th className="text-left text-sm font-medium text-gray-600 px-4 py-3">Absent Days</th>
                       <th className="text-left text-sm font-medium text-gray-600 px-4 py-3">OT Hours</th>
                       <th className="text-left text-sm font-medium text-gray-600 px-4 py-3">Late Minutes</th>
                     </>
@@ -814,7 +837,7 @@ const HRAttendanceTracker: React.FC = () => {
               <tbody className="divide-y divide-gray-100">
                 {finalData.length === 0 ? (
                   <tr>
-                    <td colSpan={filterType === 'one_day' ? 8 : 9} className="px-4 py-6 text-center text-gray-500">
+                    <td colSpan={filterType === 'one_day' ? 6 : 9} className="px-4 py-6 text-center text-gray-500">
                       {filterType === 'one_day' 
                         ? 'No attendance records found for the selected date.' 
                         : attendanceStatus?.is_active 
@@ -850,9 +873,36 @@ const HRAttendanceTracker: React.FC = () => {
                         <td className="px-4 py-3 text-sm">{normalizeDepartment(record.department)}</td>
                         {filterType === 'one_day' ? (
                           <>
-                            <td className="px-4 py-3 text-sm capitalize">{record.status || 'unknown'}</td>
-                            <td className="px-4 py-3 text-sm">{record.present_days.toFixed(1)}</td>
-                            <td className="px-4 py-3 text-sm">{absentDays.toFixed(1)}</td>
+                            <td className="px-4 py-3 text-sm">
+                              {(() => {
+                                const status = (record.status || (record.present_days > 0 ? 'present' : (absentDays > 0 ? 'absent' : 'unknown'))).toLowerCase();
+                                if (status === 'present') {
+                                  return (
+                                    <span className="px-3 py-1 rounded text-xs font-medium bg-teal-100 text-teal-800 border border-teal-700 capitalize">
+                                      {status}
+                                    </span>
+                                  );
+                                } else if (status === 'absent') {
+                                  return (
+                                    <span className="px-3 py-1 rounded text-xs font-medium bg-red-100 text-red-800 border border-red-700 capitalize">
+                                      {status}
+                                    </span>
+                                  );
+                                } else if (status === 'off') {
+                                  return (
+                                    <span className="px-3 py-1 rounded text-xs font-medium bg-gray-100 text-gray-800 border border-teal-700 capitalize">
+                                      {status}
+                                    </span>
+                                  );
+                                } else {
+                                  return (
+                                    <span className="px-3 py-1 rounded text-xs font-medium bg-gray-100 text-gray-600 border border-gray-300 capitalize">
+                                      {status}
+                                    </span>
+                                  );
+                                }
+                              })()}
+                            </td>
                             <td className="px-4 py-3 text-sm">{(typeof record.ot_hours === 'string' ? parseFloat(record.ot_hours) || 0 : record.ot_hours || 0).toFixed(1)}</td>
                             <td className="px-4 py-3 text-sm">{record.late_minutes.toFixed(0)}</td>
                           </>

@@ -156,6 +156,29 @@ def sync_attendance_from_daily(sender, instance, **kwargs):
         for key in cache_keys_to_clear:
             cache.delete(key)
         
+        # CRITICAL: Clear all attendance_all_records cache variations (pattern-based)
+        # Cache keys follow pattern: attendance_all_records_{tenant_id}_{param_signature}
+        try:
+            cache.delete_pattern(f"attendance_all_records_{tenant_id}_*")
+            logger.debug(f"✅ SIGNAL: Cleared all attendance_all_records cache variations (pattern)")
+        except (AttributeError, NotImplementedError):
+            # Fallback: Clear common variations manually
+            common_time_periods = ['last_6_months', 'last_12_months', 'last_5_years', 'this_month', 'custom', 'custom_month', 'custom_range', 'one_day']
+            for period in common_time_periods:
+                variations = [
+                    f"attendance_all_records_{tenant_id}_{period}_None_None_None_None_rt_1",
+                    f"attendance_all_records_{tenant_id}_{period}_None_None_None_None_rt_0",
+                ]
+                # For one_day and custom_range, also clear with date
+                if period in ['one_day', 'custom_range']:
+                    instance_date_str = instance.date.strftime('%Y-%m-%d')
+                    variations.append(f"attendance_all_records_{tenant_id}_{period}_None_None_{instance_date_str}_{instance_date_str}_rt_1")
+                    variations.append(f"attendance_all_records_{tenant_id}_{period}_None_None_{instance_date_str}_{instance_date_str}_rt_0")
+                
+                for var_key in variations:
+                    cache.delete(var_key)
+            logger.debug(f"✅ SIGNAL: Cleared attendance_all_records cache variations (manual)")
+        
         # Clear frontend charts cache (pattern matching)
         try:
             cache.delete_pattern(f"frontend_charts_{tenant_id}_*")
@@ -170,7 +193,7 @@ def sync_attendance_from_daily(sender, instance, **kwargs):
             for key in chart_keys:
                 cache.delete(key)
         
-        logger.debug(f"🗑️ SIGNAL: Cleared {len(cache_keys_to_clear)} cache keys for tenant {tenant_id}")
+        logger.debug(f"🗑️ SIGNAL: Cleared cache keys for tenant {tenant_id}")
 
     except Exception as exc:
         # Soft-fail – we don't want attendance updates to break
@@ -435,4 +458,69 @@ def delete_chart_data_from_calculated(sender, instance, **kwargs):
                     cache.delete(f"frontend_charts_{tenant_id}")
                 
     except Exception as e:
-        logger.warning(f"Failed to delete ChartAggregatedData: {e}") 
+        logger.warning(f"Failed to delete ChartAggregatedData: {e}")
+
+
+@receiver(post_save, sender=EmployeeProfile)
+def invalidate_cache_on_employee_update(sender, instance, created, **kwargs):
+    """
+    Automatically invalidate relevant caches when employee details are created or updated.
+    This ensures that directory data, payroll overview, attendance records, and charts
+    reflect the latest employee information immediately.
+    """
+    import logging
+    logger = logging.getLogger(__name__)
+    
+    try:
+        from django.core.cache import cache
+        
+        tenant = instance.tenant
+        tenant_id = tenant.id if tenant else 'default'
+        employee_id = instance.employee_id
+        
+        # Comprehensive list of cache keys to invalidate
+        cache_keys_to_clear = [
+            # Directory data caches
+            f"directory_data_{tenant_id}",
+            f"directory_data_full_{tenant_id}",
+            
+            # Payroll overview cache
+            f"payroll_overview_{tenant_id}",
+            
+            # Attendance caches
+            f"attendance_all_records_{tenant_id}",
+            
+            # Departments cache (in case department changed)
+            f"all_departments_{tenant_id}",
+            
+            # Employee-specific attendance cache
+            f"employee_attendance_{tenant_id}_{employee_id}" if employee_id else None,
+        ]
+        
+        # Remove None values
+        cache_keys_to_clear = [key for key in cache_keys_to_clear if key]
+        
+        # Clear all cache keys
+        for key in cache_keys_to_clear:
+            cache.delete(key)
+        
+        # Clear frontend charts cache (pattern matching)
+        try:
+            cache.delete_pattern(f"frontend_charts_{tenant_id}_*")
+        except AttributeError:
+            # Fallback if delete_pattern not available (database cache doesn't support it)
+            chart_keys = [
+                f"frontend_charts_{tenant_id}_this_month_All_",
+                f"frontend_charts_{tenant_id}_last_6_months_All_",
+                f"frontend_charts_{tenant_id}_last_12_months_All_",
+                f"frontend_charts_{tenant_id}_last_5_years_All_"
+            ]
+            for key in chart_keys:
+                cache.delete(key)
+        
+        action = "Created" if created else "Updated"
+        logger.info(f"🔄 Employee {action}: Cleared cache for employee {employee_id} (tenant {tenant_id}) - {len(cache_keys_to_clear)} cache keys invalidated")
+        
+    except Exception as e:
+        # Soft fail - don't break employee updates if cache clearing fails
+        logger.warning(f"Failed to invalidate cache on employee update: {e}") 

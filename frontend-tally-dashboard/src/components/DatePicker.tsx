@@ -1,6 +1,6 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { ChevronLeft, ChevronRight, Calendar, Loader2 } from 'lucide-react';
-import { format, startOfMonth, endOfMonth, eachDayOfInterval, isSameDay, isSameMonth, addMonths, subMonths, isAfter, isBefore } from 'date-fns';
+import { format, startOfMonth, endOfMonth, eachDayOfInterval, isSameDay, isSameMonth, addMonths, subMonths, isAfter, isBefore, setMonth, setYear, getYear, getMonth } from 'date-fns';
 import { logger } from '../utils/logger';
 
 interface DatePickerProps {
@@ -30,6 +30,8 @@ const DatePicker: React.FC<DatePickerProps> = ({
   const [currentMonth, setCurrentMonth] = useState(() => {
     return value ? new Date(value) : new Date();
   });
+  const [showMonthPicker, setShowMonthPicker] = useState(false);
+  const [showYearPicker, setShowYearPicker] = useState(false);
   
   const dropdownRef = useRef<HTMLDivElement>(null);
   const buttonRef = useRef<HTMLButtonElement>(null);
@@ -44,6 +46,8 @@ const DatePicker: React.FC<DatePickerProps> = ({
         !buttonRef.current.contains(event.target as Node)
       ) {
         setIsOpen(false);
+        setShowMonthPicker(false);
+        setShowYearPicker(false);
       }
     };
 
@@ -54,6 +58,14 @@ const DatePicker: React.FC<DatePickerProps> = ({
   const selectedDate = value ? new Date(value) : null;
   const today = new Date();
   
+  // Update current month when value changes
+  useEffect(() => {
+    if (value) {
+      const newDate = new Date(value);
+      setCurrentMonth(newDate);
+    }
+  }, [value]);
+
   // Debug attendance dates when they change
   useEffect(() => {
     logger.info( '📅 DatePicker received attendanceDates:', attendanceDates);
@@ -104,11 +116,45 @@ const DatePicker: React.FC<DatePickerProps> = ({
     setCurrentMonth(addMonths(currentMonth, 1));
   };
 
+  const handleMonthSelect = (monthIndex: number) => {
+    setCurrentMonth(setMonth(currentMonth, monthIndex));
+    setShowMonthPicker(false);
+  };
+
+  const handleYearSelect = (year: number) => {
+    setCurrentMonth(setYear(currentMonth, year));
+    setShowYearPicker(false);
+  };
+
   const isDateDisabled = (date: Date) => {
     if (maxDate && isAfter(date, maxDate)) return true;
     if (minDate && isBefore(date, minDate)) return true;
     return false;
   };
+
+  // Generate available years (default: 100 years back to 1 year forward for DOB support)
+  const getAvailableYears = (): number[] => {
+    const currentYear = getYear(new Date());
+    // Default to 1950 minimum for DOB support, or 100 years back if that's earlier
+    const defaultMinYear = 1950;
+    const minYear = minDate ? getYear(minDate) : Math.max(defaultMinYear, currentYear - 100);
+    const maxYear = maxDate ? getYear(maxDate) : currentYear + 1;
+    const years: number[] = [];
+    for (let year = maxYear; year >= minYear; year--) {
+      years.push(year);
+    }
+    return years;
+  };
+
+  // Generate month names
+  const monthNames = [
+    'January', 'February', 'March', 'April', 'May', 'June',
+    'July', 'August', 'September', 'October', 'November', 'December'
+  ];
+
+  const availableYears = getAvailableYears();
+  const currentYear = getYear(currentMonth);
+  const currentMonthIndex = getMonth(currentMonth);
 
   const formatDisplayDate = (dateStr: string) => {
     try {
@@ -155,16 +201,80 @@ const DatePicker: React.FC<DatePickerProps> = ({
               onClick={handlePrevMonth}
               className="p-1 hover:bg-gray-100 rounded"
               type="button"
+              disabled={showMonthPicker || showYearPicker}
             >
               <ChevronLeft size={16} />
             </button>
-            <h3 className="font-medium text-gray-900">
-              {format(currentMonth, 'MMMM yyyy')}
-            </h3>
+            <div className="flex items-center gap-2">
+              <div className="relative">
+                <button
+                  onClick={() => {
+                    setShowMonthPicker(!showMonthPicker);
+                    setShowYearPicker(false);
+                  }}
+                  className="px-2 py-1 text-sm font-medium text-gray-900 hover:bg-gray-100 rounded"
+                  type="button"
+                >
+                  {format(currentMonth, 'MMMM')}
+                </button>
+                {showMonthPicker && (
+                  <div className="absolute top-full left-0 mt-1 bg-white border border-gray-200 rounded-lg shadow-lg z-10 w-32 max-h-48 overflow-y-auto teal-scrollbar">
+                    {monthNames.map((month, index) => {
+                      const testDate = setMonth(currentMonth, index);
+                      const isDisabled = 
+                        (minDate && isBefore(testDate, startOfMonth(minDate))) ||
+                        (maxDate && isAfter(testDate, endOfMonth(maxDate)));
+                      return (
+                        <button
+                          key={index}
+                          onClick={() => !isDisabled && handleMonthSelect(index)}
+                          disabled={isDisabled}
+                          className={`w-full text-left px-3 py-2 text-sm hover:bg-gray-100 ${
+                            currentMonthIndex === index ? 'bg-[#0B5E59] text-white' : ''
+                          } ${isDisabled ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer'}`}
+                          type="button"
+                        >
+                          {month}
+                        </button>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+              <div className="relative">
+                <button
+                  onClick={() => {
+                    setShowYearPicker(!showYearPicker);
+                    setShowMonthPicker(false);
+                  }}
+                  className="px-2 py-1 text-sm font-medium text-gray-900 hover:bg-gray-100 rounded"
+                  type="button"
+                >
+                  {format(currentMonth, 'yyyy')}
+                </button>
+                {showYearPicker && (
+                  <div className="absolute top-full left-0 mt-1 bg-white border border-gray-200 rounded-lg shadow-lg z-10 w-24 max-h-48 overflow-y-auto teal-scrollbar">
+                    {availableYears.map((year) => (
+                      <button
+                        key={year}
+                        onClick={() => handleYearSelect(year)}
+                        className={`w-full text-center px-3 py-2 text-sm hover:bg-gray-100 ${
+                          currentYear === year ? 'bg-[#0B5E59] text-white' : ''
+                        }`}
+                        type="button"
+                      >
+                        {year}
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
+            </div>
             <button
               onClick={handleNextMonth}
               className="p-1 hover:bg-gray-100 rounded"
               type="button"
+              disabled={showMonthPicker || showYearPicker}
             >
               <ChevronRight size={16} />
             </button>

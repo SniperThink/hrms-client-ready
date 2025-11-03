@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Search, Eye, Edit, Plus, Download, MoreVertical } from 'lucide-react';
+import { Search, Eye, Edit, Plus, Download, MoreVertical, Trash2 } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { exportToExcel, EmployeeData } from '../utils/excelExport';
 import { apiCall } from '../services/api';
@@ -62,6 +62,11 @@ const HRDirectory: React.FC = () => {
   const [showFilter, setShowFilter] = useState(false);
   const [selectedEmployee, setSelectedEmployee] = useState<EmployeeData | null>(null);
   const [showEmployeeDetail, setShowEmployeeDetail] = useState(false);
+  
+  // Delete confirmation state
+  const [showDeleteModal, setShowDeleteModal] = useState(false);
+  const [employeeToDelete, setEmployeeToDelete] = useState<EmployeeData | null>(null);
+  const [deleting, setDeleting] = useState(false);
 
   useEffect(() => {
     // Always call refresh function when component mounts (page is opened)
@@ -585,6 +590,47 @@ const HRDirectory: React.FC = () => {
     }
   };
 
+  // Handle delete employee
+  const handleDeleteClick = (employee: EmployeeData) => {
+    setEmployeeToDelete(employee);
+    setShowDeleteModal(true);
+  };
+
+  const handleConfirmDelete = async () => {
+    if (!employeeToDelete) return;
+    
+    setDeleting(true);
+    try {
+      const response = await apiCall(`/api/employees/${employeeToDelete.id}/`, {
+        method: 'DELETE'
+      });
+      
+      if (response.ok) {
+        const data = await response.json();
+        logger.info('✅ Employee deleted:', data);
+        
+        // Remove from local state
+        setEmployees(prev => prev.filter(emp => emp.id !== employeeToDelete.id));
+        setTotalCount(prev => prev - 1);
+        
+        // Show success message
+        alert(`Employee ${employeeToDelete.employee_id} and all their data deleted successfully!`);
+        
+        // Close modal
+        setShowDeleteModal(false);
+        setEmployeeToDelete(null);
+      } else {
+        const errorData = await response.json().catch(() => ({}));
+        alert(`Failed to delete employee: ${errorData.error || 'Unknown error'}`);
+      }
+    } catch (error) {
+      logger.error('❌ Error deleting employee:', error);
+      alert('Failed to delete employee. Please try again.');
+    } finally {
+      setDeleting(false);
+    }
+  };
+
   return (
     
     <div className="bg-white border border-gray-200 rounded-lg">
@@ -775,6 +821,13 @@ const HRDirectory: React.FC = () => {
                               title="Edit Employee"
                             >
                               <Edit size={16} />
+                            </button>
+                            <button
+                              className="text-red-500 hover:text-red-700"
+                              onClick={() => handleDeleteClick(employee)}
+                              title="Delete Employee"
+                            >
+                              <Trash2 size={16} />
                             </button>
                           </div>
                         </td>
@@ -1003,6 +1056,75 @@ const HRDirectory: React.FC = () => {
           </>
         )}
       </div>
+      
+      {/* Delete Confirmation Modal */}
+      {showDeleteModal && employeeToDelete && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-lg shadow-xl max-w-md w-full">
+            <div className="p-6">
+              <div className="flex items-center gap-3 mb-4">
+                <div className="p-2 bg-red-100 rounded-lg">
+                  <Trash2 className="w-6 h-6 text-red-600" />
+                </div>
+                <h2 className="text-xl font-semibold text-gray-900">
+                  Delete Employee
+                </h2>
+              </div>
+              
+              <p className="text-gray-700 mb-4">
+                Are you sure you want to delete <strong>{employeeToDelete.name}</strong> (ID: {employeeToDelete.employee_id})?
+              </p>
+              
+              <div className="bg-red-50 border border-red-200 rounded-lg p-4 mb-4">
+                <p className="text-sm text-red-800">
+                  <strong>Warning:</strong> This will permanently delete:
+                </p>
+                <ul className="text-sm text-red-700 mt-2 ml-4 list-disc">
+                  <li>Employee profile</li>
+                  <li>All attendance records</li>
+                  <li>All payroll data</li>
+                  <li>All advance ledger entries</li>
+                  <li>All payment records</li>
+                  <li>All leave records</li>
+                </ul>
+                <p className="text-sm text-red-800 mt-2 font-medium">
+                  This action cannot be undone!
+                </p>
+              </div>
+              
+              <div className="flex items-center justify-end gap-3">
+                <button
+                  onClick={() => {
+                    setShowDeleteModal(false);
+                    setEmployeeToDelete(null);
+                  }}
+                  disabled={deleting}
+                  className="px-4 py-2 text-gray-700 bg-white border border-gray-300 rounded-lg hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={handleConfirmDelete}
+                  disabled={deleting}
+                  className="px-6 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors flex items-center gap-2"
+                >
+                  {deleting ? (
+                    <>
+                      <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
+                      Deleting...
+                    </>
+                  ) : (
+                    <>
+                      <Trash2 className="w-4 h-4" />
+                      Delete Employee
+                    </>
+                  )}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

@@ -45,3 +45,33 @@
 .thin-scrollbar::-webkit-scrollbar:horizontal {
   height: 6px;
 }
+
+/* Teal scrollbar styles for calendar dropdowns */
+.teal-scrollbar {
+  scrollbar-width: thin;
+  scrollbar-color: #0B5E59 #f1f5f9;
+}
+
+.teal-scrollbar::-webkit-scrollbar {
+  width: 4px;
+  height: 4px;
+}
+
+.teal-scrollbar::-webkit-scrollbar-track {
+  background: #f1f5f9;
+  border-radius: 2px;
+}
+
+.teal-scrollbar::-webkit-scrollbar-thumb {
+  background: #0B5E59;
+  border-radius: 2px;
+}
+
+.teal-scrollbar::-webkit-scrollbar-thumb:hover {
+  background: #074E49;
+}
+
+/* For horizontal scrollbars */
+.teal-scrollbar::-webkit-scrollbar:horizontal {
+  height: 4px;
+}

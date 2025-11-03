@@ -50,6 +50,13 @@ interface EmployeeProfileData {
   shift_end_time: string;
   basic_salary: string;
   tds_percentage: string;
+  off_monday?: boolean;
+  off_tuesday?: boolean;
+  off_wednesday?: boolean;
+  off_thursday?: boolean;
+  off_friday?: boolean;
+  off_saturday?: boolean;
+  off_sunday?: boolean;
 }
 
 const EMPLOYMENT_TYPE_MAP: Record<string, string> = {
@@ -219,6 +226,20 @@ const HREmployeeDetails: React.FC = () => {
     }));
   };
 
+  // Handle checkbox changes for off days
+  const handleCheckboxChange = (day: string) => {
+    const fieldName = `off_${day.toLowerCase()}` as keyof EmployeeProfileData;
+    if (isEditing) {
+      setEditData(prev => {
+        const currentValue = prev?.[fieldName] as boolean;
+        return {
+          ...prev,
+          [fieldName]: !currentValue
+        };
+      });
+    }
+  };
+
   // Move fetchEmployeeData outside useEffect so it can be called after save
   const fetchEmployeeData = async () => {
     try {
@@ -379,7 +400,12 @@ const HREmployeeDetails: React.FC = () => {
         newValue = formatTimeToHHMM(newValue as string);
         oldValue = formatTimeToHHMM(oldValue as string);
       }
-      if (newValue !== oldValue && newValue !== '' && newValue !== null && newValue !== undefined) {
+      // Handle boolean fields differently (off_days)
+      if (k.startsWith('off_')) {
+        if (newValue !== oldValue && newValue !== null && newValue !== undefined) {
+          (updatedFields as Record<string, unknown>)[k] = newValue;
+        }
+      } else if (newValue !== oldValue && newValue !== '' && newValue !== null && newValue !== undefined) {
         (updatedFields as Record<string, unknown>)[k] = newValue;
       }
     });
@@ -908,6 +934,39 @@ const HREmployeeDetails: React.FC = () => {
                   readOnly={!isEditing}
                   onChange={e => isEditing && setEditData(prev => ({ ...prev, tds_percentage: e.target.value }))}
                 />
+              </div>
+              <div className="col-span-2">
+                <label className="block mb-2 text-gray-700 text-sm font-medium px-1">Off Days</label>
+                <div className="grid grid-cols-7 gap-2">
+                  {['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'].map((day) => {
+                    const fieldName = `off_${day.toLowerCase()}` as keyof EmployeeProfileData;
+                    const isChecked = isEditing 
+                      ? editData?.[fieldName] as boolean || false 
+                      : employeeData[fieldName] as boolean || false;
+                    
+                    return (
+                      <div key={day} className="flex items-center">
+                        <input
+                          type="checkbox"
+                          id={day}
+                          checked={isChecked}
+                          onChange={() => handleCheckboxChange(day)}
+                          disabled={!isEditing}
+                          className={`h-4 w-4 rounded focus:ring-teal-500 ${
+                            isEditing 
+                              ? 'text-teal-600 border-gray-300 cursor-pointer' 
+                              : 'text-gray-400 border-gray-200 cursor-not-allowed'
+                          }`}
+                        />
+                        <label htmlFor={day} className={`ml-2 text-sm ${
+                          isEditing ? 'text-gray-700 cursor-pointer' : 'text-gray-500 cursor-not-allowed'
+                        }`}>
+                          {day}
+                        </label>
+                      </div>
+                    );
+                  })}
+                </div>
               </div>
             </div>
           )}

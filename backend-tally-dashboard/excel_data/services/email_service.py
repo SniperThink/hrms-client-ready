@@ -32,7 +32,7 @@ This OTP code will expire in {getattr(settings, 'PASSWORD_RESET_EXPIRE_MINUTES',
 If you did not request this password reset, please ignore this email.
 
 Best regards,
-The HRMS Team
+The SniperThink Team
         """
         
         send_mail(
@@ -54,7 +54,7 @@ The HRMS Team
 def send_welcome_email(user):
     """Send welcome email after successful registration"""
     try:
-        subject = f"Welcome to {user.tenant.name} - HRMS"
+        subject = f"Welcome to SniperThink - HRMS"
         frontend_url = getattr(settings, 'FRONTEND_URL', 'http://35.154.9.249')
         
         message = f"""
@@ -66,10 +66,10 @@ Your account has been successfully created!
 
 You can login at: {frontend_url}/login
 
-Thank you for joining {user.tenant.name}!
+Thank you for joining SniperThink!
 
 Best regards,
-The HRMS Team
+The SniperThink Team
         """
         
         send_mail(

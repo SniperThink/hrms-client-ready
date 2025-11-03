@@ -120,25 +120,44 @@ class PayrollPeriodViewSet(viewsets.ModelViewSet):
             month_name = period.month.upper()
             month_short = MONTH_MAPPING.get(month_name, 'JAN')
             
-            # Bulk delete ChartAggregatedData for this period (much faster than per-record signals)
-            chart_deleted_count = ChartAggregatedData.objects.filter(
-                tenant=period.tenant,
-                year=period.year,
-                month=month_short
-            ).delete()[0]
-            
-            logger.info(f"Bulk deleted {chart_deleted_count} ChartAggregatedData records for period {period.month} {period.year}")
+            # ULTRA-FAST: Use raw SQL to delete all related data in a single transaction
+            from django.db import connection, transaction
+            from excel_data.models import ChartAggregatedData
             
             # Get count before deletion for response
             salary_count = CalculatedSalary.objects.filter(payroll_period=period).count()
             
-            # Delete associated calculated salaries (signals won't try to delete ChartAggregatedData again)
-            deleted_salaries = CalculatedSalary.objects.filter(payroll_period=period).delete()
+            # Get actual table names from Django models (safer than hardcoding)
+            calculated_salary_table = CalculatedSalary._meta.db_table
+            chart_data_table = ChartAggregatedData._meta.db_table
             
-            # Delete the payroll period
-            period_name = f"{period.month} {period.year}"
-            tenant_id = period.tenant.id
-            period.delete()
+            # Use raw SQL DELETE to bypass Django signals and ORM overhead
+            # This is 10-100x faster for large deletions (bypasses N+1 signal queries)
+            with transaction.atomic():
+                with connection.cursor() as cursor:
+                    # 1. Delete ChartAggregatedData first (bulk delete)
+                    cursor.execute(f"""
+                        DELETE FROM {chart_data_table}
+                        WHERE tenant_id = %s 
+                        AND year = %s 
+                        AND month = %s
+                    """, [period.tenant.id, period.year, month_short])
+                    chart_deleted_count = cursor.rowcount
+                    
+                    # 2. Delete CalculatedSalary records (bypasses signals, much faster)
+                    # Raw SQL bypasses Django ORM and post_delete signals completely
+                    cursor.execute(f"""
+                        DELETE FROM {calculated_salary_table}
+                        WHERE payroll_period_id = %s
+                    """, [period.id])
+                    deleted_salaries_count = cursor.rowcount
+                    
+                    logger.info(f"⚡ Ultra-fast deletion: {chart_deleted_count} ChartAggregatedData, {deleted_salaries_count} CalculatedSalary records")
+                
+                # Delete the payroll period (single record, fast)
+                period_name = f"{period.month} {period.year}"
+                tenant_id = period.tenant.id
+                period.delete()
             
             # CLEAR CACHE: Invalidate payroll overview cache when payroll period is deleted
             from django.core.cache import cache
@@ -158,7 +177,8 @@ class PayrollPeriodViewSet(viewsets.ModelViewSet):
             return Response({
                 'success': True,
                 'message': f'Payroll period {period_name} deleted successfully',
-                'deleted_salaries': deleted_salaries[0] if deleted_salaries[0] else 0,
+                'deleted_salaries': deleted_salaries_count,
+                'deleted_chart_data': chart_deleted_count,
                 'cache_cleared': True
             }, status=status.HTTP_200_OK)
             
@@ -1573,10 +1593,10 @@ def get_months_with_attendance(request):
                 
                 return Response(cached_data)
         
-        from ..models import DailyAttendance, SalaryData
+        from ..models import DailyAttendance, SalaryData, Attendance
         
-        # Get attendance data periods
-        attendance_aggregated = DailyAttendance.objects.filter(
+        # Get daily attendance data periods (from attendance log)
+        daily_attendance_aggregated = DailyAttendance.objects.filter(
             tenant=tenant
         ).extra(
             select={
@@ -1587,6 +1607,129 @@ def get_months_with_attendance(request):
             attendance_records=Count('id'),
             employees_with_attendance=Count('employee_id', distinct=True)
         ).order_by('-year', '-month')
+        
+        # Get monthly attendance data periods (from Excel uploads)
+        monthly_attendance_aggregated = Attendance.objects.filter(
+            tenant=tenant
+        ).extra(
+            select={
+                'year': "EXTRACT(year FROM date)", 
+                'month': "EXTRACT(month FROM date)"
+            }
+        ).values('year', 'month').annotate(
+            attendance_records=Count('id'),
+            employees_with_attendance=Count('employee_id', distinct=True)
+        ).order_by('-year', '-month')
+        
+        # OPTIMIZED: Combine both attendance sources using efficient aggregation
+        attendance_dict = {}
+        
+        # Process daily attendance
+        for period in daily_attendance_aggregated:
+            year = int(period['year'])
+            month_num = int(period['month'])
+            key = f"{year}-{month_num}"
+            if key not in attendance_dict:
+                attendance_dict[key] = {
+                    'year': year,
+                    'month_num': month_num,
+                    'attendance_records': 0,
+                    'daily_employees': set(),
+                    'monthly_employees': set()
+                }
+            attendance_dict[key]['attendance_records'] += period['attendance_records']
+        
+        # Process monthly attendance (Excel uploads)
+        for period in monthly_attendance_aggregated:
+            year = int(period['year'])
+            month_num = int(period['month'])
+            key = f"{year}-{month_num}"
+            if key not in attendance_dict:
+                attendance_dict[key] = {
+                    'year': year,
+                    'month_num': month_num,
+                    'attendance_records': 0,
+                    'daily_employees': set(),
+                    'monthly_employees': set()
+                }
+            attendance_dict[key]['attendance_records'] += period['attendance_records']
+        
+        # ULTRA-OPTIMIZED: Use a single query to get all distinct employee counts at once
+        from django.db import connection
+        
+        # Build single query with UNION to get all employees for all periods
+        employee_counts_by_period = {key: {'daily_employees': set(), 'monthly_employees': set()} 
+                                     for key in attendance_dict.keys()}
+        
+        if attendance_dict:
+            with connection.cursor() as cursor:
+                # Build a single UNION query for all periods at once
+                # This reduces N*2 queries to just 2 queries total (one for each table)
+                
+                # Get all daily attendance employees for all periods in one query
+                period_conditions = []
+                params = [tenant.id]
+                
+                for key, data in attendance_dict.items():
+                    period_conditions.append(
+                        "(EXTRACT(year FROM date) = %s AND EXTRACT(month FROM date) = %s)"
+                    )
+                    params.extend([data['year'], data['month_num']])
+                
+                if period_conditions:
+                    # Single query for all daily attendance
+                    daily_query = f"""
+                        SELECT EXTRACT(year FROM date)::int as year, 
+                               EXTRACT(month FROM date)::int as month,
+                               employee_id 
+                        FROM excel_data_dailyattendance 
+                        WHERE tenant_id = %s 
+                        AND ({' OR '.join(period_conditions)})
+                        GROUP BY year, month, employee_id
+                    """
+                    cursor.execute(daily_query, params)
+                    for row in cursor.fetchall():
+                        year, month, employee_id = row
+                        key = f"{year}-{month}"
+                        if key in employee_counts_by_period:
+                            employee_counts_by_period[key]['daily_employees'].add(employee_id)
+                    
+                    # Single query for all monthly attendance
+                    monthly_query = f"""
+                        SELECT EXTRACT(year FROM date)::int as year, 
+                               EXTRACT(month FROM date)::int as month,
+                               employee_id 
+                        FROM excel_data_attendance 
+                        WHERE tenant_id = %s 
+                        AND ({' OR '.join(period_conditions)})
+                        GROUP BY year, month, employee_id
+                    """
+                    cursor.execute(monthly_query, params)
+                    for row in cursor.fetchall():
+                        year, month, employee_id = row
+                        key = f"{year}-{month}"
+                        if key in employee_counts_by_period:
+                            employee_counts_by_period[key]['monthly_employees'].add(employee_id)
+        
+        # Build final attendance_aggregated list using the pre-computed counts
+        attendance_aggregated = []
+        for key, data in attendance_dict.items():
+            # Combine both sources and count distinct employees
+            if key in employee_counts_by_period:
+                distinct_employees = len(
+                    employee_counts_by_period[key]['daily_employees'].union(
+                        employee_counts_by_period[key]['monthly_employees']
+                    )
+                )
+            else:
+                distinct_employees = 0
+            
+            attendance_aggregated.append({
+                'year': data['year'],
+                'month': data['month_num'],
+                'attendance_records': data['attendance_records'],
+                'employees_with_attendance': distinct_employees
+            })
         
         # Get salary data periods
         salary_aggregated = SalaryData.objects.filter(
@@ -2641,16 +2784,13 @@ def save_payroll_period_direct(request):
             'success': True,
             'message': f'Payroll period saved successfully for {month_name} {year}',
             'payroll_period_id': payroll_period.id,
-            'saved_entries': (created_count + updated_count),
-            'created_new_period': created,
-            'cache_cleared': True
+            'saved_entries': (created_count + updated_count)
         })
         
     except Exception as e:
-        # Clean null bytes from error message and traceback to prevent compile errors
-        error_msg = str(e).replace('\x00', '[NUL]')
-        logger.error(f"Error in save_payroll_period_direct: {error_msg}")
-        return Response({"error": f"Failed to save payroll period: {error_msg}"}, status=500)
+        # SECURITY: Don't expose internal error details to client
+        logger.error(f"Error in save_payroll_period_direct: {str(e)}", exc_info=True)
+        return Response({"error": "Failed to save payroll period. Please try again."}, status=500)
 
 @api_view(['POST'])
 @permission_classes([IsAuthenticated])

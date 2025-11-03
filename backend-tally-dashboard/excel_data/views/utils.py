@@ -79,31 +79,31 @@ logger = logging.getLogger(__name__)
 @api_view(["GET"])
 def dashboard_stats(request):
     """
-
     Get dashboard statistics for current tenant
-
+    TENANT-AWARE: All statistics are filtered by tenant
     """
 
     if not request.user.is_authenticated:
-
         return Response({"error": "Authentication required"}, status=401)
 
+    # Get tenant from request
+    tenant = getattr(request, 'tenant', None)
+    if not tenant:
+        return Response({"error": "No tenant found"}, status=400)
+
     # Get current month/year
-
     current_date = timezone.now()
-
     current_month = current_date.strftime("%B").upper()[:3]
-
     current_year = current_date.year
 
-    # Employee count
+    # Employee count (tenant-specific)
+    total_employees = EmployeeProfile.objects.filter(tenant=tenant, is_active=True).count()
 
-    total_employees = EmployeeProfile.objects.filter(is_active=True).count()
-
-    # Current month salary data
-
+    # Current month salary data (tenant-specific)
     current_month_data = SalaryData.objects.filter(
-        year=current_year, month__icontains=current_month
+        tenant=tenant,
+        year=current_year, 
+        month__icontains=current_month
     )
 
     total_salary_paid = (
@@ -112,10 +112,10 @@ def dashboard_stats(request):
 
     employees_paid = current_month_data.count()
 
-    # Department distribution
-
+    # Department distribution (tenant-specific)
     dept_distribution = (
-        EmployeeProfile.objects.values("department")
+        EmployeeProfile.objects.filter(tenant=tenant)
+        .values("department")
         .annotate(count=Count("id"))
         .order_by("department")
     )
@@ -190,43 +190,52 @@ def health_check(request):
 def get_dropdown_options(request):
     """
     Get unique values for all dropdowns for the public signup page.
+    TENANT-AWARE: If tenant is available, only returns options for that tenant.
     """
     try:
-        # Get all unique, non-empty departments from all employees
+        # Check if tenant is available (from middleware or authenticated user)
+        tenant = getattr(request, 'tenant', None)
+        
+        # Build base queryset - filter by tenant if available
+        base_queryset = EmployeeProfile.objects.all()
+        if tenant:
+            base_queryset = base_queryset.filter(tenant=tenant)
+        
+        # Get all unique, non-empty departments from employees (tenant-specific if tenant available)
         departments_clean = set(
-            EmployeeProfile.objects.exclude(department__isnull=True)
+            base_queryset.exclude(department__isnull=True)
             .exclude(department='')
             .values_list('department', flat=True)
             .distinct()
         )
         
-        # Get all unique, non-empty location branches
+        # Get all unique, non-empty location branches (tenant-specific if tenant available)
         locations_clean = set(
-            EmployeeProfile.objects.exclude(location_branch__isnull=True)
+            base_queryset.exclude(location_branch__isnull=True)
             .exclude(location_branch='')
             .values_list('location_branch', flat=True)
             .distinct()
         )
         
-        # Get all unique, non-empty designations
+        # Get all unique, non-empty designations (tenant-specific if tenant available)
         designations_clean = set(
-            EmployeeProfile.objects.exclude(designation__isnull=True)
+            base_queryset.exclude(designation__isnull=True)
             .exclude(designation='')
             .values_list('designation', flat=True)
             .distinct()
         )
 
-        # Get all unique, non-empty cities
+        # Get all unique, non-empty cities (tenant-specific if tenant available)
         cities_clean = set(
-            EmployeeProfile.objects.exclude(city__isnull=True)
+            base_queryset.exclude(city__isnull=True)
             .exclude(city='')
             .values_list('city', flat=True)
             .distinct()
         )
 
-        # Get all unique, non-empty states
+        # Get all unique, non-empty states (tenant-specific if tenant available)
         states_clean = set(
-            EmployeeProfile.objects.exclude(state__isnull=True)
+            base_queryset.exclude(state__isnull=True)
             .exclude(state='')
             .values_list('state', flat=True)
             .distinct()
@@ -387,6 +396,7 @@ def bulk_update_attendance(request):
         created_count = 0
         updated_count = 0
         skipped_count = 0
+        skipped_employees = []  # Track skipped employees with reasons
         errors = []
         
         # PERFORMANCE OPTIMIZATION: Add timing and batch size optimization
@@ -414,6 +424,11 @@ def bulk_update_attendance(request):
                 # Check if employee has joined by this date
                 if employee.date_of_joining and attendance_date < employee.date_of_joining:
                     skipped_count += 1
+                    skipped_employees.append({
+                        'employee_id': employee_id,
+                        'name': record.get('name') or f"{employee.first_name} {employee.last_name}",
+                        'reason': f"Employee has not joined yet (joining date: {employee.date_of_joining})"
+                    })
                     continue
                 
                 # OPTIMIZED: Use pre-calculated off day check
@@ -422,9 +437,20 @@ def bulk_update_attendance(request):
                     employee.off_thursday, employee.off_friday, employee.off_saturday, employee.off_sunday
                 ]
                 
-                if off_day_flags[day_of_week]:
+                # Get status early to check if we should process off-day records
+                status = record.get('status')
+                
+                # Only skip if employee has off day AND status is 'absent' or 'unmarked'
+                # Allow 'off' status to record off days, and 'present' status for extra pay on off days
+                if off_day_flags[day_of_week] and status not in ['off', 'present']:
                     skipped_count += 1
-                    continue  # Skip attendance for off days
+                    day_names = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday']
+                    skipped_employees.append({
+                        'employee_id': employee_id,
+                        'name': record.get('name') or f"{employee.first_name} {employee.last_name}",
+                        'reason': f"Employee has off day on {day_names[day_of_week]} and status is '{status}' (should be 'off' or 'present' for extra pay)"
+                    })
+                    continue  # Skip attendance for off days unless explicitly marking as 'off' or 'present'
                 
                 # OPTIMIZED: Minimal data processing
                 ot_hours = float(record.get('ot_hours', 0))
@@ -433,13 +459,12 @@ def bulk_update_attendance(request):
                 department = record.get('department') or employee.department or 'General'
                 
                 # Handle off-day status optimization
-                if record.get('status') == 'off':
+                if status == 'off':
                     ot_hours = 0
                     late_minutes = 0
                 
                 # OPTIMIZED: Fast status determination
                 # Handle 'present', 'absent', and 'off' statuses
-                status = record.get('status')
                 if status == 'present':
                     attendance_status = 'PRESENT'
                 elif status == 'off':
@@ -602,6 +627,48 @@ def bulk_update_attendance(request):
             cache.delete(key)
             cache_keys_cleared.append(key.split('_')[-2] + '_' + key.split('_')[-1])
         
+        # CRITICAL: Clear all attendance_all_records cache variations (pattern-based)
+        # Cache keys follow pattern: attendance_all_records_{tenant_id}_{param_signature}
+        # param_signature format: {time_period}_{month}_{year}_{start_date}_{end_date}_rt_{prefer_realtime}
+        try:
+            # Try pattern-based deletion if available (works with Redis cache)
+            cache.delete_pattern(f"attendance_all_records_{tenant_id}_*")
+            logger.info(f"✅ Cleared all attendance_all_records cache variations for tenant {tenant_id} (pattern)")
+        except (AttributeError, NotImplementedError):
+            # Fallback: Clear common variations manually (for database cache)
+            common_time_periods = ['last_6_months', 'last_12_months', 'last_5_years', 'this_month', 'custom', 'custom_month', 'custom_range', 'one_day']
+            cleared_count = 0
+            
+            for period in common_time_periods:
+                # Clear with different param combinations
+                variations = [
+                    f"attendance_all_records_{tenant_id}_{period}_None_None_None_None_rt_1",
+                    f"attendance_all_records_{tenant_id}_{period}_None_None_None_None_rt_0",
+                ]
+                
+                # For custom_month, also clear with actual month/year values for the uploaded date
+                if period == 'custom_month':
+                    month_num = attendance_date.month
+                    year_num = attendance_date.year
+                    variations.extend([
+                        f"attendance_all_records_{tenant_id}_custom_month_{month_num}_{year_num}_None_None_rt_1",
+                        f"attendance_all_records_{tenant_id}_custom_month_{month_num}_{year_num}_None_None_rt_0",
+                        # Also clear 'custom' alias (frontend compatibility)
+                        f"attendance_all_records_{tenant_id}_custom_{month_num}_{year_num}_None_None_rt_1",
+                        f"attendance_all_records_{tenant_id}_custom_{month_num}_{year_num}_None_None_rt_0",
+                    ])
+                
+                # For one_day and custom_range, also clear with date
+                if period in ['one_day', 'custom_range']:
+                    variations.append(f"attendance_all_records_{tenant_id}_{period}_None_None_{date_str}_{date_str}_rt_1")
+                    variations.append(f"attendance_all_records_{tenant_id}_{period}_None_None_{date_str}_{date_str}_rt_0")
+                
+                for var_key in variations:
+                    if cache.delete(var_key):
+                        cleared_count += 1
+            
+            logger.info(f"✅ Cleared {cleared_count} attendance_all_records cache variations for tenant {tenant_id} (manual fallback)")
+        
         cache_clear_time = time.time() - cache_start_time
         logger.info(f"LIGHTNING FAST: Cleared {len(critical_cache_keys)} critical cache keys in {cache_clear_time:.3f}s")
         
@@ -625,6 +692,8 @@ def bulk_update_attendance(request):
         
         # Also clear frontend charts cache (pattern matching in background)
         comprehensive_cache_keys.append(f"frontend_charts_{tenant_id}_*")  # Mark for pattern deletion
+        # CRITICAL: Mark attendance_all_records for pattern deletion in background
+        comprehensive_cache_keys.append(f"attendance_all_records_{tenant_id}_*")  # Mark for pattern deletion
         
         # Add employee-specific cache keys
         for employee_id in affected_employee_ids:
@@ -638,69 +707,72 @@ def bulk_update_attendance(request):
         total_uploaded = created_count + updated_count
         
         response_data = {
-            'message': '⚡ LIGHTNING FAST: Attendance uploaded successfully!',
+            'message': 'Attendance uploaded successfully',
             'status': 'success',
             'attendance_upload': {
                 'total_processed': total_uploaded,
                 'created_count': created_count,
                 'updated_count': updated_count,
                 'skipped_count': skipped_count,
-                'date': date_str,
-                'employees_processed': len(attendance_records)
-            },
-            'performance': {
-                'total_time': f"{total_function_time:.3f}s",
-                'processing_time': f"{processing_time:.3f}s",
-                'db_operation_time': f"{db_operation_time:.3f}s",
-                'summary_calculation_time': f"{summary_time:.3f}s",
-                'cache_clear_time': f"{cache_clear_time:.3f}s",
-                'bulk_operations': True,
-                'optimization_level': 'lightning_fast',
-                'batch_sizes': {
-                    'attendance_records': 250,
-                    'deferred_summaries': 'on_demand'
-                },
-                'avg_time_per_record': f"{(total_function_time / len(attendance_records)):.3f}s" if attendance_records else '0s',
-                'records_per_second': int(len(attendance_records) / total_function_time) if total_function_time > 0 and attendance_records else 0,
-                'performance_breakdown': {
-                    'data_processing': f"{(processing_time / total_function_time * 100):.1f}%" if total_function_time > 0 else '0%',
-                    'database_operations': f"{(db_operation_time / total_function_time * 100):.1f}%" if total_function_time > 0 else '0%',
-                    'summary_calculations': f"{(summary_time / total_function_time * 100):.1f}%" if total_function_time > 0 else '0%',
-                    'cache_clearing': f"{(cache_clear_time / total_function_time * 100):.1f}%" if total_function_time > 0 else '0%'
-                },
-                'optimization_note': 'Critical caches cleared instantly, comprehensive cache clearing in background'
+                'skipped_employees': skipped_employees if skipped_employees else None,
+                'date': date_str
             }
         }
         
         if errors:
             response_data['errors'] = errors
-            response_data['message'] += f' ({len(errors)} notes/errors)'
+            response_data['message'] += f' ({len(errors)} errors occurred)'
         
-        # Add cache performance data to response
-        response_data['cache_cleared'] = True
-        response_data['cache_performance'] = {
-            'critical_keys_cleared': len(cache_keys_cleared),
-            'critical_clear_time': f"{cache_clear_time:.3f}s",
-            'comprehensive_clearing': 'in_background',
-            'background_cache_keys': len(cache_keys_for_background),
-            'types_cleared': cache_keys_cleared
-        }
-        
-        # BACKGROUND AGGREGATION: Start monthly aggregation in background thread
-        logger.info("🚀 BACKGROUND AGGREGATION: Starting monthly aggregation in background thread...")
+        # BACKGROUND AGGREGATION: Start monthly aggregation in non-blocking background thread
+        logger.info("🚀 BACKGROUND AGGREGATION: Starting monthly aggregation in background thread (non-blocking)...")
         
         try:
             import threading
+            from django.db import connections
             from ..utils.utils import run_bulk_aggregation
             
+            # Capture variables needed in thread (tenant_id instead of tenant object to avoid connection issues)
+            tenant_id = tenant.id
+            attendance_year = attendance_date.year
+            attendance_month = attendance_date.month
+            attendance_date_str = date_str  # Capture date string for cache clearing
+            
             def background_aggregation():
-                """Background thread function for monthly aggregation and cache clearing"""
+                """
+                Non-blocking background thread function for monthly aggregation and cache clearing.
+                Properly handles Django database connections in threads.
+                """
                 try:
-                    logger.info(f"🧵 BACKGROUND THREAD: Starting aggregation for {attendance_date.year}-{attendance_date.month:02d}")
+                    # Close any existing database connections before starting (thread-safe)
+                    connections.close_all()
                     
-                    # Run monthly aggregation
-                    result = run_bulk_aggregation(tenant, attendance_date)
-                    logger.info(f"🧵 BACKGROUND THREAD: Aggregation completed with status: {result['status']}")
+                    # Re-fetch tenant in the thread (ensures fresh DB connection)
+                    from datetime import date
+                    from ..models import Tenant
+                    thread_tenant = Tenant.objects.get(id=tenant_id)
+                    thread_attendance_date = date(attendance_year, attendance_month, 1)
+                    
+                    logger.info(f"🧵 BACKGROUND THREAD: Starting aggregation for {thread_tenant.subdomain} - {attendance_year}-{attendance_month:02d}")
+                    
+                    # Run monthly aggregation (this can take several seconds for large datasets)
+                    aggregation_start = time.time()
+                    result = run_bulk_aggregation(thread_tenant, thread_attendance_date)
+                    aggregation_elapsed = time.time() - aggregation_start
+                    
+                    # Log detailed completion info
+                    status = result.get('status', 'unknown')
+                    stats = result.get('statistics', {})
+                    perf = result.get('performance', {})
+                    
+                    logger.info(f"✅ BACKGROUND THREAD: Aggregation completed with status: {status}")
+                    logger.info(f"📊 BACKGROUND THREAD: Employees processed: {stats.get('employees_processed', 0)}, "
+                              f"Records: {stats.get('daily_records_processed', 0)}, "
+                              f"Created: {stats.get('attendance_records_created', 0)}, "
+                              f"Updated: {stats.get('attendance_records_updated', 0)}")
+                    logger.info(f"⏱️ BACKGROUND THREAD: Total time: {aggregation_elapsed:.3f}s, "
+                              f"DB time: {perf.get('database_time', 'N/A')}, "
+                              f"Cache time: {perf.get('cache_clear_time', 'N/A')}")
+                    
                     
                     # Clear comprehensive caches in background
                     logger.info(f"🧵 BACKGROUND THREAD: Starting comprehensive cache clearing...")
@@ -709,25 +781,62 @@ def bulk_update_attendance(request):
                     from django.core.cache import cache
                     cache_keys_cleared_count = 0
                     
+                    # Clear all comprehensive cache keys
                     for cache_key in cache_keys_for_background:
-                        # Handle pattern deletion for frontend_charts
+                        # Handle pattern deletion for cache keys ending with _*
                         if cache_key.endswith('_*'):
                             try:
-                                # Remove the '_*' suffix and use pattern matching
-                                pattern = cache_key
-                                cache.delete_pattern(pattern)
+                                # Try pattern-based deletion
+                                cache.delete_pattern(cache_key)
                                 cache_keys_cleared_count += 1
-                            except AttributeError:
-                                # Fallback: Clear common chart cache keys
+                            except (AttributeError, NotImplementedError):
+                                # Fallback: Clear common variations manually
                                 base_pattern = cache_key.replace('_*', '')
-                                chart_keys = [
-                                    f"{base_pattern}_this_month_All_",
-                                    f"{base_pattern}_last_6_months_All_",
-                                    f"{base_pattern}_last_12_months_All_",
-                                    f"{base_pattern}_last_5_years_All_"
-                                ]
-                                for key in chart_keys:
-                                    cache.delete(key)
+                                
+                                if 'frontend_charts' in cache_key:
+                                    # Frontend charts pattern
+                                    chart_keys = [
+                                        f"{base_pattern}_this_month_All_",
+                                        f"{base_pattern}_last_6_months_All_",
+                                        f"{base_pattern}_last_12_months_All_",
+                                        f"{base_pattern}_last_5_years_All_"
+                                    ]
+                                    for key in chart_keys:
+                                        cache.delete(key)
+                                        cache_keys_cleared_count += 1
+                                elif 'attendance_all_records' in cache_key:
+                                    # Attendance tracker pattern - clear common filter variations
+                                    common_time_periods = ['last_6_months', 'last_12_months', 'last_5_years', 'this_month', 'custom', 'custom_month', 'custom_range', 'one_day']
+                                    for period in common_time_periods:
+                                        variations = [
+                                            f"{base_pattern}_{period}_None_None_None_None_rt_1",
+                                            f"{base_pattern}_{period}_None_None_None_None_rt_0",
+                                        ]
+                                        
+                                        # For custom_month, also clear with actual month/year values
+                                        if period == 'custom_month':
+                                            # Use captured thread variables
+                                            month_num = attendance_month
+                                            year_num = attendance_year
+                                            variations.extend([
+                                                f"{base_pattern}_custom_month_{month_num}_{year_num}_None_None_rt_1",
+                                                f"{base_pattern}_custom_month_{month_num}_{year_num}_None_None_rt_0",
+                                                # Also clear 'custom' alias (frontend compatibility)
+                                                f"{base_pattern}_custom_{month_num}_{year_num}_None_None_rt_1",
+                                                f"{base_pattern}_custom_{month_num}_{year_num}_None_None_rt_0",
+                                            ])
+                                        
+                                        # For one_day and custom_range, also clear with date
+                                        if period in ['one_day', 'custom_range']:
+                                            variations.append(f"{base_pattern}_{period}_None_None_{attendance_date_str}_{attendance_date_str}_rt_1")
+                                            variations.append(f"{base_pattern}_{period}_None_None_{attendance_date_str}_{attendance_date_str}_rt_0")
+                                        
+                                        for var_key in variations:
+                                            if cache.delete(var_key):
+                                                cache_keys_cleared_count += 1
+                                else:
+                                    # Generic pattern - just delete the base key
+                                    cache.delete(base_pattern)
                                     cache_keys_cleared_count += 1
                         else:
                             cache.delete(cache_key)
@@ -736,30 +845,32 @@ def bulk_update_attendance(request):
                     cache_time = time.time() - cache_start_time
                     logger.info(f"🧵 BACKGROUND THREAD: Cleared {cache_keys_cleared_count} cache keys in {cache_time:.3f}s")
                     
+                    # Close database connections after thread completes
+                    connections.close_all()
+                    
                 except Exception as e:
-                    logger.error(f"❌ BACKGROUND THREAD ERROR: {str(e)}")
+                    logger.error(f"❌ BACKGROUND THREAD ERROR: {str(e)}", exc_info=True)
+                    # Ensure connections are closed even on error
+                    try:
+                        connections.close_all()
+                    except Exception:
+                        pass
             
-            # Start background thread with daemon=True
-            background_thread = threading.Thread(target=background_aggregation, daemon=True)
+            # Start background thread with daemon=True (non-blocking, dies when main thread exits)
+            background_thread = threading.Thread(
+                target=background_aggregation, 
+                daemon=True,
+                name=f"attendance_agg_{tenant_id}_{attendance_year}_{attendance_month}"
+            )
             background_thread.start()
             
-            logger.info(f"🧵 BACKGROUND THREAD: Started with ID {background_thread.ident}")
+            logger.info(f"🧵 BACKGROUND THREAD: Started with ID {background_thread.ident} (name: {background_thread.name})")
             
-            # Update response data
-            response_data['automatic_aggregation'] = {
-                'status': 'started_in_background',
-                'method': 'thread_based',
-                'thread_id': background_thread.ident,
-                'message': 'Monthly aggregation started in background thread'
-            }
+            # Background aggregation started (no need to expose debug info in response)
             
         except Exception as thread_error:
-            logger.error(f"❌ BACKGROUND THREAD FAILED TO START: {thread_error}")
-            response_data['automatic_aggregation'] = {
-                'status': 'failed_to_start',
-                'method': 'thread_based',
-                'error': str(thread_error)
-            }
+            logger.error(f"❌ BACKGROUND THREAD FAILED TO START: {thread_error}", exc_info=True)
+            # Don't expose thread errors in response - just log them
         
         return Response(response_data, status=200)
         
@@ -883,57 +994,89 @@ def update_monthly_summaries_parallel(request):
         logger.info(f"🗑️ ASYNC SUMMARY: Cleared {len(cache_keys_to_clear) + 4} cache keys in {cache_time:.3f}s")
         logger.info(f"🗑️ ASYNC SUMMARY: Cache keys cleared: {cache_keys_to_clear[:5]}{'...' if len(cache_keys_to_clear) > 5 else ''}")
         
-        # Define background processing function using our optimized aggregation
+        # Define non-blocking background processing function using our optimized aggregation
         def process_summaries_background():
-            """Use our optimized run_bulk_aggregation function for monthly summaries"""
+            """
+            Non-blocking background thread function for monthly summaries aggregation.
+            Properly handles Django database connections in threads.
+            """
             try:
+                from django.db import connections
+                from datetime import date
                 from ..utils.utils import run_bulk_aggregation
-                logger.info(f"🧵 BACKGROUND THREAD: Starting monthly aggregation for {attendance_date.year}-{attendance_date.month:02d}")
-                result = run_bulk_aggregation(tenant, attendance_date)
-                logger.info(f"🧵 BACKGROUND THREAD: Monthly aggregation completed with status: {result['status']}")
+                from ..models import Tenant
+                
+                # Close any existing database connections before starting (thread-safe)
+                connections.close_all()
+                
+                # Re-fetch tenant in the thread (ensures fresh DB connection)
+                tenant_id = tenant.id
+                thread_tenant = Tenant.objects.get(id=tenant_id)
+                thread_attendance_date = date(attendance_date.year, attendance_date.month, 1)
+                
+                logger.info(f"🧵 BACKGROUND THREAD: Starting monthly aggregation for {thread_tenant.subdomain} - {thread_attendance_date.year}-{thread_attendance_date.month:02d}")
+                print(f"🧵 BACKGROUND THREAD: Starting monthly aggregation for {thread_tenant.subdomain} - {thread_attendance_date.year}-{thread_attendance_date.month:02d}")
+                
+                import time
+                aggregation_start = time.time()
+                result = run_bulk_aggregation(thread_tenant, thread_attendance_date)
+                aggregation_elapsed = time.time() - aggregation_start
+                
+                # Log detailed completion info
+                status = result.get('status', 'unknown')
+                stats = result.get('statistics', {})
+                perf = result.get('performance', {})
+                
+                logger.info(f"✅ BACKGROUND THREAD: Monthly aggregation completed with status: {status}")
+                logger.info(f"📊 BACKGROUND THREAD: Employees processed: {stats.get('employees_processed', 0)}, "
+                          f"Records: {stats.get('daily_records_processed', 0)}, "
+                          f"Created: {stats.get('attendance_records_created', 0)}, "
+                          f"Updated: {stats.get('attendance_records_updated', 0)}")
+                logger.info(f"⏱️ BACKGROUND THREAD: Total time: {aggregation_elapsed:.3f}s, "
+                          f"DB time: {perf.get('database_time', 'N/A')}, "
+                          f"Cache time: {perf.get('cache_clear_time', 'N/A')}")
+                
+                # Also print to console for visibility
+                print(f"✅ BACKGROUND THREAD COMPLETED: {status} - {aggregation_elapsed:.3f}s - "
+                      f"{stats.get('employees_processed', 0)} employees, "
+                      f"{stats.get('attendance_records_created', 0)} created, "
+                      f"{stats.get('attendance_records_updated', 0)} updated")
+                
+                # Close database connections after thread completes
+                connections.close_all()
             except Exception as e:
-                logger.error(f"❌ BACKGROUND THREAD ERROR: {str(e)}")
+                logger.error(f"❌ BACKGROUND THREAD ERROR: {str(e)}", exc_info=True)
+                # Ensure connections are closed even on error
+                try:
+                    from django.db import connections
+                    connections.close_all()
+                except Exception:
+                    pass
         
         
-        # Start background processing thread
+        # Start non-blocking background processing thread
         if employee_ids:
-            logger.info(f"🧵 ASYNC SUMMARY: About to start background thread for {len(employee_ids)} employees")
-            print(f"🧵 CONSOLE: About to start background thread for {len(employee_ids)} employees")  # Console fallback
+            logger.info(f"🧵 ASYNC SUMMARY: About to start background thread for {len(employee_ids)} employees (non-blocking)")
             
-            background_thread = threading.Thread(target=process_summaries_background, daemon=True)
+            tenant_id = tenant.id if tenant else 'unknown'
+            background_thread = threading.Thread(
+                target=process_summaries_background, 
+                daemon=True,
+                name=f"monthly_summary_{tenant_id}_{attendance_date.year}_{attendance_date.month}"
+            )
             background_thread.start()
             
-            logger.info(f"🧵 ASYNC SUMMARY: Background thread started successfully - Thread ID: {background_thread.ident}")
-            logger.info(f"🧵 ASYNC SUMMARY: Thread is alive: {background_thread.is_alive()}")
-            print(f"🧵 CONSOLE: Background thread started - ID: {background_thread.ident}, Alive: {background_thread.is_alive()}")
+            logger.info(f"🧵 ASYNC SUMMARY: Background thread started successfully - Thread ID: {background_thread.ident}, Name: {background_thread.name}")
         else:
             logger.warning(f"⚠️ ASYNC SUMMARY: No employee IDs provided - skipping background processing")
-            print(f"⚠️ CONSOLE: No employee IDs provided - skipping background processing")
         
         # Return immediately with success response
         total_time = time.time() - start_time
         
         response_data = {
-            'message': f'✅ Monthly summary update started! Processing {len(employee_ids)} employees in background.',
-            'status': 'success',
-            'summary_update': {
-                'employees_to_process': len(employee_ids),
-                'date': date_str,
-                'month': f"{attendance_date.year}-{attendance_date.month:02d}",
-                'update_method': 'async_background',
-                'processing_status': 'started'
-            },
-            'performance': {
-                'response_time': f"{total_time:.3f}s",
-                'cache_clear_time': f"{cache_time:.3f}s",
-                'cache_keys_cleared': len(cache_keys_to_clear) + 2,
-                'processing_mode': 'ultra_fast_background_thread'
-            },
-            'cache_cleared': True,
-            'background_processing': True
+            'message': 'Monthly summary update started',
+            'status': 'success'
         }
-        
-        logger.info(f"ASYNC SUMMARY: Returned response in {total_time:.3f}s, background processing started")
         
         return Response(response_data, status=200)
         
@@ -1499,23 +1642,29 @@ class UploadAttendanceDataAPIView(APIView):
                 # Calculate upload time
                 upload_time = round((time.time() - start_time) * 1000, 2)  # milliseconds
                 
-                return Response({
-                    'message': 'Attendance data uploaded successfully!',
+                response_data = {
+                    'message': 'Attendance data uploaded successfully',
                     'records_created': records_created,
                     'records_updated': records_updated,
-                    'total_errors': len(errors),
-                    'total_warnings': len(warnings),
-                    'upload_time_ms': upload_time,
-                    'errors': errors[:10],  # Show first 10 errors
-                    'warnings': warnings[:10],  # Show first 10 warnings
                     'month': month,
-                    'year': year,
-                    'file_name': file_obj.name
-                }, status=status.HTTP_201_CREATED)
+                    'year': year
+                }
+                
+                if errors:
+                    response_data['total_errors'] = len(errors)
+                    response_data['errors'] = errors[:10]  # Show first 10 errors
+                    
+                if warnings:
+                    response_data['total_warnings'] = len(warnings)
+                    response_data['warnings'] = warnings[:10]  # Show first 10 warnings
+                
+                return Response(response_data, status=status.HTTP_201_CREATED)
                 
             except Exception as e:
+                # SECURITY: Don't expose internal error details to client
+                logger.error(f"Error in attendance upload: {str(e)}", exc_info=True)
                 return Response({
-                    'error': f'Failed to process file: {str(e)}'
+                    'error': 'Failed to process file. Please try again.'
                 }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
                 
         except Exception as e:
@@ -1611,7 +1760,9 @@ class UploadMonthlyAttendanceAPIView(APIView):
             cache_keys = [
                 f"directory_data_{tenant.id}",
                 f"directory_data_full_{tenant.id}",  # Clear full directory cache
-                f"attendance_all_records_{tenant.id}"
+                f"attendance_all_records_{tenant.id}",
+                f"months_with_attendance_{tenant.id}",  # Clear months-with-attendance endpoint cache
+                f"payroll_overview_{tenant.id}"  # Clear payroll overview cache
             ]
             for key in cache_keys:
                 cache.delete(key)
