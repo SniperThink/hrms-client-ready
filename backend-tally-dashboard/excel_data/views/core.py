@@ -4434,6 +4434,10 @@ class DailyAttendanceViewSet(viewsets.ModelViewSet):
                 # Always update these fields for consistency
                 response_data['total_count'] = total_cached
                 
+                # Initialize performance key if it doesn't exist (for backward compatibility with older cached data)
+                if 'performance' not in response_data:
+                    response_data['performance'] = {}
+                
                 response_data['performance']['cached'] = True
                 response_data['performance']['query_time'] = f"{(time.time() - start_time):.3f}s"
                 return Response(response_data)
@@ -5339,6 +5343,14 @@ class DailyAttendanceViewSet(viewsets.ModelViewSet):
             full_response['offset'] = 0
             full_response['limit'] = 0
             full_response['has_more'] = False
+            
+            # Add performance metadata to cached data for consistency
+            full_response['performance'] = {
+                'cached': False,  # Will be set to True when retrieved from cache
+                'query_time': f"{(time.time() - start_time):.3f}s",
+                'total_time_ms': round((time.time() - start_time) * 1000, 2),
+                'timing_breakdown': timing_breakdown
+            }
             
             # Cache for 10 minutes (600 seconds)
             cache.set(cache_key, full_response, 600)
