@@ -40,6 +40,11 @@ python-dateutil==2.9.0.post0
 tzdata==2025.2
 
 # ============================================
+# EMAIL SERVICE (ZeptoMail API)
+# ============================================
+requests==2.32.3
+
+# ============================================
 # CELERY & TASK QUEUE (Optional - for scaling)
 # Can be disabled with CELERY_ENABLED=False
 # ============================================
