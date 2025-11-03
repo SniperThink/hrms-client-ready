@@ -415,23 +415,16 @@ class UploadSalaryDataAPIView(APIView):
                             # Update existing record
 
                             salary_data["id"] = existing_salary_dict[employee_id]
-
                             salary_records_to_update.append(SalaryData(**salary_data))
-
                             records_updated += 1
 
                         else:
 
                             # Create new record
-
                             salary_records_to_create.append(SalaryData(**salary_data))
-
                             records_created += 1
 
-                        # No employee profile creation - employee must exist (like attendance upload)
-
                     except Exception as e:
-
                         errors.append(f"Row {index + 2}: {str(e)}")
 
                 # Perform bulk operations
@@ -582,6 +575,21 @@ class UploadSalaryDataAPIView(APIView):
                             
                             with transaction.atomic():
                                 for sd in salary_data:
+                                    # Calculate TDS rate from amount if possible
+                                    # If tds_amount exists and salary exists, calculate rate = (tds_amount / (gross + incentive)) * 100
+                                    tds_amount = Decimal(str(sd.tds or 0))
+                                    gross_sal = Decimal(str(sd.sal_ot or 0))
+                                    incentive_val = Decimal(str(sd.incentive or 0))
+                                    
+                                    # Calculate TDS rate percentage
+                                    if gross_sal + incentive_val > 0 and tds_amount > 0:
+                                        tds_rate = (tds_amount / (gross_sal + incentive_val)) * 100
+                                        # Cap at 100% to avoid overflow (5,2 precision max is 999.99)
+                                        tds_rate = min(tds_rate, Decimal('99.99'))
+                                    else:
+                                        # Use period default or 5%
+                                        tds_rate = period.tds_rate if hasattr(period, 'tds_rate') else Decimal('5.00')
+                                    
                                     # Create CalculatedSalary record with Excel values
                                     calculated_salary = CalculatedSalary(
                                         tenant_id=tenant_id,
@@ -593,7 +601,7 @@ class UploadSalaryDataAPIView(APIView):
                                         basic_salary_per_hour=sd.hour_rs or Decimal('0'),
                                         basic_salary_per_minute=sd.charge or Decimal('0'),
                                         employee_ot_rate=sd.hour_rs or Decimal('0'),
-                                        employee_tds_rate=sd.tds or Decimal('0'),
+                                        employee_tds_rate=tds_rate,  # FIXED: Use calculated rate, not amount
                                         total_working_days=int((sd.days or 0) + (sd.absent or 0)),
                                         present_days=Decimal(str(sd.days or 0)),
                                         absent_days=Decimal(str(sd.absent or 0)),
@@ -604,7 +612,7 @@ class UploadSalaryDataAPIView(APIView):
                                         late_deduction=sd.amt or Decimal('0'),
                                         incentive=sd.incentive or Decimal('0'),
                                         gross_salary=sd.sal_ot or Decimal('0'),
-                                        tds_amount=sd.tds or Decimal('0'),
+                                        tds_amount=tds_amount,  # FIXED: Store amount here
                                         salary_after_tds=sd.sal_tds or Decimal('0'),
                                         total_advance_balance=sd.total_old_adv or Decimal('0'),
                                         advance_deduction_amount=sd.advance or Decimal('0'),

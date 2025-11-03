@@ -1102,57 +1102,99 @@ def payroll_period_detail(request, period_id):
         # Get data based on period data source
         employees_data = []
         
+        # FIXED: For UPLOADED periods, prefer CalculatedSalary records if they exist
+        # (they have is_paid status), otherwise fall back to SalaryData
         if period.data_source == DataSource.UPLOADED:
-            # Get uploaded salary data
-            from ..models import SalaryData
-            uploaded_salaries = SalaryData.objects.filter(
+            # Check if CalculatedSalary records exist for this period
+            calculated_salaries = CalculatedSalary.objects.filter(
                 tenant=tenant,
-                year=period.year,
-                month=period.month
-            ).order_by('name')
+                payroll_period=period
+            )
             
-            for salary in uploaded_salaries:
-                # Calculate present_days correctly: working_days - absent_days
-                working_days = int(salary.days)
-                absent_days = float(salary.absent)
-                present_days = max(0, working_days - absent_days)  # Ensure non-negative
+            if calculated_salaries.exists():
+                # Use CalculatedSalary records (they have is_paid status)
+                for calc in calculated_salaries.order_by('employee_name'):
+                    employees_data.append({
+                        'id': calc.id,
+                        'employee_id': calc.employee_id,
+                        'employee_name': calc.employee_name,
+                        'department': calc.department or '',
+                        'basic_salary': float(calc.basic_salary),
+                        'working_days': int(calc.total_working_days),
+                        'absent_days': float(calc.absent_days),
+                        'present_days': float(calc.present_days),
+                        'ot_hours': float(calc.ot_hours),
+                        'hour_rate': float(calc.basic_salary_per_hour),
+                        'ot_charges': float(calc.ot_charges),
+                        'late_minutes': calc.late_minutes,
+                        'late_deduction': float(calc.late_deduction),
+                        'amt': float(calc.late_deduction),  # Map to amt for compatibility
+                        'gross_salary': float(calc.gross_salary),
+                        'adv_25th': 0.0,  # Not available in CalculatedSalary
+                        'old_adv': 0.0,  # Not available in CalculatedSalary
+                        'incentive': float(calc.incentive),
+                        'tds_amount': float(calc.tds_amount),
+                        'salary_after_tds': float(calc.salary_after_tds),
+                        'total_advance_balance': float(calc.total_advance_balance),
+                        'advance_deduction_amount': float(calc.advance_deduction_amount),
+                        'remaining_advance_balance': float(calc.remaining_advance_balance),
+                        'net_payable': float(calc.net_payable),
+                        'tds_percentage': float(calc.employee_tds_rate),
+                        'advance_deduction_editable': calc.advance_deduction_editable,
+                        'is_paid': calc.is_paid,  # FIXED: Use actual is_paid from CalculatedSalary
+                        'payment_date': calc.payment_date.isoformat() if calc.payment_date else None
+                    })
+            else:
+                # Fallback: Use SalaryData if CalculatedSalary doesn't exist yet
+                from ..models import SalaryData
+                uploaded_salaries = SalaryData.objects.filter(
+                    tenant=tenant,
+                    year=period.year,
+                    month=period.month
+                ).order_by('name')
                 
-                # Log any potential data issues for debugging
-                if len(employees_data) < 3:  # Log first 3 employees for debugging
-                    logger.info(f"Uploaded Payroll - {salary.name}: working_days={working_days}, absent_days={absent_days}, calculated_present_days={present_days}")
-                
-                employees_data.append({
-                    'id': salary.id,
-                    'employee_id': salary.employee_id,
-                    'employee_name': salary.name,
-                    'department': salary.department or '',
-                    # Excel Template Fields - Calculate present_days correctly
-                    'basic_salary': float(salary.salary),  # SALARY
-                    'working_days': working_days,  # DAYS
-                    'absent_days': absent_days,  # ABSENT
-                    'present_days': present_days,  # Calculate: working_days - absent_days
-                    'ot_hours': float(salary.ot),  # OT
-                    'hour_rate': float(salary.hour_rs),  # HOUR RS
-                    'ot_charges': float(salary.charges),  # CHARGES
-                    'late_minutes': int(salary.late),  # LATE
-                    'late_deduction': float(salary.charge),  # CHARGE
-                    'amt': float(salary.amt),  # AMT
-                    'gross_salary': float(salary.sal_ot),  # SAL+OT
-                    'adv_25th': float(salary.adv_25th),  # 25TH ADV
-                    'old_adv': float(salary.old_adv),  # OLD ADV
-                    'incentive': float(salary.incentive),  # INCENTIVE
-                    'tds_amount': float(salary.tds),  # TDS
-                    'salary_after_tds': float(salary.sal_tds),  # SAL-TDS
-                    'total_advance_balance': float(salary.total_old_adv),  # Total old ADV
-                    'advance_deduction_amount': float(salary.advance),  # ADVANCE
-                    'remaining_advance_balance': float(salary.balnce_adv),  # Balnce Adv
-                    'net_payable': float(salary.nett_payable),  # NETT PAYABLE - Final amount
-                    # System fields
-                    'tds_percentage': 0,  # Not calculated for Excel uploads
-                    'advance_deduction_editable': False,  # Uploaded data is read-only
-                    'is_paid': False,  # SalaryData doesn't track payment status
-                    'payment_date': None
-                })
+                for salary in uploaded_salaries:
+                    # Calculate present_days correctly: working_days - absent_days
+                    working_days = int(salary.days)
+                    absent_days = float(salary.absent)
+                    present_days = max(0, working_days - absent_days)  # Ensure non-negative
+                    
+                    # Log any potential data issues for debugging
+                    if len(employees_data) < 3:  # Log first 3 employees for debugging
+                        logger.info(f"Uploaded Payroll - {salary.name}: working_days={working_days}, absent_days={absent_days}, calculated_present_days={present_days}")
+                    
+                    employees_data.append({
+                        'id': salary.id,
+                        'employee_id': salary.employee_id,
+                        'employee_name': salary.name,
+                        'department': salary.department or '',
+                        # Excel Template Fields - Calculate present_days correctly
+                        'basic_salary': float(salary.salary),  # SALARY
+                        'working_days': working_days,  # DAYS
+                        'absent_days': absent_days,  # ABSENT
+                        'present_days': present_days,  # Calculate: working_days - absent_days
+                        'ot_hours': float(salary.ot),  # OT
+                        'hour_rate': float(salary.hour_rs),  # HOUR RS
+                        'ot_charges': float(salary.charges),  # CHARGES
+                        'late_minutes': int(salary.late),  # LATE
+                        'late_deduction': float(salary.charge),  # CHARGE
+                        'amt': float(salary.amt),  # AMT
+                        'gross_salary': float(salary.sal_ot),  # SAL+OT
+                        'adv_25th': float(salary.adv_25th),  # 25TH ADV
+                        'old_adv': float(salary.old_adv),  # OLD ADV
+                        'incentive': float(salary.incentive),  # INCENTIVE
+                        'tds_amount': float(salary.tds),  # TDS
+                        'salary_after_tds': float(salary.sal_tds),  # SAL-TDS
+                        'total_advance_balance': float(salary.total_old_adv),  # Total old ADV
+                        'advance_deduction_amount': float(salary.advance),  # ADVANCE
+                        'remaining_advance_balance': float(salary.balnce_adv),  # Balnce Adv
+                        'net_payable': float(salary.nett_payable),  # NETT PAYABLE - Final amount
+                        # System fields
+                        'tds_percentage': 0,  # Not calculated for Excel uploads
+                        'advance_deduction_editable': False,  # Uploaded data is read-only
+                        'is_paid': False,  # SalaryData doesn't track payment status
+                        'payment_date': None
+                    })
         else:
             # Get calculated salaries for frontend-tracked data
             calculated_salaries = CalculatedSalary.objects.filter(
@@ -1193,25 +1235,52 @@ def payroll_period_detail(request, period_id):
         
         # Calculate summary using database aggregation for better performance
         if period.data_source == DataSource.UPLOADED:
-            # For uploaded data, aggregate from SalaryData
-            from django.db.models import Sum, Count
-            summary_agg = SalaryData.objects.filter(
+            # For uploaded data, check if CalculatedSalary exists first
+            calculated_salaries = CalculatedSalary.objects.filter(
                 tenant=tenant,
-                year=period.year,
-                month=period.month
-            ).aggregate(
-                total_gross=Sum('sal_ot'),
-                total_net=Sum('nett_payable'),
-                total_advances=Sum('advance'),
-                total_tds=Sum('tds'),
-                total_employees=Count('id')
+                payroll_period=period
             )
             
-            total_gross = float(summary_agg['total_gross'] or 0)
-            total_net = float(summary_agg['total_net'] or 0)
-            total_advances = float(summary_agg['total_advances'] or 0)
-            total_tds = float(summary_agg['total_tds'] or 0)
-            total_employees = summary_agg['total_employees'] or 0
+            if calculated_salaries.exists():
+                # Use CalculatedSalary aggregation (has is_paid status)
+                from django.db.models import Sum, Count, Q
+                summary_agg = calculated_salaries.aggregate(
+                    total_gross=Sum('gross_salary'),
+                    total_net=Sum('net_payable'),
+                    total_advances=Sum('advance_deduction_amount'),
+                    total_tds=Sum('tds_amount'),
+                    total_employees=Count('id'),
+                    paid_employees=Count('id', filter=Q(is_paid=True))
+                )
+                
+                total_gross = float(summary_agg['total_gross'] or 0)
+                total_net = float(summary_agg['total_net'] or 0)
+                total_advances = float(summary_agg['total_advances'] or 0)
+                total_tds = float(summary_agg['total_tds'] or 0)
+                total_employees = summary_agg['total_employees'] or 0
+                paid_employees = summary_agg['paid_employees'] or 0
+            else:
+                # Fallback: Aggregate from SalaryData
+                from django.db.models import Sum, Count
+                from ..models import SalaryData
+                summary_agg = SalaryData.objects.filter(
+                    tenant=tenant,
+                    year=period.year,
+                    month=period.month
+                ).aggregate(
+                    total_gross=Sum('sal_ot'),
+                    total_net=Sum('nett_payable'),
+                    total_advances=Sum('advance'),
+                    total_tds=Sum('tds'),
+                    total_employees=Count('id')
+                )
+                
+                total_gross = float(summary_agg['total_gross'] or 0)
+                total_net = float(summary_agg['total_net'] or 0)
+                total_advances = float(summary_agg['total_advances'] or 0)
+                total_tds = float(summary_agg['total_tds'] or 0)
+                total_employees = summary_agg['total_employees'] or 0
+                paid_employees = 0  # SalaryData doesn't track payment status
         else:
             # For calculated data, aggregate from CalculatedSalary
             from django.db.models import Sum, Count
