@@ -2784,16 +2784,13 @@ def save_payroll_period_direct(request):
             'success': True,
             'message': f'Payroll period saved successfully for {month_name} {year}',
             'payroll_period_id': payroll_period.id,
-            'saved_entries': (created_count + updated_count),
-            'created_new_period': created,
-            'cache_cleared': True
+            'saved_entries': (created_count + updated_count)
         })
         
     except Exception as e:
-        # Clean null bytes from error message and traceback to prevent compile errors
-        error_msg = str(e).replace('\x00', '[NUL]')
-        logger.error(f"Error in save_payroll_period_direct: {error_msg}")
-        return Response({"error": f"Failed to save payroll period: {error_msg}"}, status=500)
+        # SECURITY: Don't expose internal error details to client
+        logger.error(f"Error in save_payroll_period_direct: {str(e)}", exc_info=True)
+        return Response({"error": "Failed to save payroll period. Please try again."}, status=500)
 
 @api_view(['POST'])
 @permission_classes([IsAuthenticated])

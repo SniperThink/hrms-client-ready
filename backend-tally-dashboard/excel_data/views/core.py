@@ -5324,20 +5324,6 @@ class DailyAttendanceViewSet(viewsets.ModelViewSet):
             'has_more': has_more,  # NEW: More records available
             'kpi_totals': total_kpis,  # NEW: Total KPIs for all data
             'month_context': context_info,
-            'performance': {
-                'query_time': f"{(time.time() - start_time):.3f}s",
-                'total_time_ms': total_time_ms,
-                'timing_breakdown': timing_breakdown,
-                'data_source': 'daily_range' if use_daily_data else 'optimized_monthly_summary',
-                'records_processed': len(attendance_records),
-                'cached': False,
-                'optimization': 'Daily aggregation' if use_daily_data else 'MonthlyAttendanceSummary + EmployeeProfile (fast)'
-            },
-            'frontend_compatibility': {
-                'format_version': '2.0',
-                'fields_included': ['year', 'month', 'employee_name', 'total_ot_hours', 'total_late_minutes'],
-                'response_optimized': True
-            }
         }
 
         # --------------------------------------------------
