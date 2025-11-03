@@ -729,6 +729,7 @@ const HRAttendanceTracker: React.FC = () => {
                 maxDate={new Date()}
                 placeholder="Select date"
                 className="w-36"
+                alignRight={true}
               />
             </div>
           )}

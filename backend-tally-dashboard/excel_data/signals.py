@@ -156,6 +156,29 @@ def sync_attendance_from_daily(sender, instance, **kwargs):
         for key in cache_keys_to_clear:
             cache.delete(key)
         
+        # CRITICAL: Clear all attendance_all_records cache variations (pattern-based)
+        # Cache keys follow pattern: attendance_all_records_{tenant_id}_{param_signature}
+        try:
+            cache.delete_pattern(f"attendance_all_records_{tenant_id}_*")
+            logger.debug(f"✅ SIGNAL: Cleared all attendance_all_records cache variations (pattern)")
+        except (AttributeError, NotImplementedError):
+            # Fallback: Clear common variations manually
+            common_time_periods = ['last_6_months', 'last_12_months', 'last_5_years', 'this_month', 'custom', 'custom_month', 'custom_range', 'one_day']
+            for period in common_time_periods:
+                variations = [
+                    f"attendance_all_records_{tenant_id}_{period}_None_None_None_None_rt_1",
+                    f"attendance_all_records_{tenant_id}_{period}_None_None_None_None_rt_0",
+                ]
+                # For one_day and custom_range, also clear with date
+                if period in ['one_day', 'custom_range']:
+                    instance_date_str = instance.date.strftime('%Y-%m-%d')
+                    variations.append(f"attendance_all_records_{tenant_id}_{period}_None_None_{instance_date_str}_{instance_date_str}_rt_1")
+                    variations.append(f"attendance_all_records_{tenant_id}_{period}_None_None_{instance_date_str}_{instance_date_str}_rt_0")
+                
+                for var_key in variations:
+                    cache.delete(var_key)
+            logger.debug(f"✅ SIGNAL: Cleared attendance_all_records cache variations (manual)")
+        
         # Clear frontend charts cache (pattern matching)
         try:
             cache.delete_pattern(f"frontend_charts_{tenant_id}_*")
@@ -170,7 +193,7 @@ def sync_attendance_from_daily(sender, instance, **kwargs):
             for key in chart_keys:
                 cache.delete(key)
         
-        logger.debug(f"🗑️ SIGNAL: Cleared {len(cache_keys_to_clear)} cache keys for tenant {tenant_id}")
+        logger.debug(f"🗑️ SIGNAL: Cleared cache keys for tenant {tenant_id}")
 
     except Exception as exc:
         # Soft-fail – we don't want attendance updates to break
