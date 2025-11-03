@@ -1283,7 +1283,7 @@ def payroll_period_detail(request, period_id):
                 paid_employees = 0  # SalaryData doesn't track payment status
         else:
             # For calculated data, aggregate from CalculatedSalary
-            from django.db.models import Sum, Count
+            from django.db.models import Sum, Count, Q
             summary_agg = CalculatedSalary.objects.filter(
                 tenant=tenant,
                 payroll_period=period
