@@ -23,34 +23,32 @@
 # - DeleteAccountView
 
 
-from rest_framework.views import APIView
-from rest_framework.response import Response
-from rest_framework import status, viewsets, generics
-from rest_framework.decorators import action
-from ..models import EmailVerification
-import uuid
-from rest_framework.permissions import IsAuthenticated, AllowAny
-from rest_framework_simplejwt.tokens import RefreshToken
-from django.conf import settings
-from django.shortcuts import render
 import logging
+import uuid
+
+from django.conf import settings
 from django.contrib.auth.password_validation import validate_password
 from django.core.exceptions import ValidationError
+from django.shortcuts import render
+from rest_framework import generics, status, viewsets
+from rest_framework.decorators import action
+from rest_framework.permissions import AllowAny, IsAuthenticated
+from rest_framework.response import Response
+from rest_framework.views import APIView
+from rest_framework_simplejwt.tokens import RefreshToken
 
-# Initialize logger
-logger = logging.getLogger(__name__)
-
-from ..models import (
-    Tenant,
-    CustomUser,
-    UserPermissions,
-)
-
+from ..models import EmailVerification
+from ..models import CustomUser, Tenant, UserPermissions
 from ..serializers import (
     CustomUserSerializer,
     UserRegistrationSerializer,
     UserSerializer,
 )
+
+# Initialize logger
+logger = logging.getLogger(__name__)
+
+
 
 class SystemUserRegistrationView(generics.CreateAPIView):
 
@@ -624,7 +622,7 @@ class TenantSignupView(APIView):
                 )
 
                 # Send email with credentials (like HR invitations)
-                from django.core.mail import send_mail
+                from ..services.zeptomail_service import send_email_via_zeptomail
                 from django.conf import settings
                 
                 frontend_url = getattr(settings, 'FRONTEND_URL', 'http://35.154.9.249')
@@ -651,13 +649,11 @@ The SniperThink Team
                 """.strip()
 
                 try:
-                    send_mail(
-                        subject,
-                        message,
-                        settings.DEFAULT_FROM_EMAIL,
-                        [admin_email],
-                        fail_silently=False,
-                    )
+                    send_email_via_zeptomail(
+                    to_email=admin_email,
+                    subject=subject,
+                    text_body=message
+                )
                     email_sent = True
                 except Exception as email_error:
                     logger.error(f"Failed to send credentials email to {admin_email}: {email_error}")
@@ -699,7 +695,7 @@ The SniperThink Team
     def send_verification_email(self, user, verification):
         """Send verification email to user"""
         try:
-            from django.core.mail import send_mail
+            from ..services.zeptomail_service import send_email_via_zeptomail
             from django.template.loader import render_to_string
             from django.utils.html import strip_tags
             from django.conf import settings
@@ -732,12 +728,10 @@ The {user.tenant.name if user.tenant else 'HRMS'} Team
             """
 
             # Send email using the same method as existing email service
-            send_mail(
+            send_email_via_zeptomail(
+                to_email=user.email,
                 subject=subject,
-                message=message,
-                from_email=settings.DEFAULT_FROM_EMAIL,
-                recipient_list=[user.email],
-                fail_silently=False,
+                text_body=message
             )
 
             logger.info(f"Verification email sent to {user.email}")
@@ -853,7 +847,7 @@ class ResendVerificationView(APIView):
     def send_verification_email(self, user, verification):
         """Send verification email to user using the working email service"""
         try:
-            from django.core.mail import send_mail
+            from ..services.zeptomail_service import send_email_via_zeptomail
             from django.conf import settings
 
             # Create verification URL (pointing to backend API)
@@ -884,12 +878,10 @@ The {user.tenant.name if user.tenant else 'HRMS'} Team
             """
 
             # Send email using the same method as existing email service
-            send_mail(
+            send_email_via_zeptomail(
+                to_email=user.email,
                 subject=subject,
-                message=message,
-                from_email=settings.DEFAULT_FROM_EMAIL,
-                recipient_list=[user.email],
-                fail_silently=False,
+                text_body=message
             )
 
             logger.info(f"Verification email sent to {user.email}")
@@ -1201,7 +1193,7 @@ class UserInvitationViewSet(viewsets.ModelViewSet):
             # Send invitation email with temporary password
             # SECURITY: Never return password in API response - only send via email
             try:
-                from django.core.mail import send_mail
+                from ..services.zeptomail_service import send_email_via_zeptomail
                 from django.conf import settings
                 frontend_url = getattr(settings, 'FRONTEND_URL', 'http://localhost:5173')
                 
@@ -1226,12 +1218,10 @@ Best regards,
 {request.user.tenant.name}
                 """.strip()
                 
-                send_mail(
-                    subject,
-                    message,
-                    settings.DEFAULT_FROM_EMAIL,
-                    [data['email']],
-                    fail_silently=False,
+                send_email_via_zeptomail(
+                    to_email=data['email'],
+                    subject=subject,
+                    text_body=message
                 )
                 email_sent = True
             except Exception as email_error:
@@ -1308,7 +1298,7 @@ class EnhancedInvitationView(APIView):
 
             import string
 
-            from django.core.mail import send_mail
+            from ..services.zeptomail_service import send_email_via_zeptomail
 
             from django.conf import settings
 
@@ -1445,12 +1435,10 @@ Best regards,
 
                 try:
 
-                    send_mail(
-                        subject,
-                        message,
-                        settings.DEFAULT_FROM_EMAIL,
-                        [email],
-                        fail_silently=False,
+                    send_email_via_zeptomail(
+                        to_email=email,
+                        subject=subject,
+                        text_body=message
                     )
 
                     email_sent = True
