@@ -8,7 +8,7 @@ providing a unified calculation engine with admin controls for advance deduction
 from datetime import date, timedelta
 from decimal import Decimal
 from django.db import transaction
-from django.db.models import Sum
+from django.db.models import Sum, Q
 from ..models import (
     EmployeeProfile, Attendance, SalaryData, AdvanceLedger, PayrollPeriod, CalculatedSalary, SalaryAdjustment, DataSource,
     MonthlyAttendanceSummary, DailyAttendance,
@@ -25,13 +25,16 @@ class SalaryCalculationService:
     @staticmethod
     def get_or_create_payroll_period(tenant, year: int, month: str, data_source: str = DataSource.FRONTEND):
         """Get or create a payroll period"""
+        # FIXED: Normalize month to short format (JAN, FEB, etc.) to match SalaryData format
+        month_normalized = SalaryCalculationService._normalize_month_to_short(month)
+        
         # Calculate working days based on the month and typical off days
         working_days = SalaryCalculationService._calculate_working_days_for_month(year, month)
         
         period, created = PayrollPeriod.objects.get_or_create(
             tenant=tenant,
             year=year,
-            month=month,
+            month=month_normalized,  # Use normalized short format
             defaults={
                 'data_source': data_source,
                 'working_days_in_month': working_days,  # Dynamic calculation
@@ -160,11 +163,57 @@ class SalaryCalculationService:
                     'period_id': payroll_period.id
                 }
             
-            # Get all active employees
-            active_employees = EmployeeProfile.objects.filter(
+            month_num = SalaryCalculationService._get_month_number(month)
+            
+            # FIXED: Only get employees who have attendance data for this period
+            # Normalize month to short format for comparison with SalaryData
+            month_normalized = SalaryCalculationService._normalize_month_to_short(month)
+            
+            # Check for uploaded salary data first (from Excel uploads)
+            from django.db.models import Q
+            employees_with_salary_data = EmployeeProfile.objects.filter(
+                tenant=tenant,
+                is_active=True,
+                employee_id__in=SalaryData.objects.filter(
+                    tenant=tenant,
+                    year=year
+                ).filter(
+                    Q(month__iexact=month_normalized) | Q(month__iexact=month)
+                ).values_list('employee_id', flat=True)
+            )
+            
+            # Check for attendance data (from Attendance model or DailyAttendance)
+            from ..models import Attendance, DailyAttendance
+            employees_with_attendance = EmployeeProfile.objects.filter(
                 tenant=tenant,
                 is_active=True
+            ).filter(
+                Q(employee_id__in=Attendance.objects.filter(
+                    tenant=tenant,
+                    date__year=year,
+                    date__month=month_num
+                ).values_list('employee_id', flat=True).distinct())
+                |
+                Q(employee_id__in=DailyAttendance.objects.filter(
+                    tenant=tenant,
+                    date__year=year,
+                    date__month=month_num
+                ).values_list('employee_id', flat=True).distinct())
             )
+            
+            # Combine both (employees with either salary data or attendance data)
+            active_employees = (employees_with_salary_data | employees_with_attendance).distinct()
+            
+            if not active_employees.exists():
+                logger.info(f"No employees with attendance data for {month} {year}")
+                return {
+                    'calculated': 0,
+                    'updated': 0,
+                    'errors': [],
+                    'period_id': payroll_period.id,
+                    'data_source': data_source,
+                    'message': f'No employees with attendance data for {month} {year}'
+                }
             
             results = {
                 'calculated': 0,
@@ -176,6 +225,27 @@ class SalaryCalculationService:
             
             for employee in active_employees:
                 try:
+                    # Additional check: Skip if employee has no attendance data at all
+                    attendance_data = SalaryCalculationService._get_attendance_data(
+                        employee, year, month, force_recalculate
+                    )
+                    
+                    # Skip employees with no attendance (present_days = 0 and absent_days = 0)
+                    # and no uploaded salary data
+                    month_normalized = SalaryCalculationService._normalize_month_to_short(month)
+                    from django.db.models import Q
+                    has_uploaded_salary = SalaryData.objects.filter(
+                        tenant=tenant,
+                        employee_id=employee.employee_id,
+                        year=year
+                    ).filter(
+                        Q(month__iexact=month_normalized) | Q(month__iexact=month)
+                    ).exists()
+                    
+                    if not has_uploaded_salary and attendance_data['present_days'] == 0 and attendance_data['absent_days'] == 0:
+                        logger.debug(f"Skipping employee {employee.employee_id} - no attendance data")
+                        continue
+                    
                     calculated_salary = SalaryCalculationService._calculate_employee_salary(
                         payroll_period, employee, force_recalculate
                     )
@@ -195,11 +265,16 @@ class SalaryCalculationService:
     def _determine_data_source(tenant, year: int, month: str) -> str:
         """Determine if period should use uploaded data or frontend calculations"""
         
+        # FIXED: Normalize month to short format for comparison with SalaryData
+        month_normalized = SalaryCalculationService._normalize_month_to_short(month)
+        
         # Check if we have uploaded salary data for this period
+        from django.db.models import Q
         has_uploaded_salary = SalaryData.objects.filter(
             tenant=tenant,
-            year=year,
-            month=month
+            year=year
+        ).filter(
+            Q(month__iexact=month_normalized) | Q(month__iexact=month)
         ).exists()
         
         # Check if we have frontend attendance data
@@ -643,12 +718,28 @@ class SalaryCalculationService:
         return calculated_salary
     
     @staticmethod
+    def _normalize_month_to_short(month_name: str) -> str:
+        """Normalize month name to short format (JAN, FEB, etc.) for consistency with SalaryData"""
+        MONTH_MAPPING = {
+            'JANUARY': 'JAN', 'FEBRUARY': 'FEB', 'MARCH': 'MAR', 'APRIL': 'APR',
+            'MAY': 'MAY', 'JUNE': 'JUN', 'JULY': 'JUL', 'AUGUST': 'AUG',
+            'SEPTEMBER': 'SEP', 'OCTOBER': 'OCT', 'NOVEMBER': 'NOV', 'DECEMBER': 'DEC',
+            'JAN': 'JAN', 'FEB': 'FEB', 'MAR': 'MAR', 'APR': 'APR',
+            'JUN': 'JUN', 'JUL': 'JUL', 'AUG': 'AUG', 'SEP': 'SEP',
+            'OCT': 'OCT', 'NOV': 'NOV', 'DEC': 'DEC'
+        }
+        return MONTH_MAPPING.get(month_name.upper(), 'JAN')
+    
+    @staticmethod
     def _get_month_number(month_name: str) -> int:
         """Convert month name to number"""
         month_mapping = {
             'JANUARY': 1, 'FEBRUARY': 2, 'MARCH': 3, 'APRIL': 4,
             'MAY': 5, 'JUNE': 6, 'JULY': 7, 'AUGUST': 8,
-            'SEPTEMBER': 9, 'OCTOBER': 10, 'NOVEMBER': 11, 'DECEMBER': 12
+            'SEPTEMBER': 9, 'OCTOBER': 10, 'NOVEMBER': 11, 'DECEMBER': 12,
+            'JAN': 1, 'FEB': 2, 'MAR': 3, 'APR': 4,
+            'JUN': 6, 'JUL': 7, 'AUG': 8, 'SEP': 9,
+            'OCT': 10, 'NOV': 11, 'DEC': 12
         }
         return month_mapping.get(month_name.upper(), 1)
     

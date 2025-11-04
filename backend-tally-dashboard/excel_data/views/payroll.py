@@ -35,7 +35,7 @@ import time
 from django.db.models import Q
 from django.utils import timezone
 from rest_framework.permissions import IsAuthenticated
-from django.db import transaction
+from django.db import transaction, connection, models
 import logging
 
 # Initialize logger
@@ -880,10 +880,13 @@ def payroll_overview(request):
             )
         ).order_by('-year', '-month_num')  # Now properly ordered by calendar date
         
-        # Check if current month period exists
+        # FIXED: Check if current month period exists (normalize to short format for comparison)
+        from ..services.salary_service import SalaryCalculationService
+        current_month_normalized = SalaryCalculationService._normalize_month_to_short(current_month)
         current_period_exists = periods.filter(
-            year=current_year, 
-            month=current_month
+            year=current_year
+        ).filter(
+            Q(month__iexact=current_month_normalized) | Q(month__iexact=current_month)
         ).exists()
         
         # Get aggregated data from both CalculatedSalary and SalaryData models
@@ -980,11 +983,23 @@ def payroll_overview(request):
                 status = 'PENDING'
                 status_color = 'orange'
             
+            # FIXED: Properly format month_display from short format (JAN -> January, OCT -> October)
+            month_display_map = {
+                'JAN': 'January', 'FEB': 'February', 'MAR': 'March', 'APR': 'April',
+                'MAY': 'May', 'JUN': 'June', 'JUL': 'July', 'AUG': 'August',
+                'SEP': 'September', 'OCT': 'October', 'NOV': 'November', 'DEC': 'December',
+                # Handle full names if they exist (backward compatibility)
+                'JANUARY': 'January', 'FEBRUARY': 'February', 'MARCH': 'March', 'APRIL': 'April',
+                'JUNE': 'June', 'JULY': 'July', 'AUGUST': 'August',
+                'SEPTEMBER': 'September', 'OCTOBER': 'October', 'NOVEMBER': 'November', 'DECEMBER': 'December'
+            }
+            month_display = month_display_map.get(period.month.upper(), period.month.title())
+            
             overview_data.append({
                 'id': period.id,
                 'year': period.year,
                 'month': period.month,
-                'month_display': period.month.title(),
+                'month_display': month_display,
                 'data_source': period.data_source,
                 'status': status,
                 'status_color': status_color,
@@ -1044,23 +1059,29 @@ def create_current_month_payroll(request):
         current_month = current_date.strftime('%B').upper()
         current_year = current_date.year
         
-        # Check if period already exists
+        # FIXED: Normalize month to short format (JAN, FEB, etc.) to match SalaryData format
+        from ..services.salary_service import SalaryCalculationService
+        current_month_normalized = SalaryCalculationService._normalize_month_to_short(current_month)
+        
+        # Check if period already exists (check both formats for backward compatibility)
+        from django.db.models import Q
         existing_period = PayrollPeriod.objects.filter(
             tenant=tenant,
-            year=current_year,
-            month=current_month
+            year=current_year
+        ).filter(
+            Q(month=current_month_normalized) | Q(month=current_month)
         ).first()
         
         if existing_period:
             return Response({
-                "error": f"Payroll period for {current_month} {current_year} already exists"
+                "error": f"Payroll period for {current_month_normalized} {current_year} already exists"
             }, status=400)
         
         # Create new period
         new_period = PayrollPeriod.objects.create(
             tenant=tenant,
             year=current_year,
-            month=current_month,
+            month=current_month_normalized,  # Use normalized short format
             data_source=DataSource.FRONTEND,
             working_days_in_month=request.data.get('working_days', 25),
             tds_rate=request.data.get('tds_rate', 5.0)
@@ -1974,27 +1995,52 @@ def calculate_simple_payroll(request):
             total_present=Sum('present_days', output_field=DecimalField(max_digits=5, decimal_places=1)),
             total_absent=Sum('absent_days', output_field=DecimalField(max_digits=5, decimal_places=1)),
             total_ot_hours=Sum('ot_hours', output_field=DecimalField(max_digits=10, decimal_places=2)),
-            total_late_minutes=Sum('late_minutes', output_field=IntegerField())
+            total_late_minutes=Sum('late_minutes', output_field=IntegerField()),
+            # FIXED: Include total_working_days from uploaded attendance data (use MAX in case of multiple records)
+            uploaded_working_days=models.Max('total_working_days', output_field=IntegerField())
         )
         
-        # Convert to dictionary for fast lookup
+        # Convert to dictionary for fast lookup and get list of employees with attendance
         attendance_dict = {
             item['employee_id']: {
                 'present_days': float(item['total_present'] or 0),
                 'absent_days': float(item['total_absent'] or 0),
                 'ot_hours': float(item['total_ot_hours'] or 0),
-                'late_minutes': int(item['total_late_minutes'] or 0)
+                'late_minutes': int(item['total_late_minutes'] or 0),
+                'uploaded_working_days': int(item['uploaded_working_days'] or 0)
             }
             for item in attendance_summary
         }
         
-        logger.info(f"Attendance data aggregated for {len(attendance_dict)} employees")
+        # FIXED: Only include employees who have attendance data for this period
+        employees_with_attendance_ids = list(attendance_dict.keys())
         
-        # OPTIMIZATION 3: Bulk fetch all advance deductions
+        if not employees_with_attendance_ids:
+            logger.info(f"No employees with attendance data for {month_name_upper} {year}")
+            return Response({
+                'success': True,
+                'payroll_data': [],
+                'summary': {
+                    'total_employees': 0,
+                    'working_days': working_days,
+                    'month_year': f"{calendar.month_name[month_num]} {year}",
+                    'total_base_salary': 0,
+                    'total_gross_salary': 0,
+                    'total_net_salary': 0,
+                    'message': 'No employees with attendance data for this period'
+                }
+            })
+        
+        logger.info(f"Attendance data aggregated for {len(attendance_dict)} employees with attendance")
+        
+        # Filter employees to only those with attendance
+        employees = employees.filter(employee_id__in=employees_with_attendance_ids)
+        
+        # OPTIMIZATION 3: Bulk fetch all advance deductions (only for employees with attendance)
         month_year_string = f"{calendar.month_name[month_num]} {year}"
         advance_summary = AdvanceLedger.objects.filter(
             tenant=tenant,
-            employee_id__in=employee_ids,
+            employee_id__in=employees_with_attendance_ids,
             for_month__icontains=month_year_string,
             status__in=['PENDING', 'PARTIALLY_PAID']
         ).values('employee_id').annotate(
@@ -2010,7 +2056,7 @@ def calculate_simple_payroll(request):
         # OPTIMIZATION 3.5: Get total advance balance for each employee (all pending advances)
         total_advance_summary = AdvanceLedger.objects.filter(
             tenant=tenant,
-            employee_id__in=employee_ids,
+            employee_id__in=employees_with_attendance_ids,
             status__in=['PENDING', 'PARTIALLY_PAID']
         ).values('employee_id').annotate(
             total_balance=Sum('remaining_balance', output_field=DecimalField(max_digits=12, decimal_places=2))
@@ -2024,7 +2070,7 @@ def calculate_simple_payroll(request):
         
         logger.info(f"Advance deductions aggregated for {len(advance_dict)} employees")
         
-        # OPTIMIZATION 4: Process all employees in bulk with vectorized operations
+        # OPTIMIZATION 4: Process only employees with attendance data
         payroll_data = []
         total_base_salary = 0
         total_gross_salary = 0
@@ -2033,20 +2079,27 @@ def calculate_simple_payroll(request):
         from ..services.salary_service import SalaryCalculationService
         
         for employee in employees:
-            # Get attendance data (default to 0 if no records)
-            attendance = attendance_dict.get(employee.employee_id, {
-                'present_days': 0,
-                'absent_days': 0,
-                'ot_hours': 0.0,
-                'late_minutes': 0
-            })
+            # Get attendance data (employee should have attendance since we filtered above)
+            attendance = attendance_dict.get(employee.employee_id)
             
-            # SMART CALCULATION: Uses SalaryCalculationService with DOJ awareness
-            # - Joining month: Calculates actual days from DOJ to month end
-            # - Other months: Uses standard 30 days
-            employee_working_days = SalaryCalculationService._calculate_employee_working_days(
-                employee, year, month_name_upper
-            )
+            # Skip if no attendance data (shouldn't happen due to filtering, but safety check)
+            if not attendance:
+                logger.warning(f"Skipping employee {employee.employee_id} - no attendance data found")
+                continue
+            
+            # FIXED: Use uploaded working days from attendance data if available, otherwise calculate
+            # This ensures that Excel-uploaded working days are preserved during payroll calculation
+            uploaded_working_days = attendance.get('uploaded_working_days', 0)
+            if uploaded_working_days and uploaded_working_days > 0:
+                # Use the uploaded working days from Excel
+                employee_working_days = uploaded_working_days
+            else:
+                # Fallback: SMART CALCULATION with DOJ awareness
+                # - Joining month: Calculates actual days from DOJ to month end
+                # - Other months: Uses standard 30 days
+                employee_working_days = SalaryCalculationService._calculate_employee_working_days(
+                    employee, year, month_name_upper
+                )
             
             # Get advance deductions (default to 0)
             advance_deductions = advance_dict.get(employee.employee_id, 0.0)
@@ -2363,6 +2416,8 @@ def calculate_simple_payroll_ultra_fast(request):
                 COALESCE(att.absent_days, 0) as absent_days,
                 COALESCE(att.ot_hours, 0) as ot_hours,
                 COALESCE(att.late_minutes, 0) as late_minutes,
+                -- FIXED: Include uploaded working days from attendance data
+                COALESCE(att.uploaded_working_days, 0) as uploaded_working_days,
                 
                 -- Standardized Gross Salary calculation:
                 -- Gross Salary = (Base Salary ÷ Working Days × Present Days) + OT Charges - Late Deduction
@@ -2400,13 +2455,15 @@ def calculate_simple_payroll_ultra_fast(request):
                 
             FROM excel_data_employeeprofile e
             
-            LEFT JOIN (
+            INNER JOIN (
                 SELECT 
                     employee_id,
                     SUM(COALESCE(present_days, 0)) as present_days,
                     SUM(COALESCE(absent_days, 0)) as absent_days,
                     SUM(COALESCE(ot_hours, 0)) as ot_hours,
-                    SUM(COALESCE(late_minutes, 0)) as late_minutes
+                    SUM(COALESCE(late_minutes, 0)) as late_minutes,
+                    -- FIXED: Include total_working_days from uploaded attendance data (use MAX in case of multiple records)
+                    MAX(COALESCE(total_working_days, 0)) as uploaded_working_days
                 FROM excel_data_attendance 
                 WHERE tenant_id = %s 
                     AND EXTRACT(YEAR FROM date) = %s 
@@ -2470,20 +2527,35 @@ def calculate_simple_payroll_ultra_fast(request):
         for row in raw_results:
             data = dict(zip(columns, row))
             
-            # SMART CALCULATION: Employee-specific working days with DOJ awareness
-            employee = employees_map.get(data['employee_id'])
-            if employee:
-                employee_working_days = SalaryCalculationService._calculate_employee_working_days(
-                    employee, year, month_name_upper
-                )
+            # Skip employees with no attendance data (present_days = 0 and absent_days = 0)
+            present_days = float(data.get('present_days', 0) or 0)
+            absent_days = float(data.get('absent_days', 0) or 0)
+            
+            # FIXED: Only process employees who have attendance data
+            if present_days == 0 and absent_days == 0:
+                logger.debug(f"Skipping employee {data.get('employee_id')} - no attendance data")
+                continue
+            
+            # FIXED: Use uploaded working days from attendance data if available, otherwise calculate
+            # This ensures that Excel-uploaded working days are preserved during payroll calculation
+            uploaded_working_days = int(data.get('uploaded_working_days', 0) or 0)
+            if uploaded_working_days > 0:
+                # Use the uploaded working days from Excel
+                employee_working_days = uploaded_working_days
             else:
-                # No employee profile found - use standard 30 days
-                employee_working_days = 30
+                # Fallback: SMART CALCULATION with DOJ awareness
+                employee = employees_map.get(data['employee_id'])
+                if employee:
+                    employee_working_days = SalaryCalculationService._calculate_employee_working_days(
+                        employee, year, month_name_upper
+                    )
+                else:
+                    # No employee profile found - use standard 30 days
+                    employee_working_days = 30
 
             # Recompute gross salary with employee-specific working days
             # Gross Salary = (Base Salary ÷ Working Days × Present Days) + OT Charges - Late Deduction
             base_salary = float(data['base_salary'] or 0)
-            present_days = float(data['present_days'] or 0)
             ot_charges = float(data['ot_charges'] or 0)
             late_deduction = float(data['late_deduction'] or 0)
             if employee_working_days > 0:
@@ -2649,6 +2721,10 @@ def save_payroll_period_direct(request):
         except (ValueError, TypeError, IndexError):
             return Response({"error": "Invalid year or month format"}, status=400)
         
+        # FIXED: Normalize month to short format (JAN, FEB, etc.) to match SalaryData format
+        from ..services.salary_service import SalaryCalculationService
+        month_normalized = SalaryCalculationService._normalize_month_to_short(month_name)
+        
         # Use a single transaction for the whole write path to reduce overhead
         with transaction.atomic():
             t1 = perf_counter()
@@ -2656,7 +2732,7 @@ def save_payroll_period_direct(request):
             payroll_period, created = PayrollPeriod.objects.get_or_create(
                 tenant=tenant,
                 year=year,
-                month=month_name,
+                month=month_normalized,  # Use normalized short format
                 defaults={
                     'data_source': 'FRONTEND',
                     'working_days_in_month': payroll_entries[0].get('working_days', 25) if payroll_entries else 25,

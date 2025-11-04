@@ -13,11 +13,14 @@ from rest_framework import status, viewsets, filters
 from rest_framework.decorators import action
 from ..models import EmployeeProfile
 import time
-from django.db.models import Sum, Avg, Count
+from django.db.models import Sum, Avg, Count, Q
+from django.db import models
 from rest_framework.permissions import IsAuthenticated
 import logging
 from datetime import datetime, time as dt_time
 from django.db import transaction
+from django.utils import timezone
+from django.core.cache import cache
 
 # Initialize logger
 logger = logging.getLogger(__name__)
@@ -738,15 +741,20 @@ class SalaryDataViewSet(viewsets.ModelViewSet):
             # ROBUST FIX: Always pick the real current calendar month
             from django.utils import timezone
             import calendar
+            from ..services.salary_service import SalaryCalculationService
             now = timezone.now()
             current_month_name = calendar.month_name[now.month].upper()
+            # FIXED: Normalize month to short format (JAN, FEB, etc.) to match PayrollPeriod format
+            current_month_normalized = SalaryCalculationService._normalize_month_to_short(current_month_name)
             
-            logger.info(f"Looking for current month: {now.year} {current_month_name}")
+            logger.info(f"Looking for current month: {now.year} {current_month_normalized} (normalized from {current_month_name})")
             
-            # Try to find current month's payroll period
+            # Try to find current month's payroll period (try both formats for backward compatibility)
+            from django.db.models import Q
             current_month_periods = payroll_periods.filter(
-                year=now.year,
-                month=current_month_name
+                year=now.year
+            ).filter(
+                Q(month=current_month_normalized) | Q(month=current_month_name)
             )[:1]
             
             if current_month_periods.exists():
@@ -803,7 +811,15 @@ class SalaryDataViewSet(viewsets.ModelViewSet):
             year = request.query_params.get('year')
             month = request.query_params.get('month')
             if year and month:
-                selected_periods = payroll_periods.filter(year=int(year), month=month)[:1]
+                # FIXED: Normalize month to short format and handle both formats for backward compatibility
+                from ..services.salary_service import SalaryCalculationService
+                from django.db.models import Q
+                month_normalized = SalaryCalculationService._normalize_month_to_short(month)
+                selected_periods = payroll_periods.filter(
+                    year=int(year)
+                ).filter(
+                    Q(month=month_normalized) | Q(month=month.upper())
+                )[:1]
             else:
                 selected_periods = payroll_periods[:1]
         elif time_period == 'custom_range':
@@ -3093,22 +3109,93 @@ class EmployeeProfileViewSet(viewsets.ModelViewSet):
     # NEW ACTION
     @action(detail=False, methods=['get'], url_path='profile_by_employee_id')
     def profile_by_employee_id(self, request):
-        """Retrieve full employee profile by employee_id query parameter"""
-        # Validate query param
-        employee_id = request.query_params.get('employee_id')
-        if not employee_id:
-            return Response({'error': 'employee_id query parameter is required'}, status=status.HTTP_400_BAD_REQUEST)
-
+        """Retrieve full employee profile by employee_id OR name+department query parameters
+        Returns employee regardless of active/inactive status for frontend to detect inactive employees
+        
+        Accepts either:
+        - employee_id: Query by employee ID
+        - name + department: Query by name and department (for Excel uploads)
+        """
+        import logging
+        logger = logging.getLogger(__name__)
+        
         tenant = getattr(request, 'tenant', None)
-        try:
-            employee = EmployeeProfile.objects.get(tenant=tenant, employee_id=employee_id)
-        except EmployeeProfile.DoesNotExist:
-            return Response({'error': 'Employee not found'}, status=status.HTTP_404_NOT_FOUND)
+        if not tenant:
+            return Response({'error': 'No tenant found'}, status=status.HTTP_400_BAD_REQUEST)
+        
+        # Try employee_id first (for backward compatibility)
+        employee_id = request.query_params.get('employee_id')
+        if employee_id:
+            employee_id = employee_id.strip()
+            try:
+                employee = EmployeeProfile.objects.get(employee_id=employee_id)
+                logger.info(f"Found employee by ID {employee_id} (active: {employee.is_active})")
+            except EmployeeProfile.DoesNotExist:
+                employee = EmployeeProfile.objects.filter(employee_id__iexact=employee_id).first()
+                if not employee:
+                    return Response({'error': 'Employee not found'}, status=status.HTTP_404_NOT_FOUND)
+                logger.info(f"Found employee by ID (case-insensitive) {employee_id} (active: {employee.is_active})")
+        else:
+            # Query by name and department
+            name = request.query_params.get('name')
+            department = request.query_params.get('department', '')
+            
+            if not name:
+                return Response({'error': 'Either employee_id or name parameter is required'}, status=status.HTTP_400_BAD_REQUEST)
+            
+            name = name.strip()
+            department = department.strip() if department else ''
+            
+            # Split name into first_name and last_name
+            name_parts = name.split(' ', 1)
+            first_name = name_parts[0].strip()
+            last_name = name_parts[1].strip() if len(name_parts) > 1 else ''
+            
+            # Try exact match first (first_name + last_name + department)
+            query = EmployeeProfile.objects.filter(first_name__iexact=first_name)
+            
+            if last_name:
+                query = query.filter(last_name__iexact=last_name)
+            else:
+                # If no last name, filter by last_name being empty or null
+                query = query.filter(Q(last_name__isnull=True) | Q(last_name=''))
+            
+            if department:
+                query = query.filter(department__iexact=department)
+            
+            employee = query.first()
+            
+            if not employee:
+                # Try more flexible matching - just first_name and department
+                logger.warning(f"Employee not found with exact match: name='{name}', department='{department}', trying flexible match")
+                query = EmployeeProfile.objects.filter(first_name__iexact=first_name)
+                if department:
+                    query = query.filter(department__iexact=department)
+                employee = query.first()
+                
+                if not employee:
+                    logger.error(f"Employee not found: name='{name}', department='{department}'")
+                    return Response({
+                        'error': 'Employee not found',
+                        'debug_info': {
+                            'name': name,
+                            'department': department,
+                            'first_name': first_name,
+                            'last_name': last_name
+                        }
+                    }, status=status.HTTP_404_NOT_FOUND)
+                else:
+                    logger.info(f"Found employee with flexible match: name='{name}', department='{department}' (active: {employee.is_active})")
+            else:
+                logger.info(f"Found employee with exact match: name='{name}', department='{department}' (active: {employee.is_active})")
 
+        # Use the actual employee_id from the found employee (in case case-insensitive fallback was used)
+        actual_employee_id = employee.employee_id
+        
         # Gather related data similar to profile_detail
-        recent_attendance = Attendance.objects.filter(tenant=tenant, employee_id=employee_id).order_by('-date')[:6]
-        recent_salaries = SalaryData.objects.filter(tenant=tenant, employee_id=employee_id).order_by('-year', '-month')[:6]
-        recent_daily_attendance = DailyAttendance.objects.filter(tenant=tenant, employee_id=employee_id).order_by('-date')[:10]
+        recent_attendance = Attendance.objects.filter(tenant=tenant, employee_id=actual_employee_id).order_by('-date')[:6]
+        recent_salaries = SalaryData.objects.filter(tenant=tenant, employee_id=actual_employee_id).order_by('-year', '-month')[:6]
+        recent_daily_attendance = DailyAttendance.objects.filter(tenant=tenant, employee_id=actual_employee_id).order_by('-date')[:10]
 
         from ..serializers import AttendanceSerializer, SalaryDataSerializer, DailyAttendanceSerializer, EmployeeFormSerializer, EmployeeProfileSerializer
 
@@ -3131,7 +3218,6 @@ class EmployeeProfileViewSet(viewsets.ModelViewSet):
         """
         employee = self.get_object()
         employee.is_active = not employee.is_active
-        from django.utils import timezone
         # Set inactive_marked_at when deactivating; clear when activating
         if employee.is_active:
             employee.inactive_marked_at = None
@@ -3140,29 +3226,75 @@ class EmployeeProfileViewSet(viewsets.ModelViewSet):
         employee.save()
         
         # Clear multiple caches when employee status changes
-        from django.core.cache import cache
         tenant = getattr(request, 'tenant', None)
+        tenant_id = tenant.id if tenant else 'default'
         
         # Clear directory data cache
-        cache_key = f"directory_data_{tenant.id if tenant else 'default'}"
-        cache.delete(cache_key)
+        cache_keys_to_clear = [
+            f"directory_data_{tenant_id}",
+            f"directory_data_full_{tenant_id}",
+            f"payroll_overview_{tenant_id}",
+            f"months_with_attendance_{tenant_id}",
+        ]
         
-        # Clear payroll overview cache
-        payroll_cache_key = f"payroll_overview_{tenant.id if tenant else 'default'}"
-        cache.delete(payroll_cache_key)
-        logger.info(f"Cleared payroll overview cache for tenant {tenant.id if tenant else 'default'}")
+        for key in cache_keys_to_clear:
+            cache.delete(key)
         
-        # Clear daily attendance all_records cache
-        attendance_records_cache_key = f"attendance_all_records_{tenant.id if tenant else 'default'}"
-        cache.delete(attendance_records_cache_key)
-        logger.info(f"Cleared attendance all_records cache for tenant {tenant.id if tenant else 'default'}")
+        # FIXED: Clear all attendance_all_records cache variations (pattern-based)
+        # This ensures attendance log cache is cleared after activation/deactivation
+        try:
+            cache.delete_pattern(f"attendance_all_records_{tenant_id}_*")
+            logger.info(f"✅ Cleared all attendance_all_records cache variations (pattern) for tenant {tenant_id}")
+        except (AttributeError, NotImplementedError):
+            # Fallback: Clear common variations manually
+            common_time_periods = ['last_6_months', 'last_12_months', 'last_5_years', 'this_month', 'custom', 'custom_month', 'custom_range', 'one_day']
+            for period in common_time_periods:
+                variations = [
+                    f"attendance_all_records_{tenant_id}_{period}_None_None_None_None_rt_1",
+                    f"attendance_all_records_{tenant_id}_{period}_None_None_None_None_rt_0",
+                ]
+                for var_key in variations:
+                    cache.delete(var_key)
+            # Also clear base key
+            cache.delete(f"attendance_all_records_{tenant_id}")
+            logger.info(f"✅ Cleared attendance_all_records cache variations (manual fallback) for tenant {tenant_id}")
+        
+        # Clear frontend charts cache (pattern matching)
+        try:
+            cache.delete_pattern(f"frontend_charts_{tenant_id}_*")
+            logger.info(f"✅ Cleared frontend_charts pattern cache for tenant {tenant_id}")
+        except AttributeError:
+            # Fallback: Clear common chart cache keys
+            chart_keys = [
+                f"frontend_charts_{tenant_id}_this_month_All_",
+                f"frontend_charts_{tenant_id}_last_6_months_All_",
+                f"frontend_charts_{tenant_id}_last_12_months_All_",
+                f"frontend_charts_{tenant_id}_last_5_years_All_"
+            ]
+            for key in chart_keys:
+                cache.delete(key)
+            logger.info(f"✅ Cleared frontend_charts fallback cache for tenant {tenant_id}")
+        
+        # Clear eligible_employees cache (pattern matching for all date variations)
+        # This endpoint uses: eligible_employees_progressive_{tenant_id}_{date_str}_{initial/remaining}
+        try:
+            cache.delete_pattern(f"eligible_employees_{tenant_id}_*")
+            cache.delete_pattern(f"eligible_employees_progressive_{tenant_id}_*")
+            cache.delete_pattern(f"total_eligible_count_{tenant_id}_*")
+            logger.info(f"✅ Cleared all eligible_employees pattern cache for tenant {tenant_id}")
+        except (AttributeError, NotImplementedError):
+            # Fallback: Clear base key (less optimal but works)
+            cache.delete(f"eligible_employees_{tenant_id}")
+            logger.info(f"✅ Cleared eligible_employees base cache (fallback) for tenant {tenant_id}")
+        
+        logger.info(f"✨ Cleared all caches for tenant {tenant_id} after employee status change (is_active={employee.is_active})")
         
         return Response({
             'message': f'Employee {employee.full_name} is now {"active" if employee.is_active else "inactive"}',
             'is_active': employee.is_active,
             'inactive_marked_at': employee.inactive_marked_at.isoformat() if employee.inactive_marked_at else None,
             'cache_cleared': True,
-            'caches_invalidated': ['directory_data', 'payroll_overview', 'attendance_all_records']
+            'caches_invalidated': ['directory_data', 'payroll_overview', 'attendance_all_records', 'frontend_charts', 'months_with_attendance', 'eligible_employees']
         })
 
     @action(detail=False, methods=['post'], parser_classes=[MultiPartParser, FormParser])

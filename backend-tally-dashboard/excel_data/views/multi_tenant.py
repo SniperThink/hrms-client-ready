@@ -495,11 +495,15 @@ class UploadSalaryDataAPIView(APIView):
                     from decimal import Decimal
                     import calendar
                     
+                    # FIXED: Normalize month to short format (JAN, FEB, etc.) to match SalaryData format
+                    from ..services.salary_service import SalaryCalculationService
+                    selected_month_normalized = SalaryCalculationService._normalize_month_to_short(selected_month)
+                    
                     # Create PayrollPeriod with UPLOADED data source
                     payroll_period, period_created = PayrollPeriod.objects.get_or_create(
                         tenant=tenant,
                         year=int(selected_year),
-                        month=selected_month,
+                        month=selected_month_normalized,  # Use normalized short format
                         defaults={
                             'data_source': DataSource.UPLOADED,
                             'working_days_in_month': len([d for d in range(1, calendar.monthrange(int(selected_year), self._get_month_number(selected_month))[1] + 1)
