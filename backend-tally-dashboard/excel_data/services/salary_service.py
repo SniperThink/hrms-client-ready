@@ -426,9 +426,14 @@ class SalaryCalculationService:
         ).first()
 
         if attendance_record and not force_calculate_partial:
-            employee_working_days = SalaryCalculationService._calculate_employee_working_days(
-                employee, year, month
-            )
+            # TRUST UPLOADED WORKING DAYS: Use uploaded value if available, otherwise calculate
+            if attendance_record.total_working_days and attendance_record.total_working_days > 0:
+                employee_working_days = attendance_record.total_working_days
+            else:
+                # Fallback to calculation if no uploaded value
+                employee_working_days = SalaryCalculationService._calculate_employee_working_days(
+                    employee, year, month
+                )
 
             return {
                 'total_working_days': employee_working_days,
