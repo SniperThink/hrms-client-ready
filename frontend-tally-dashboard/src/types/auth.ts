@@ -8,6 +8,7 @@ export interface User {
   department?: string;
   is_hr: boolean;
   is_admin: boolean;
+  role?: string;
 }
 
 export interface Tenant {
@@ -27,6 +28,20 @@ export interface AuthResponse {
   must_change_password?: boolean;
   no_credits?: boolean;
   credits?: number;
+  account_recovered?: boolean;
+  recovery_message?: string;
+  requires_recovery_confirmation?: boolean;
+  recovery_info?: {
+    can_recover: boolean;
+    recovery_period_days: number;
+    days_remaining: number;
+    recovery_deadline: string;
+    recovery_message: string;
+    tenant_name: string;
+  };
+  recovery_expired?: boolean;
+  requires_admin?: boolean;
+  account_deactivated?: boolean;
 }
 
 export type RegisterRequest = {

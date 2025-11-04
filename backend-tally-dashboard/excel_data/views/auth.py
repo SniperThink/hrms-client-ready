@@ -128,20 +128,146 @@ class SystemUserLoginView(APIView):
                 status=status.HTTP_401_UNAUTHORIZED,
             )
 
-        # Check if tenant is active
-        if not user.tenant.is_active:
+        # Check if tenant is soft-deleted and handle recovery
+        tenant = user.tenant
+        account_recovered = False
+        confirm_recovery = request.data.get("confirm_recovery", False)
+        
+        if tenant and tenant.deactivated_at:
+            # Check if tenant can be recovered (within 30 days)
+            if tenant.can_recover(recovery_period_days=30):
+                # Only admin users can reactivate accounts
+                if user.role != 'admin':
+                    days_remaining = tenant.get_recovery_days_remaining(recovery_period_days=30)
+                    return Response(
+                        {
+                            "error": "Only administrators can reactivate this account. Please contact your administrator to reactivate the account.",
+                            "account_deactivated": True,
+                            "requires_admin": True,
+                            "recovery_info": {
+                                "can_recover": True,
+                                "recovery_period_days": 30,
+                                "days_remaining": days_remaining,
+                                "message": f"Only administrators can reactivate this account. Your account has {days_remaining} day(s) remaining in the recovery period. Please contact your administrator."
+                            }
+                        },
+                        status=status.HTTP_403_FORBIDDEN,
+                    )
+                
+                # Check if user has confirmed recovery
+                if not confirm_recovery:
+                    # Return response asking for confirmation
+                    days_remaining = tenant.get_recovery_days_remaining(recovery_period_days=30)
+                    from django.utils import timezone
+                    from datetime import timedelta
+                    recovery_deadline = tenant.deactivated_at + timedelta(days=30)
+                    
+                    return Response(
+                        {
+                            "message": "Account recovery confirmation required",
+                            "requires_recovery_confirmation": True,
+                            "recovery_info": {
+                                "can_recover": True,
+                                "recovery_period_days": 30,
+                                "days_remaining": days_remaining,
+                                "recovery_deadline": recovery_deadline.isoformat(),
+                                "recovery_message": f"Your account was deactivated. You have {days_remaining} day(s) remaining to recover it. Would you like to reactivate your account now?",
+                                "tenant_name": tenant.name
+                            },
+                            "user": {
+                                "id": user.id,
+                                "email": user.email,
+                                "name": f"{user.first_name} {user.last_name}".strip() or user.email,
+                                "first_name": user.first_name or "",
+                                "last_name": user.last_name or "",
+                            }
+                        },
+                        status=status.HTTP_200_OK,
+                    )
+                
+                # User confirmed recovery - proceed with recovery
+                tenant.recover()
+                # Refresh tenant from database to get updated state
+                tenant.refresh_from_db()
+                # Refresh user from database to get updated is_active status
+                user.refresh_from_db()
+                account_recovered = True
+                logger.info(
+                    f"Tenant {tenant.name} (ID: {tenant.id}) recovered after confirmation "
+                    f"during login by admin user {user.email}"
+                )
+            else:
+                # Recovery period expired
+                days_remaining = tenant.get_recovery_days_remaining(recovery_period_days=30)
+                return Response(
+                    {
+                        "error": "Your account has been permanently deleted. The 30-day recovery period has expired.",
+                        "recovery_expired": True,
+                        "recovery_info": {
+                            "can_recover": False,
+                            "days_remaining": 0,
+                            "message": "The 30-day recovery period has expired. Please contact support for assistance."
+                        }
+                    },
+                    status=status.HTTP_403_FORBIDDEN,
+                )
+
+        # Check if user is active (after recovery - recovery may have reactivated user)
+        if not user.is_active:
+            return Response(
+                {"error": "Account is deactivated. Please contact support."},
+                status=status.HTTP_401_UNAUTHORIZED,
+            )
+
+        # Check if tenant is active (but not soft-deleted - soft-deleted is handled above)
+        if not tenant.is_active and not tenant.deactivated_at:
             return Response(
                 {"error": "Company account is suspended. Please contact support."},
                 status=status.HTTP_401_UNAUTHORIZED,
             )
+        
+        # If tenant is inactive due to soft delete, show recovery info
+        if not tenant.is_active and tenant.deactivated_at:
+            days_remaining = tenant.get_recovery_days_remaining(recovery_period_days=30)
+            if days_remaining and days_remaining > 0:
+                from django.utils import timezone
+                from datetime import timedelta
+                recovery_deadline = tenant.deactivated_at + timedelta(days=30)
+                return Response(
+                    {
+                        "error": f"Your account has been deactivated. You have {days_remaining} day(s) remaining to recover it.",
+                        "account_deactivated": True,
+                        "recovery_info": {
+                            "can_recover": True,
+                            "recovery_period_days": 30,
+                            "days_remaining": days_remaining,
+                            "recovery_deadline": recovery_deadline.isoformat(),
+                            "recovery_message": f"Simply log in within {days_remaining} day(s) to automatically recover your account. After 30 days, the account will be permanently deleted."
+                        }
+                    },
+                    status=status.HTTP_403_FORBIDDEN,
+                )
+            else:
+                return Response(
+                    {
+                        "error": "Your account has been permanently deleted. The 30-day recovery period has expired.",
+                        "recovery_expired": True,
+                        "recovery_info": {
+                            "can_recover": False,
+                            "days_remaining": 0,
+                            "message": "Please contact support for assistance."
+                        }
+                    },
+                    status=status.HTTP_403_FORBIDDEN,
+            )
 
         # Check if tenant has credits
-        if user.tenant.credits <= 0:
+        if tenant.credits <= 0:
             return Response(
                 {
                     "error": "Company account has no credits. Please contact support to add credits to your account.",
                     "no_credits": True,
-                    "credits": user.tenant.credits,
+                    "credits": tenant.credits,
                 },
                 status=status.HTTP_403_FORBIDDEN,
             )
@@ -181,8 +307,7 @@ class SystemUserLoginView(APIView):
         # Generate JWT tokens
         refresh = RefreshToken.for_user(user)
 
-        return Response(
-            {
+        response_data = {
                 "message": "Login successful",
                 "access": str(refresh.access_token),
                 "refresh": str(refresh),
@@ -190,7 +315,9 @@ class SystemUserLoginView(APIView):
                 "user": {
                     "id": user.id,
                     "email": user.email,
-                    "name": f"{user.first_name} {user.last_name}".strip(),
+                "name": f"{user.first_name} {user.last_name}".strip() or user.email,
+                "first_name": user.first_name or "",
+                "last_name": user.last_name or "",
                     "role": user.role,
                     "is_hr": getattr(user, "is_hr", False),
                     "is_tenant_admin": getattr(user, "is_tenant_admin", False),
@@ -200,9 +327,14 @@ class SystemUserLoginView(APIView):
                     "name": user.tenant.name,
                     "subdomain": user.tenant.subdomain,
                 },
-            },
-            status=status.HTTP_200_OK,
-        )
+        }
+        
+        # Add recovery message if account was just recovered
+        if account_recovered:
+            response_data["account_recovered"] = True
+            response_data["recovery_message"] = "Your account has been successfully recovered! Welcome back."
+        
+        return Response(response_data, status=status.HTTP_200_OK)
 
 
 class SystemUserProfileView(generics.RetrieveUpdateAPIView):
@@ -418,7 +550,7 @@ class UserManagementViewSet(viewsets.ModelViewSet):
 
     @action(detail=True, methods=["delete"])
     def deactivate(self, request, pk=None):
-        """Delete a user permanently"""
+        """Delete a user - if admin, soft delete tenant instead"""
         user = self.get_object()
 
         # Prevent users from deleting themselves
@@ -431,9 +563,46 @@ class UserManagementViewSet(viewsets.ModelViewSet):
         # Store user info before deletion
         user_email = user.email
         user_name = f"{user.first_name} {user.last_name}".strip()
+        tenant = user.tenant
+        is_admin = user.role == 'admin' if hasattr(user, 'role') else False
 
-        # Delete the user (this will cascade delete related objects)
-        user.delete()
+        # If deleting an admin account, soft delete the tenant instead
+        if is_admin and tenant:
+            # Soft delete the tenant (deactivate with 30-day recovery period)
+            tenant.soft_delete()
+            
+            logger.info(
+                f"Admin account deletion by admin {request.user.email} - "
+                f"Tenant {tenant.name} (ID: {tenant.id}) soft deleted. "
+                f"Recovery period: 30 days."
+            )
+            
+            from django.utils import timezone
+            from datetime import timedelta
+            
+            recovery_deadline = tenant.deactivated_at + timedelta(days=30)
+            days_remaining = max(0, (recovery_deadline - timezone.now()).days)
+            
+            return Response(
+                {
+                    "message": f"Admin account {user_name} ({user_email}) and organization ({tenant.name}) have been deactivated.",
+                    "recovery_info": {
+                        "can_recover": True,
+                        "recovery_period_days": 30,
+                        "days_remaining": days_remaining,
+                        "recovery_deadline": recovery_deadline.isoformat(),
+                        "recovery_message": f"The account can be recovered by logging in within 30 days. {days_remaining} day(s) remaining. After 30 days, the account will be permanently deleted."
+                    }
+                },
+                status=status.HTTP_200_OK,
+            )
+        else:
+            # For non-admin users, delete the user account permanently
+            user.delete()
+            
+            logger.info(
+                f"User account {user_email} permanently deleted by admin {request.user.email}"
+            )
 
         return Response(
             {"message": f"User {user_name} ({user_email}) has been permanently deleted"}
@@ -623,41 +792,42 @@ class TenantSignupView(APIView):
 
                 # Send email with credentials (like HR invitations)
                 from ..services.zeptomail_service import send_email_via_zeptomail
+                from ..services.email_templates import render_company_signup_email
+                from django.utils.html import strip_tags
                 from django.conf import settings
                 
-                frontend_url = getattr(settings, 'FRONTEND_URL', 'http://35.154.9.249')
-                subject = f"Welcome to SniperThink - Your Account Details"
-
-                message = f"""
-Dear {first_name} {last_name},
-
-Your company account has been created successfully on {tenant.name}'s HR management system.
-
-Your login credentials are:
-
-Email: {admin_email}
-Temporary Password: {temp_password}
-
-IMPORTANT: You will be required to change your password when you first log in.
-
-Please log in at: {frontend_url}/login
-
-If you have any questions, please contact support.
-
-Best regards,
-The SniperThink Team
-                """.strip()
-
-                try:
-                    send_email_via_zeptomail(
-                    to_email=admin_email,
-                    subject=subject,
-                    text_body=message
-                )
-                    email_sent = True
-                except Exception as email_error:
-                    logger.error(f"Failed to send credentials email to {admin_email}: {email_error}")
+                # Check rate limit
+                from ..services.email_rate_limiter import can_send_email, record_email_sent, format_time_remaining
+                can_send, time_remaining = can_send_email(admin_email)
+                if not can_send:
+                    time_str = format_time_remaining(time_remaining)
+                    logger.warning(f"Email rate limit exceeded for {admin_email} (company signup email). Please try again in {time_str}.")
                     email_sent = False
+                else:
+                    try:
+                        frontend_url = getattr(settings, 'FRONTEND_URL', 'http://35.154.9.249')
+                        subject = f"Welcome to SniperThink - Your Account Details"
+
+                        html_message = render_company_signup_email(
+                            admin_user, tenant.name, temp_password, frontend_url
+                        )
+                        text_message = strip_tags(html_message).strip()
+
+                        success = send_email_via_zeptomail(
+                            to_email=admin_email,
+                            subject=subject,
+                            html_body=html_message,
+                            text_body=text_message,
+                            from_name="SniperThink"
+                        )
+                        if success:
+                            record_email_sent(admin_email)
+                            email_sent = True
+                        else:
+                            email_sent = False
+                    except Exception as email_error:
+                        logger.error(f"Failed to send credentials email to {admin_email}: {email_error}")
+                        email_sent = False
 
                 if email_sent:
                     return Response(
@@ -696,7 +866,7 @@ The SniperThink Team
         """Send verification email to user"""
         try:
             from ..services.zeptomail_service import send_email_via_zeptomail
-            from django.template.loader import render_to_string
+            from ..services.email_templates import render_email_verification_email
             from django.utils.html import strip_tags
             from django.conf import settings
 
@@ -705,36 +875,37 @@ The SniperThink Team
                 f"http://localhost:8000/api/verify-email/{verification.token}/"
             )
 
-            # Create email content (similar to existing email service)
+            # Check rate limit
+            from ..services.email_rate_limiter import can_send_email, record_email_sent, format_time_remaining
+            can_send, time_remaining = can_send_email(user.email)
+            if not can_send:
+                time_str = format_time_remaining(time_remaining)
+                logger.warning(f"Email rate limit exceeded for {user.email} (verification email). Please try again in {time_str}.")
+                # Don't send verification email if rate limited
+                return
+
+            # Create email content using template
             subject = (
                 f"Verify your email - {user.tenant.name if user.tenant else 'HRMS'}"
             )
 
-            message = f"""
-Welcome to {user.tenant.name if user.tenant else 'HRMS'} - HR Management System
-
-Hello {user.first_name} {user.last_name},
-
-Thank you for signing up! To complete your registration and access your account, please verify your email address by clicking the link below:
-
-{verification_url}
-
-This verification link will expire in {EmailVerification.EXPIRY_HOURS} hours.
-
-If you didn't create an account with {user.tenant.name if user.tenant else 'HRMS'}, please ignore this email.
-
-Best regards,
-The {user.tenant.name if user.tenant else 'HRMS'} Team
-            """
+            html_message = render_email_verification_email(user, verification_url, EmailVerification.EXPIRY_HOURS)
+            text_message = strip_tags(html_message).strip()
 
             # Send email using the same method as existing email service
-            send_email_via_zeptomail(
+            success = send_email_via_zeptomail(
                 to_email=user.email,
                 subject=subject,
-                text_body=message
+                html_body=html_message,
+                text_body=text_message,
+                from_name="SniperThink"
             )
 
-            logger.info(f"Verification email sent to {user.email}")
+            if success:
+                record_email_sent(user.email)
+                logger.info(f"Verification email sent to {user.email}")
+            else:
+                logger.error(f"Failed to send verification email to {user.email}")
 
         except Exception as e:
             logger.error(f"Failed to send verification email to {user.email}: {e}")
@@ -848,6 +1019,8 @@ class ResendVerificationView(APIView):
         """Send verification email to user using the working email service"""
         try:
             from ..services.zeptomail_service import send_email_via_zeptomail
+            from ..services.email_templates import render_email_verification_email
+            from django.utils.html import strip_tags
             from django.conf import settings
 
             # Create verification URL (pointing to backend API)
@@ -855,36 +1028,37 @@ class ResendVerificationView(APIView):
                 f"http://localhost:8000/api/verify-email/{verification.token}/"
             )
 
-            # Create email content (similar to existing email service)
+            # Check rate limit
+            from ..services.email_rate_limiter import can_send_email, record_email_sent, format_time_remaining
+            can_send, time_remaining = can_send_email(user.email)
+            if not can_send:
+                time_str = format_time_remaining(time_remaining)
+                logger.warning(f"Email rate limit exceeded for {user.email} (verification email). Please try again in {time_str}.")
+                # Don't send verification email if rate limited
+                return
+
+            # Create email content using template
             subject = (
                 f"Verify your email - {user.tenant.name if user.tenant else 'HRMS'}"
             )
 
-            message = f"""
-Welcome to {user.tenant.name if user.tenant else 'HRMS'} - HR Management System
-
-Hello {user.first_name} {user.last_name},
-
-Thank you for signing up! To complete your registration and access your account, please verify your email address by clicking the link below:
-
-{verification_url}
-
-This verification link will expire in {EmailVerification.EXPIRY_HOURS} hours.
-
-If you didn't create an account with {user.tenant.name if user.tenant else 'HRMS'}, please ignore this email.
-
-Best regards,
-The {user.tenant.name if user.tenant else 'HRMS'} Team
-            """
+            html_message = render_email_verification_email(user, verification_url, EmailVerification.EXPIRY_HOURS)
+            text_message = strip_tags(html_message).strip()
 
             # Send email using the same method as existing email service
-            send_email_via_zeptomail(
+            success = send_email_via_zeptomail(
                 to_email=user.email,
                 subject=subject,
-                text_body=message
+                html_body=html_message,
+                text_body=text_message,
+                from_name="SniperThink"
             )
 
-            logger.info(f"Verification email sent to {user.email}")
+            if success:
+                record_email_sent(user.email)
+                logger.info(f"Verification email sent to {user.email}")
+            else:
+                logger.error(f"Failed to send verification email to {user.email}")
 
         except Exception as e:
             logger.error(f"Failed to send verification email to {user.email}: {e}")
@@ -970,13 +1144,6 @@ class PublicTenantLoginView(APIView):
                 status=status.HTTP_401_UNAUTHORIZED,
             )
 
-        # Check if user is active
-        if not user.is_active:
-            return Response(
-                {"error": "Account is deactivated. Please contact support."},
-                status=status.HTTP_401_UNAUTHORIZED,
-            )
-
         # Check if user has a tenant assigned
         if not user.tenant:
             return Response(
@@ -997,20 +1164,139 @@ class PublicTenantLoginView(APIView):
                 status=status.HTTP_401_UNAUTHORIZED,
             )
 
-        # Check if tenant is active
-        if not user.tenant.is_active:
+        # Check if tenant is soft-deleted and handle recovery
+        tenant = user.tenant
+        account_recovered = False
+        confirm_recovery = request.data.get("confirm_recovery", False)
+        
+        if tenant and tenant.deactivated_at:
+            # Check if tenant can be recovered (within 30 days)
+            if tenant.can_recover(recovery_period_days=30):
+                # Only admin users can reactivate accounts
+                if user.role != 'admin':
+                    days_remaining = tenant.get_recovery_days_remaining(recovery_period_days=30)
+                    return Response(
+                        {
+                            "error": "Only administrators can reactivate this account. Please contact your administrator to reactivate the account.",
+                            "account_deactivated": True,
+                            "requires_admin": True,
+                            "recovery_info": {
+                                "can_recover": True,
+                                "recovery_period_days": 30,
+                                "days_remaining": days_remaining,
+                                "message": f"Only administrators can reactivate this account. Your account has {days_remaining} day(s) remaining in the recovery period. Please contact your administrator."
+                            }
+                        },
+                        status=status.HTTP_403_FORBIDDEN,
+                    )
+                
+                # Check if user has confirmed recovery
+                if not confirm_recovery:
+                    # Return response asking for confirmation
+                    days_remaining = tenant.get_recovery_days_remaining(recovery_period_days=30)
+                    from django.utils import timezone
+                    from datetime import timedelta
+                    recovery_deadline = tenant.deactivated_at + timedelta(days=30)
+                    
+                    return Response(
+                        {
+                            "message": "Account recovery confirmation required",
+                            "requires_recovery_confirmation": True,
+                            "recovery_info": {
+                                "can_recover": True,
+                                "recovery_period_days": 30,
+                                "days_remaining": days_remaining,
+                                "recovery_deadline": recovery_deadline.isoformat(),
+                                "recovery_message": f"Your account was deactivated. You have {days_remaining} day(s) remaining to recover it. Would you like to reactivate your account now?",
+                                "tenant_name": tenant.name
+                            },
+                            "user": {
+                                "id": user.id,
+                                "email": user.email,
+                                "name": f"{user.first_name} {user.last_name}".strip() or user.email,
+                                "first_name": user.first_name or "",
+                                "last_name": user.last_name or "",
+                            }
+                        },
+                        status=status.HTTP_200_OK,
+                    )
+                
+                # User confirmed recovery - proceed with recovery
+                tenant.recover()
+                # Refresh tenant from database to get updated state
+                tenant.refresh_from_db()
+                # Refresh user from database to get updated is_active status
+                user.refresh_from_db()
+                account_recovered = True
+                logger.info(
+                    f"Tenant {tenant.name} (ID: {tenant.id}) recovered after confirmation "
+                    f"during public login by admin user {user.email}"
+                )
+            else:
+                # Recovery period expired
+                days_remaining = tenant.get_recovery_days_remaining(recovery_period_days=30)
+                return Response(
+                    {
+                        "error": "Your account has been permanently deleted. The 30-day recovery period has expired.",
+                        "recovery_expired": True,
+                        "recovery_info": {
+                            "can_recover": False,
+                            "days_remaining": 0,
+                            "message": "The 30-day recovery period has expired. Please contact support for assistance."
+                        }
+                    },
+                    status=status.HTTP_403_FORBIDDEN,
+                )
+
+        # Check if tenant is active (but not soft-deleted - soft-deleted is handled above)
+        if not tenant.is_active and not tenant.deactivated_at:
             return Response(
                 {"error": "Company account is suspended. Please contact support."},
                 status=status.HTTP_401_UNAUTHORIZED,
             )
+        
+        # If tenant is inactive due to soft delete, show recovery info
+        if not tenant.is_active and tenant.deactivated_at:
+            days_remaining = tenant.get_recovery_days_remaining(recovery_period_days=30)
+            if days_remaining and days_remaining > 0:
+                from django.utils import timezone
+                from datetime import timedelta
+                recovery_deadline = tenant.deactivated_at + timedelta(days=30)
+                return Response(
+                    {
+                        "error": f"Your account has been deactivated. You have {days_remaining} day(s) remaining to recover it.",
+                        "account_deactivated": True,
+                        "recovery_info": {
+                            "can_recover": True,
+                            "recovery_period_days": 30,
+                            "days_remaining": days_remaining,
+                            "recovery_deadline": recovery_deadline.isoformat(),
+                            "recovery_message": f"Simply log in within {days_remaining} day(s) to automatically recover your account. After 30 days, the account will be permanently deleted."
+                        }
+                    },
+                    status=status.HTTP_403_FORBIDDEN,
+                )
+            else:
+                return Response(
+                    {
+                        "error": "Your account has been permanently deleted. The 30-day recovery period has expired.",
+                        "recovery_expired": True,
+                        "recovery_info": {
+                            "can_recover": False,
+                            "days_remaining": 0,
+                            "message": "Please contact support for assistance."
+                        }
+                    },
+                    status=status.HTTP_403_FORBIDDEN,
+            )
 
         # Check if tenant has credits
-        if user.tenant.credits <= 0:
+        if tenant.credits <= 0:
             return Response(
                 {
                     "error": "Company account has no credits. Please contact support to add credits to your account.",
                     "no_credits": True,
-                    "credits": user.tenant.credits,
+                    "credits": tenant.credits,
                 },
                 status=status.HTTP_403_FORBIDDEN,
             )
@@ -1064,8 +1350,7 @@ class PublicTenantLoginView(APIView):
         # Generate JWT tokens
         refresh = RefreshToken.for_user(user)
 
-        return Response(
-            {
+        response_data = {
                 "message": "Login successful",
                 "access": str(refresh.access_token),
                 "refresh": str(refresh),
@@ -1073,7 +1358,9 @@ class PublicTenantLoginView(APIView):
                 "user": {
                     "id": user.id,
                     "email": user.email,
-                    "name": f"{user.first_name} {user.last_name}".strip(),
+                "name": f"{user.first_name} {user.last_name}".strip() or user.email,
+                "first_name": user.first_name or "",
+                "last_name": user.last_name or "",
                     "role": user.role,
                 },
                 "tenant": {
@@ -1081,9 +1368,14 @@ class PublicTenantLoginView(APIView):
                     "name": user.tenant.name,
                     "subdomain": user.tenant.subdomain,
                 },
-            },
-            status=status.HTTP_200_OK,
-        )
+        }
+        
+        # Add recovery message if account was just recovered
+        if account_recovered:
+            response_data["account_recovered"] = True
+            response_data["recovery_message"] = "Your account has been successfully recovered! Welcome back."
+        
+        return Response(response_data, status=status.HTTP_200_OK)
 
 
 class UserInvitationViewSet(viewsets.ModelViewSet):
@@ -1194,36 +1486,40 @@ class UserInvitationViewSet(viewsets.ModelViewSet):
             # SECURITY: Never return password in API response - only send via email
             try:
                 from ..services.zeptomail_service import send_email_via_zeptomail
+                from ..services.email_templates import render_invitation_email
+                from django.utils.html import strip_tags
                 from django.conf import settings
                 frontend_url = getattr(settings, 'FRONTEND_URL', 'http://localhost:5173')
                 
-                subject = f"Welcome to {request.user.tenant.name} - Your Account Details"
-                message = f"""
-Dear {data['first_name']} {data['last_name']},
-
-You have been invited to join {request.user.tenant.name}'s HR management system.
-
-Your login credentials are:
-Email: {data['email']}
-Temporary Password: {temp_password}
-
-IMPORTANT: You will be required to change your password when you first log in.
-
-Please log in at: {frontend_url}/login
-
-If you have any questions, please contact your administrator.
-
-Best regards,
-{request.user.first_name} {request.user.last_name}
-{request.user.tenant.name}
-                """.strip()
-                
-                send_email_via_zeptomail(
-                    to_email=data['email'],
-                    subject=subject,
-                    text_body=message
-                )
-                email_sent = True
+                # Check rate limit
+                from ..services.email_rate_limiter import can_send_email, record_email_sent, format_time_remaining
+                can_send, time_remaining = can_send_email(data['email'])
+                if not can_send:
+                    time_str = format_time_remaining(time_remaining)
+                    logger.warning(f"Email rate limit exceeded for {data['email']} (invitation email). Please try again in {time_str}.")
+                    email_sent = False
+                else:
+                    subject = f"Welcome to {request.user.tenant.name} - Your Account Details"
+                    inviter_name = f"{request.user.first_name} {request.user.last_name}"
+                    
+                    html_message = render_invitation_email(
+                        user, inviter_name, request.user.tenant.name, temp_password, frontend_url
+                    )
+                    text_message = strip_tags(html_message).strip()
+                    
+                    success = send_email_via_zeptomail(
+                        to_email=data['email'],
+                        subject=subject,
+                        html_body=html_message,
+                        text_body=text_message,
+                        from_name="SniperThink"
+                    )
+                    
+                    if success:
+                        record_email_sent(data['email'])
+                        email_sent = True
+                    else:
+                        email_sent = False
             except Exception as email_error:
                 logger.error(f"Failed to send invitation email: {email_error}")
                 email_sent = False
@@ -1394,57 +1690,41 @@ class EnhancedInvitationView(APIView):
                 subject = (
                     f"Welcome to {request.user.tenant.name} - Your Account Details"
                 )
-
-                message = f"""
-
-Dear {data['first_name']} {data['last_name']},
-
-
-
-You have been invited to join {request.user.tenant.name}'s HR management system.
-
-
-
-Your login credentials are:
-
-Email: {email}
-
-Temporary Password: {temp_password}
-
-
-
-IMPORTANT: You will be required to change your password when you first log in.
-
-
-
-Please log in at: {frontend_url}/login
-
-
-
-If you have any questions, please contact your administrator.
-
-
-
-Best regards,
-
-{request.user.first_name} {request.user.last_name}
-
-{request.user.tenant.name}
-
-                """.strip()
+                inviter_name = f"{request.user.first_name} {request.user.last_name}"
 
                 try:
+                    from ..services.email_templates import render_invitation_email
+                    from ..services.email_rate_limiter import can_send_email, record_email_sent, format_time_remaining
+                    from django.utils.html import strip_tags
+                    
+                    # Check rate limit
+                    can_send, time_remaining = can_send_email(email)
+                    if not can_send:
+                        time_str = format_time_remaining(time_remaining)
+                        logger.warning(f"Email rate limit exceeded for {email} (invitation email). Please try again in {time_str}.")
+                        email_sent = False
+                    else:
+                        html_message = render_invitation_email(
+                            user, inviter_name, request.user.tenant.name, temp_password, frontend_url
+                        )
+                        text_message = strip_tags(html_message).strip()
 
-                    send_email_via_zeptomail(
-                        to_email=email,
-                        subject=subject,
-                        text_body=message
-                    )
+                        success = send_email_via_zeptomail(
+                            to_email=email,
+                            subject=subject,
+                            html_body=html_message,
+                            text_body=text_message,
+                            from_name="SniperThink"
+                        )
 
-                    email_sent = True
+                        if success:
+                            record_email_sent(email)
+                            email_sent = True
+                        else:
+                            email_sent = False
 
                 except Exception as email_error:
-
+                    logger.error(f"Failed to send invitation email: {email_error}")
                     email_sent = False
 
                 if email_sent:
@@ -1674,10 +1954,9 @@ class RequestPasswordResetView(APIView):
 
             # Send OTP email
 
-            email_sent = send_password_reset_otp(email, otp_code)
+            result = send_password_reset_otp(email, otp_code)
 
-            if email_sent:
-
+            if result.get('success'):
                 return Response(
                     {
                         "message": f"OTP code has been sent to your email. It will expire in {settings.OTP_EXPIRY_MINUTES} minutes."
@@ -1685,10 +1964,20 @@ class RequestPasswordResetView(APIView):
                     status=status.HTTP_200_OK,
                 )
 
+            elif result.get('rate_limited'):
+                # Clean up OTP if email failed due to rate limit
+                otp_record.delete()
+                
+                time_str = result.get('time_remaining_formatted', 'some time')
+                return Response(
+                    {
+                        "error": f"Too many email requests. Please try again in {time_str}.",
+                    },
+                    status=status.HTTP_429_TOO_MANY_REQUESTS,
+                )
+
             else:
-
                 # Clean up OTP if email failed
-
                 otp_record.delete()
 
                 return Response(
@@ -2101,22 +2390,77 @@ class DeleteAccountView(APIView):
                     status=status.HTTP_403_FORBIDDEN,
                 )
 
+            # Prevent HR managers from deleting their accounts
+            # Check role in multiple ways to handle different formats
+            user_role = getattr(user, 'role', None)
+            
+            # Log the role for debugging (remove in production if needed)
+            import logging
+            logger = logging.getLogger(__name__)
+            logger.warning(f"DeleteAccountView - User {user.email} attempting to delete account. Role: {user_role}, Role type: {type(user_role)}")
+            
+            # Check if user is HR Manager (handle various formats)
+            is_hr_manager = False
+            if user_role:
+                role_str = str(user_role).strip().lower().replace('-', '_')
+                is_hr_manager = role_str == 'hr_manager'
+            
+            if is_hr_manager:
+                logger.warning(f"DeleteAccountView - Blocked HR Manager {user.email} from deleting account")
+                return Response(
+                    {
+                        "error": "HR Manager accounts cannot be deleted. Please contact your administrator."
+                    },
+                    status=status.HTTP_403_FORBIDDEN,
+                )
+
             # Store user info for logging
             user_email = user.email
             user_id = user.id
+            tenant = user.tenant
             tenant_name = (
-                getattr(user.tenant, "name", "Unknown")
-                if hasattr(user, "tenant") and user.tenant
+                getattr(tenant, "name", "Unknown")
+                if tenant
                 else "Unknown"
             )
 
-            # Log the account deletion
+            # Check if user is an admin - if so, soft delete the tenant instead
+            is_admin = user.role == 'admin' if hasattr(user, 'role') else False
+            
+            if is_admin and tenant:
+                # Soft delete the tenant (deactivate with 30-day recovery period)
+                tenant.soft_delete()
+                
+                logger.info(
+                    f"Admin account deletion - Tenant {tenant_name} (ID: {tenant.id}) "
+                    f"soft deleted by admin {user_email}. Recovery period: 30 days."
+                )
+                
+                from django.utils import timezone
+                from datetime import timedelta
+                
+                recovery_deadline = tenant.deactivated_at + timedelta(days=30)
+                days_remaining = max(0, (recovery_deadline - timezone.now()).days)
+                
+                return Response(
+                    {
+                        "message": f"Your account and organization ({tenant_name}) have been deactivated.",
+                        "recovery_info": {
+                            "can_recover": True,
+                            "recovery_period_days": 30,
+                            "days_remaining": days_remaining,
+                            "recovery_deadline": recovery_deadline.isoformat(),
+                            "recovery_message": f"You have {days_remaining} day(s) remaining to recover your account. Simply log in within 30 days to reactivate your account automatically. After 30 days, the account will be permanently deleted."
+                        }
+                    },
+                    status=status.HTTP_200_OK,
+                )
+            else:
+                # For non-admin users, delete the user account
+                # This will cascade delete related data based on model relationships
+                user.delete()
 
-            # Delete the user account
-            # This will cascade delete related data based on model relationships
-            user.delete()
-
-            # Log successful deletion
+                logger.info(f"User account {user_email} permanently deleted")
 
             return Response(
                 {

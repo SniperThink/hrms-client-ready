@@ -71,6 +71,43 @@ class TenantViewSet(viewsets.ModelViewSet):
     queryset = Tenant.objects.all()
     serializer_class = TenantSerializer
     permission_classes = [IsSuperUser]
+    
+    def destroy(self, request, *args, **kwargs):
+        """
+        Soft delete tenant instead of hard delete
+        Tenant can be recovered within 30 days by logging in
+        """
+        instance = self.get_object()
+        tenant_name = instance.name
+        tenant_id = instance.id
+        
+        # Soft delete the tenant (deactivate with 30-day recovery period)
+        instance.soft_delete()
+        
+        logger.info(
+            f"Tenant {tenant_name} (ID: {tenant_id}) soft deleted by superuser {request.user.email}. "
+            f"Recovery period: 30 days."
+        )
+        
+        from django.utils import timezone
+        from datetime import timedelta
+        
+        recovery_deadline = instance.deactivated_at + timedelta(days=30)
+        days_remaining = max(0, (recovery_deadline - timezone.now()).days)
+        
+        return Response(
+            {
+                "message": f"Tenant {tenant_name} has been deactivated.",
+                "recovery_info": {
+                    "can_recover": True,
+                    "recovery_period_days": 30,
+                    "days_remaining": days_remaining,
+                    "recovery_deadline": recovery_deadline.isoformat(),
+                    "recovery_message": f"The tenant can be recovered by logging in within 30 days. {days_remaining} day(s) remaining. After 30 days, the account will be permanently deleted."
+                }
+            },
+            status=status.HTTP_200_OK,
+        )
 
 
 class UploadSalaryDataAPIView(APIView):

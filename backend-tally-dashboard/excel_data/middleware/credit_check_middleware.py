@@ -75,6 +75,7 @@ class CreditEnforcementMiddleware(MiddlewareMixin):
     
     This provides an extra layer of protection by checking credits before
     allowing access to tenant-specific resources.
+    Also checks for expired accounts that should be permanently deleted.
     """
     
     # URLs that don't require credit checks
@@ -89,9 +90,13 @@ class CreditEnforcementMiddleware(MiddlewareMixin):
         '/media/',
     ]
     
+    CACHE_PREFIX = 'deletion_checked_'
+    CACHE_TIMEOUT = 300  # 5 minutes - just to prevent excessive checks
+    
     def process_request(self, request):
         """
         Check if the current path requires credit enforcement.
+        Also check for expired accounts that should be permanently deleted.
         """
         try:
             # Check if path is exempt
@@ -108,6 +113,30 @@ class CreditEnforcementMiddleware(MiddlewareMixin):
                 return None
             
             tenant = request.user.tenant
+            
+            # Check for expired accounts that should be permanently deleted
+            # Use cache to prevent excessive checks
+            cache_key = f"{self.CACHE_PREFIX}{tenant.id}"
+            recently_checked = cache.get(cache_key)
+            
+            if not recently_checked and tenant.deactivated_at:
+                # Check if account should be permanently deleted
+                if tenant.should_permanently_delete():
+                    try:
+                        # Permanently delete the expired account
+                        tenant.permanently_delete()
+                        logger.warning(
+                            f"🗑️ [Middleware] Permanently deleted expired account "
+                            f"'{tenant.name}' (ID: {tenant.id}) during request"
+                        )
+                    except Exception as e:
+                        logger.error(
+                            f"Error permanently deleting tenant {tenant.id} in middleware: {str(e)}",
+                            exc_info=True
+                        )
+                else:
+                    # Mark as checked in cache (only if not expired)
+                    cache.set(cache_key, True, self.CACHE_TIMEOUT)
             
             # Log warning if credits are low
             if tenant.credits <= 5 and tenant.credits > 0:

@@ -30,16 +30,22 @@ export async function signupCompany(data: {
 export async function login(
   email: string,
   password: string,
-  keepSignedIn: boolean = false
+  keepSignedIn: boolean = false,
+  confirmRecovery: boolean = false
 ): Promise<AuthResponse> {
   const res = await fetch(`${API_BASE}/public/login/`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ email, password }),
+    body: JSON.stringify({ email, password, confirm_recovery: confirmRecovery }),
   });
+  
+  const data = await res.json();
+  
   if (!res.ok) {
-    const errorData = await res.json();
-    throw new Error(errorData.error || "Login failed");
+    // For error responses, create an error with the full response data for better error handling
+    const error = new Error(data.error || "Login failed");
+    (error as any).responseData = data;
+    throw error;
   }
 
   // Store the "keep signed in" preference
@@ -49,7 +55,7 @@ export async function login(
     localStorage.removeItem("keepSignedIn");
   }
 
-  return res.json();
+  return data;
 }
 
 // Add team member to existing tenant

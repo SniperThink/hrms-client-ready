@@ -14,10 +14,14 @@ class ExcelDataConfig(AppConfig):
         # Start credit scheduler (only in main process, not in reloader)
         # Check if we're in the main process (not the reloader process)
         if os.environ.get('RUN_MAIN') != 'true' and not settings.DEBUG:
-            # Production mode - start scheduler
+            # Production mode - start schedulers
             from excel_data.credit_scheduler import start_credit_scheduler
+            from excel_data.account_deletion_scheduler import start_account_deletion_scheduler
             start_credit_scheduler()
+            start_account_deletion_scheduler()
         elif os.environ.get('RUN_MAIN') == 'true' and settings.DEBUG:
             # Development mode with reloader - start in reloaded process
             from excel_data.credit_scheduler import start_credit_scheduler
+            from excel_data.account_deletion_scheduler import start_account_deletion_scheduler
             start_credit_scheduler()
+            start_account_deletion_scheduler()

@@ -2,8 +2,17 @@ import random
 import string
 from django.conf import settings
 from django.utils import timezone
+from django.utils.html import strip_tags
 import logging
 from .zeptomail_service import send_email_via_zeptomail
+from .email_templates import (
+    render_deletion_warning_email,
+    render_welcome_email,
+    render_password_reset_email,
+    render_email_verification_email,
+    render_account_recovery_email,
+)
+from .email_rate_limiter import can_send_email, record_email_sent, format_time_remaining
 
 logger = logging.getLogger(__name__)
 
@@ -14,102 +23,87 @@ def generate_otp(length=6):
 
 
 def send_password_reset_otp(email, otp_code):
-    """Send OTP code for password reset"""
+    """
+    Send OTP code for password reset
+    
+    Returns:
+        dict: {
+            'success': bool,
+            'rate_limited': bool (optional),
+            'time_remaining': int (optional, seconds),
+            'time_remaining_formatted': str (optional, human-readable)
+        }
+    """
     try:
-        subject = "Password Reset OTP - HRMS"
+        # Check rate limit
+        can_send, time_remaining = can_send_email(email)
+        if not can_send:
+            time_str = format_time_remaining(time_remaining)
+            logger.warning(f"Email rate limit exceeded for {email}. Please try again in {time_str}.")
+            return {
+                'success': False,
+                'rate_limited': True,
+                'time_remaining': time_remaining,
+                'time_remaining_formatted': time_str
+            }
         
-        text_message = f"""
-Password Reset OTP - HR Management System
-
-Hello,
-
-You requested to reset your password for the HR Management System.
-
-Your OTP Code: {otp_code}
-
-This OTP code will expire in {getattr(settings, 'PASSWORD_RESET_EXPIRE_MINUTES', 30)} minutes.
-
-If you did not request this password reset, please ignore this email.
-
-Best regards,
-The SniperThink Team
-        """
+        subject = "Password Reset OTP - SniperThink HRMS"
+        frontend_url = getattr(settings, 'FRONTEND_URL', 'http://35.154.9.249')
+        expire_minutes = getattr(settings, 'PASSWORD_RESET_EXPIRE_MINUTES', 30)
         
-        html_message = f"""
-<html>
-<body>
-    <h2>Password Reset OTP - HR Management System</h2>
-    <p>Hello,</p>
-    <p>You requested to reset your password for the HR Management System.</p>
-    <p><strong>Your OTP Code: {otp_code}</strong></p>
-    <p>This OTP code will expire in {getattr(settings, 'PASSWORD_RESET_EXPIRE_MINUTES', 30)} minutes.</p>
-    <p>If you did not request this password reset, please ignore this email.</p>
-    <p>Best regards,<br>The SniperThink Team</p>
-</body>
-</html>
-        """
+        html_message = render_password_reset_email(email, otp_code, expire_minutes, frontend_url)
+        text_message = strip_tags(html_message).strip()
         
         success = send_email_via_zeptomail(
             to_email=email,
             subject=subject,
             html_body=html_message,
-            text_body=text_message
+            text_body=text_message,
+            from_name="SniperThink"
         )
         
         if success:
+            record_email_sent(email)
             logger.info(f"Password reset OTP sent successfully to {email}")
-            return True
+            return {'success': True}
         else:
             logger.error(f"Failed to send password reset OTP to {email}")
-            return False
+            return {'success': False}
         
     except Exception as e:
         logger.error(f"Failed to send password reset OTP to {email}: {str(e)}")
-        return False
+        return {'success': False}
 
 
 def send_welcome_email(user):
     """Send welcome email after successful registration"""
     try:
+        # Check rate limit
+        can_send, time_remaining = can_send_email(user.email)
+        if not can_send:
+            time_str = format_time_remaining(time_remaining)
+            logger.warning(f"Email rate limit exceeded for {user.email}. Welcome email skipped. Please try again in {time_str}.")
+            # For welcome emails, we still want to send them even if rate limited
+            # but we'll log it as a warning
+            # Uncomment the return False line below to strictly enforce rate limiting
+            # return False
+        
         subject = f"Welcome to SniperThink - HRMS"
         frontend_url = getattr(settings, 'FRONTEND_URL', 'http://35.154.9.249')
         
-        text_message = f"""
-Welcome to {user.tenant.name} - HR Management System
-
-Hello {user.first_name} {user.last_name},
-
-Your account has been successfully created!
-
-You can login at: {frontend_url}/login
-
-Thank you for joining SniperThink!
-
-Best regards,
-The SniperThink Team
-        """
-        
-        html_message = f"""
-<html>
-<body>
-    <h2>Welcome to {user.tenant.name} - HR Management System</h2>
-    <p>Hello {user.first_name} {user.last_name},</p>
-    <p>Your account has been successfully created!</p>
-    <p>You can login at: <a href="{frontend_url}/login">{frontend_url}/login</a></p>
-    <p>Thank you for joining SniperThink!</p>
-    <p>Best regards,<br>The SniperThink Team</p>
-</body>
-</html>
-        """
+        html_message = render_welcome_email(user, frontend_url)
+        text_message = strip_tags(html_message).strip()
         
         success = send_email_via_zeptomail(
             to_email=user.email,
             subject=subject,
             html_body=html_message,
-            text_body=text_message
+            text_body=text_message,
+            from_name="SniperThink"
         )
         
         if success:
+            record_email_sent(user.email)
             logger.info(f"Welcome email sent successfully to {user.email}")
             return True
         else:
@@ -118,6 +112,64 @@ The SniperThink Team
         
     except Exception as e:
         logger.error(f"Failed to send welcome email to {user.email}: {str(e)}")
+        return False
+
+
+def send_deletion_warning_email(tenant):
+    """Send warning email to admin users 3 days before account permanent deletion"""
+    try:
+        from ..models.auth import CustomUser
+        from datetime import timedelta
+        
+        # Get all admin users for this tenant
+        admin_users = CustomUser.objects.filter(tenant=tenant, role='admin', email_verified=True)
+        
+        if not admin_users.exists():
+            logger.warning(f"No admin users found for tenant {tenant.name} to send deletion warning email")
+            return False
+        
+        # Calculate days remaining
+        recovery_deadline = tenant.deactivated_at + timedelta(days=30)
+        days_remaining = max(0, (recovery_deadline - timezone.now()).days)
+        
+        frontend_url = getattr(settings, 'FRONTEND_URL', 'http://35.154.9.249')
+        
+        # Send email to all admin users
+        email_sent = False
+        for admin_user in admin_users:
+            # Check rate limit - but deletion warnings are critical, so we'll still send them
+            # but log if rate limited
+            can_send, time_remaining = can_send_email(admin_user.email)
+            if not can_send:
+                time_str = format_time_remaining(time_remaining)
+                logger.warning(f"Email rate limit exceeded for {admin_user.email} (deletion warning). Email will still be sent due to critical nature.")
+            
+            subject = f"⚠️ Important: Your HRMS Account Will Be Deleted in 3 Days - {tenant.name}"
+            
+            html_message = render_deletion_warning_email(
+                admin_user, tenant, days_remaining, recovery_deadline, frontend_url
+            )
+            text_message = strip_tags(html_message).strip()
+            
+            success = send_email_via_zeptomail(
+                to_email=admin_user.email,
+                subject=subject,
+                html_body=html_message,
+                text_body=text_message,
+                from_name="SniperThink"
+            )
+            
+            if success:
+                record_email_sent(admin_user.email)
+                email_sent = True
+                logger.info(f"Deletion warning email sent to admin user {admin_user.email} for tenant {tenant.name}")
+            else:
+                logger.error(f"Failed to send deletion warning email to {admin_user.email} for tenant {tenant.name}")
+        
+        return email_sent
+        
+    except Exception as e:
+        logger.error(f"Failed to send deletion warning email for tenant {tenant.name}: {str(e)}", exc_info=True)
         return False
 
 

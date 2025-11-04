@@ -29,6 +29,8 @@ class Tenant(models.Model):
     credits = models.PositiveIntegerField(default=0, help_text="Available credits for this tenant")
     is_active = models.BooleanField(default=True, help_text="Whether the tenant is active (has credits > 0 and is not manually deactivated)")
     last_credit_deducted = models.DateField(null=True, blank=True, help_text="Date when the last credit was deducted (IST)")
+    deactivated_at = models.DateTimeField(null=True, blank=True, help_text="Timestamp when tenant was deactivated (for soft delete with recovery period)")
+    deletion_warning_email_sent = models.BooleanField(default=False, help_text="Whether deletion warning email has been sent (3 days before permanent deletion)")
     
     # Billing information (for future use)
     plan = models.CharField(max_length=50, default='free', choices=[
@@ -138,14 +140,109 @@ class Tenant(models.Model):
             # Reactivate tenant if credits were added to a deactivated account
             if was_inactive and tenant.credits > 0:
                 tenant.is_active = True
+                tenant.deactivated_at = None  # Clear deactivation timestamp
+                tenant.deletion_warning_email_sent = False  # Reset warning email flag
                 from excel_data.models.auth import CustomUser
                 # Reactivate all users for this tenant
                 CustomUser.objects.filter(tenant=tenant).update(is_active=True)
                 logger.info(f"Tenant {tenant.name} reactivated with {amount} credits")
-            
-            tenant.save(update_fields=['credits', 'is_active'])
+                tenant.save(update_fields=['credits', 'is_active', 'deactivated_at', 'deletion_warning_email_sent'])
+            else:
+                tenant.save(update_fields=['credits', 'is_active', 'deactivated_at'])
             logger.info(f"Added {amount} credits to tenant {tenant.name}. Total: {tenant.credits}")
             return True
+    
+    def soft_delete(self):
+        """Soft delete tenant by marking as inactive and setting deactivation timestamp"""
+        from excel_data.models.auth import CustomUser
+        from django.utils import timezone
+        
+        self.is_active = False
+        self.deactivated_at = timezone.now()
+        self.save(update_fields=['is_active', 'deactivated_at'])
+        
+        # Deactivate all users for this tenant
+        CustomUser.objects.filter(tenant=self).update(is_active=False)
+        logger.info(f"Tenant {self.name} (ID: {self.id}) soft deleted (deactivated)")
+    
+    def can_recover(self, recovery_period_days=30):
+        """Check if tenant can be recovered within the recovery period"""
+        if not self.deactivated_at:
+            return False
+        
+        from django.utils import timezone
+        from datetime import timedelta
+        
+        recovery_deadline = self.deactivated_at + timedelta(days=recovery_period_days)
+        return timezone.now() <= recovery_deadline
+    
+    def get_recovery_days_remaining(self, recovery_period_days=30):
+        """Get the number of days remaining for recovery"""
+        if not self.deactivated_at:
+            return None
+        
+        from django.utils import timezone
+        from datetime import timedelta
+        
+        recovery_deadline = self.deactivated_at + timedelta(days=recovery_period_days)
+        now = timezone.now()
+        
+        if now > recovery_deadline:
+            return 0
+        
+        days_remaining = (recovery_deadline - now).days
+        return max(0, days_remaining)
+    
+    def recover(self):
+        """Recover tenant by reactivating it and clearing deactivation timestamp"""
+        from excel_data.models.auth import CustomUser
+        
+        self.is_active = True
+        self.deactivated_at = None
+        self.deletion_warning_email_sent = False  # Reset warning email flag
+        self.save(update_fields=['is_active', 'deactivated_at', 'deletion_warning_email_sent'])
+        
+        # Reactivate all users for this tenant
+        CustomUser.objects.filter(tenant=self).update(is_active=True)
+        logger.info(f"Tenant {self.name} (ID: {self.id}) recovered from soft delete")
+    
+    def should_permanently_delete(self, recovery_period_days=30):
+        """Check if tenant should be permanently deleted (recovery period expired)"""
+        if not self.deactivated_at:
+            return False
+        
+        from django.utils import timezone
+        from datetime import timedelta
+        
+        recovery_deadline = self.deactivated_at + timedelta(days=recovery_period_days)
+        return timezone.now() > recovery_deadline
+    
+    def permanently_delete(self):
+        """Permanently delete tenant and all related data"""
+        from excel_data.models.auth import CustomUser
+        
+        tenant_name = self.name
+        tenant_id = self.id
+        
+        # Log before deletion
+        logger.warning(
+            f"🗑️ Permanently deleting tenant '{tenant_name}' (ID: {tenant_id}) - "
+            f"Recovery period expired. Deactivated at: {self.deactivated_at}"
+        )
+        
+        # Delete all users first (due to foreign key constraints)
+        user_count = CustomUser.objects.filter(tenant=self).count()
+        CustomUser.objects.filter(tenant=self).delete()
+        
+        # Delete the tenant (this will cascade delete related data due to CASCADE on_delete)
+        self.delete()
+        
+        logger.warning(
+            f"✅ Permanently deleted tenant '{tenant_name}' (ID: {tenant_id}) "
+            f"and {user_count} associated user(s)"
+        )
+        
+        return True
 
 
 class TenantAwareManager(models.Manager):

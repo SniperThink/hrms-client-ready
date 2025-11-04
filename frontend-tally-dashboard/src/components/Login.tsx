@@ -3,6 +3,8 @@ import { useNavigate, useLocation } from 'react-router-dom';
 import { login } from '../services/authService';
 import { CheckCircle, Eye, EyeOff } from 'lucide-react';
 import { logger } from '../utils/logger';
+import AccountRecoveryWelcomeModal from './AccountRecoveryWelcomeModal';
+import AccountRecoveryConfirmationModal from './AccountRecoveryConfirmationModal';
 
 const Login: React.FC = () => {
   const navigate = useNavigate();
@@ -14,6 +16,15 @@ const Login: React.FC = () => {
   const [loading, setLoading] = useState(false);
   const [successMessage, setSuccessMessage] = useState('');
   const [keepSignedIn, setKeepSignedIn] = useState(false);
+  const [showRecoveryModal, setShowRecoveryModal] = useState(false);
+  const [showRecoveryConfirmationModal, setShowRecoveryConfirmationModal] = useState(false);
+  const [recoveryData, setRecoveryData] = useState<{ 
+    tenantName?: string; 
+    userName?: string;
+    daysRemaining?: number;
+    recoveryDeadline?: string;
+  } | null>(null);
+  const [recoveryConfirmationLoading, setRecoveryConfirmationLoading] = useState(false);
 
   useEffect(() => {
     // Check for success message from navigation state
@@ -35,6 +46,26 @@ const Login: React.FC = () => {
     
     try {
       const response = await login(email, password, keepSignedIn);
+      
+      // Check if recovery confirmation is required FIRST (before any other checks)
+      // This response won't have access/refresh tokens, so we need to handle it before checking for tokens
+      if (response.requires_recovery_confirmation === true) {
+        // Show confirmation modal
+        const userName = response.user?.name || 
+                        `${response.user?.first_name || ''} ${response.user?.last_name || ''}`.trim() || 
+                        response.user?.email || 'there';
+        const tenantName = response.recovery_info?.tenant_name || 'your organization';
+        
+        setRecoveryData({
+          userName,
+          tenantName,
+          daysRemaining: response.recovery_info?.days_remaining,
+          recoveryDeadline: response.recovery_info?.recovery_deadline
+        });
+        setShowRecoveryConfirmationModal(true);
+        setLoading(false);
+        return;
+      }
       
       // Check if user must change password
       if (response.must_change_password) {
@@ -66,14 +97,48 @@ const Login: React.FC = () => {
           logger.info( `Welcome to ${response.tenant.name}! Access URL: ${response.tenant.access_url}`);
         }
         
-        // Navigate to HR management dashboard
-        navigate('/hr-management');
+        // Check if account was recovered - show welcome modal
+        if (response.account_recovered) {
+          const userName = response.user?.name || 
+                          `${response.user?.first_name || ''} ${response.user?.last_name || ''}`.trim() || 
+                          response.user?.email || 'there';
+          const tenantName = response.tenant?.name || 'your organization';
+          
+          setRecoveryData({
+            userName,
+            tenantName
+          });
+          setShowRecoveryModal(true);
+          // Don't navigate yet - wait for modal to be closed
+        } else {
+          // Navigate to HR management dashboard
+          navigate('/hr-management');
+        }
       } else {
         setError('Invalid login response - missing tokens');
       }
     } catch (err: unknown) {
-      const error = err as Error;
-      setError(error.message || 'Login failed');
+      const error = err as Error & { responseData?: any };
+      
+      // Check if error has response data (from authService)
+      if (error.responseData) {
+        if (error.responseData.recovery_expired) {
+          setError(error.responseData.error || 'Your account recovery period has expired.');
+        } else if (error.responseData.requires_admin && error.responseData.account_deactivated) {
+          // Non-admin user trying to log in to deactivated account
+          const daysRemaining = error.responseData.recovery_info?.days_remaining || 0;
+          setError(
+            error.responseData.error || 
+            `Only administrators can reactivate this account. Please contact your administrator. ${daysRemaining > 0 ? `You have ${daysRemaining} day(s) remaining in the recovery period.` : ''}`
+          );
+        } else if (error.responseData.recovery_info) {
+          setError(error.responseData.error || error.message);
+        } else {
+          setError(error.responseData.error || error.message || 'Login failed');
+        }
+      } else {
+        setError(error.message || 'Login failed');
+      }
     } finally {
       setLoading(false);
     }
@@ -211,6 +276,74 @@ const Login: React.FC = () => {
           </form>
         </div>
       </div>
+
+      {/* Account Recovery Confirmation Modal */}
+      <AccountRecoveryConfirmationModal
+        isOpen={showRecoveryConfirmationModal}
+        onClose={() => {
+          setShowRecoveryConfirmationModal(false);
+          setRecoveryData(null);
+        }}
+        onConfirm={async () => {
+          setRecoveryConfirmationLoading(true);
+          try {
+            // Retry login with confirm_recovery flag
+            const response = await login(email, password, keepSignedIn, true);
+            
+            // Store authentication data
+            if (response.access && response.refresh) {
+              localStorage.setItem('access', response.access);
+              localStorage.setItem('refresh', response.refresh);
+              localStorage.setItem('user', JSON.stringify(response.user));
+              
+              if (response.tenant) {
+                localStorage.setItem('tenant', JSON.stringify(response.tenant));
+              }
+              
+              // Close confirmation modal
+              setShowRecoveryConfirmationModal(false);
+              
+              // Show welcome modal since account was recovered
+              if (response.account_recovered) {
+                const userName = response.user?.name || 
+                                `${response.user?.first_name || ''} ${response.user?.last_name || ''}`.trim() || 
+                                response.user?.email || 'there';
+                const tenantName = response.tenant?.name || 'your organization';
+                
+                setRecoveryData({
+                  userName,
+                  tenantName
+                });
+                setShowRecoveryModal(true);
+              } else {
+                navigate('/hr-management');
+              }
+            }
+          } catch (err: unknown) {
+            const error = err as Error;
+            setError(error.message || 'Failed to recover account. Please try again.');
+            setShowRecoveryConfirmationModal(false);
+          } finally {
+            setRecoveryConfirmationLoading(false);
+          }
+        }}
+        tenantName={recoveryData?.tenantName}
+        userName={recoveryData?.userName}
+        daysRemaining={recoveryData?.daysRemaining}
+        recoveryDeadline={recoveryData?.recoveryDeadline}
+        loading={recoveryConfirmationLoading}
+      />
+
+      {/* Account Recovery Welcome Modal */}
+      <AccountRecoveryWelcomeModal
+        isOpen={showRecoveryModal}
+        onClose={() => {
+          setShowRecoveryModal(false);
+          navigate('/hr-management');
+        }}
+        tenantName={recoveryData?.tenantName}
+        userName={recoveryData?.userName}
+      />
     </div>
   );
 };

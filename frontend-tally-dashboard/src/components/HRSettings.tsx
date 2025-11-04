@@ -1,7 +1,8 @@
 import React, { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { apiGet, apiPatch, apiDelete } from '../services/api';
+import { apiGet, apiPatch } from '../services/api';
 import ChangePasswordModal from './ChangePasswordModal';
+import DeleteAccountModal from './DeleteAccountModal';
 import { logger } from '../utils/logger';
 
 const API_ENDPOINTS = {
@@ -17,9 +18,11 @@ const HRSettings: React.FC = () => {
   // Get user info from localStorage
   let user = null;
   let email = '';
+  let userRoleFromStorage = null;
   try {
     user = JSON.parse(localStorage.getItem('user') || '{}');
     email = user?.email || '';
+    userRoleFromStorage = user?.role || null;
   } catch {
     // Ignore parsing errors and use defaults
   }
@@ -30,6 +33,7 @@ const HRSettings: React.FC = () => {
     last_name?: string;
     email?: string;
     is_superuser?: boolean;
+    role?: string;
   } | null>(user);
   const [users, setUsers] = useState<Array<{
     id: number;
@@ -44,6 +48,7 @@ const HRSettings: React.FC = () => {
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
   const [showChangePasswordModal, setShowChangePasswordModal] = useState(false);
+  const [showDeleteAccountModal, setShowDeleteAccountModal] = useState(false);
 
   // Fetch current user info (in case localStorage is stale)
   useEffect(() => {
@@ -57,7 +62,18 @@ const HRSettings: React.FC = () => {
       })
       .then(data => {
         logger.info( 'Current user data:', data);
+        logger.info( 'User role from API:', data?.role);
         setCurrentUser(data);
+        // Update localStorage with role if it's not there
+        if (data?.role) {
+          try {
+            const storedUser = JSON.parse(localStorage.getItem('user') || '{}');
+            storedUser.role = data.role;
+            localStorage.setItem('user', JSON.stringify(storedUser));
+          } catch {
+            // Ignore errors
+          }
+        }
       })
       .catch((err) => {
         logger.error('Error fetching current user:', err);
@@ -99,37 +115,28 @@ const HRSettings: React.FC = () => {
     navigate('/login');
   };
 
-  const handleDeleteAccount = async () => {
-    const confirmed = window.confirm(
-      'Are you sure you want to delete your account? This action cannot be undone and will permanently remove all your data.'
-    );
-    
-    if (!confirmed) return;
+  const handleDeleteAccount = () => {
+    // Check if user is admin (same logic as sidebar)
+    const userIsAdmin = userFromStorage?.role === 'admin' || 
+                        userFromStorage?.is_admin || 
+                        userFromStorage?.is_superuser || 
+                        currentUser?.is_superuser || 
+                        false;
 
-    const doubleConfirmed = window.confirm(
-      'This is your final warning! Deleting your account will permanently remove all your data and cannot be reversed. Type "DELETE" to confirm.'
-    );
-    
-    if (!doubleConfirmed) return;
-
-    try {
-      setLoading(true);
-      const response = await apiDelete(API_ENDPOINTS.deleteAccount);
-      
-      if (response.ok) {
-        alert('Your account has been successfully deleted.');
-        // Clear all local storage and redirect to login
-        localStorage.clear();
-        navigate('/login');
-      } else {
-        const errorData = await response.json();
-        setError(errorData.error || 'Failed to delete account');
-      }
-    } catch {
-      setError('Network error. Please try again.');
-    } finally {
-      setLoading(false);
+    // Only allow admins to delete accounts
+    if (!userIsAdmin) {
+      alert('Only administrators can delete accounts. Please contact your administrator.');
+      return;
     }
+
+    // Open the delete account modal
+    setShowDeleteAccountModal(true);
+  };
+
+  const handleDeleteAccountSuccess = () => {
+    // This will be called when account is successfully deleted
+    // The modal will handle the redirect/logout
+    setShowDeleteAccountModal(false);
   };
 
   // Generalized handler for toggling user permissions
@@ -163,6 +170,40 @@ const HRSettings: React.FC = () => {
   let username = email ? email.split('@')[0] : '';
   username = username.charAt(0).toUpperCase() + username.slice(1);
 
+  // Get user info from localStorage (same as sidebar)
+  const userFromStorage = user || (() => {
+    try {
+      return JSON.parse(localStorage.getItem('user') || '{}');
+    } catch {
+      return {};
+    }
+  })();
+  
+  // Get user role from either currentUser (API) or localStorage user
+  // Priority: currentUser (API) > localStorage (initial)
+  const userRole = currentUser?.role || userRoleFromStorage || userFromStorage?.role || null;
+  
+  // Check if user is admin (same logic as sidebar)
+  const isAdmin = userFromStorage?.role === 'admin' || 
+                  userFromStorage?.is_admin || 
+                  userFromStorage?.is_superuser || 
+                  currentUser?.is_superuser || 
+                  false;
+  
+  // Check if user is HR Manager (same logic as sidebar)
+  const isHRManager = userRole === 'hr_manager' || 
+                      userRole === 'hr-manager' || 
+                      false;
+  
+  // Debug logging
+  useEffect(() => {
+    logger.info('HRSettings - Current user role:', userRole);
+    logger.info('HRSettings - Current user object:', currentUser);
+    logger.info('HRSettings - User from localStorage:', userFromStorage);
+    logger.info('HRSettings - Is HR Manager?', isHRManager);
+    logger.info('HRSettings - Is Admin?', isAdmin);
+  }, [userRole, currentUser, userFromStorage, isHRManager, isAdmin]);
+
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between">
@@ -186,12 +227,15 @@ const HRSettings: React.FC = () => {
           >
             Change Password
           </button>
-          <button
-            onClick={handleDeleteAccount}
-            className="bg-red-600 text-white px-6 py-2 rounded hover:bg-red-700 transition-colors"
-          >
-            Delete Account
-          </button>
+          {/* Only show delete button if user is admin (same logic as sidebar) */}
+          {isAdmin && (
+            <button
+              onClick={handleDeleteAccount}
+              className="bg-red-600 text-white px-6 py-2 rounded hover:bg-red-700 transition-colors"
+            >
+              Delete Account
+            </button>
+          )}
           <button
             onClick={handleLogout}
             className="bg-gray-600 text-white px-6 py-2 rounded hover:bg-gray-700 transition-colors"
@@ -271,6 +315,15 @@ const HRSettings: React.FC = () => {
           setTimeout(() => setSuccess(null), 3000);
         }}
         userEmail={email}
+      />
+
+      {/* Delete Account Modal */}
+      <DeleteAccountModal
+        isOpen={showDeleteAccountModal}
+        onClose={() => setShowDeleteAccountModal(false)}
+        onSuccess={handleDeleteAccountSuccess}
+        userEmail={email}
+        userRole={userRole}
       />
     </div>
   );
