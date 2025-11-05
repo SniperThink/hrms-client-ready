@@ -22,6 +22,9 @@ export interface SSEEventData {
   };
   reason?: string;
   action?: string;
+  session_key?: string;  // Session key to identify which session should logout
+  target_session_key?: string;  // Alternative name for session_key
+  target_email?: string;  // Email of the user being logged out
 }
 
 export interface SSEEventHandler {

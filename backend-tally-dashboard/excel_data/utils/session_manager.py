@@ -62,14 +62,18 @@ class SessionManager:
                         # Always force logout for "last login wins" policy
                         # Works for both same user and different users from same IP
                         if force_logout_on_conflict:
+                            # Get the old session key before clearing (so we can target the logout)
+                            old_session_key = active_session.session_key
                             SSENotifier.notify_force_logout(
                                 active_session.user,
                                 ip_address,
-                                "New login from same IP address"
+                                "New login from same IP address",
+                                session_key=old_session_key
                             )
-                            # Clear the old session
-                            SessionManager.clear_user_session(active_session.user, request)
-                            logger.info(f"Force logged out {active_session.user.email} from IP {ip_address} (IP conflict)")
+                            # Clear only the old session key (not the user's current_session_key yet - will be set by create_new_session)
+                            # This prevents clearing the new session before it's created
+                            SessionManager.clear_user_session(active_session.user, request=None, session_key_to_clear=old_session_key)
+                            logger.info(f"Force logged out {active_session.user.email} from IP {ip_address} (IP conflict, old key: {old_session_key})")
                             # Return False to allow new login
                             return False, None, None
                             
@@ -130,14 +134,24 @@ class SessionManager:
                 
                 # If force logout enabled, send force logout event to old session
                 if force_logout_on_conflict:
+                    # Get the old session key before clearing (so we can target the logout)
+                    old_session_key = user.current_session_key
+                    
+                    # IMPORTANT: Clear the old session from the store FIRST
+                    # This will cause the middleware to invalidate the old session
+                    # But we don't update user.current_session_key yet - that happens in create_new_session
+                    SessionManager.clear_user_session(user, request=None, session_key_to_clear=old_session_key)
+                    
+                    # Send force logout event AFTER clearing, so old window gets logged out
+                    # Include both session_key and user email so frontend can filter
                     SSENotifier.notify_force_logout(
                         user,
                         ip_address,
-                        "New login from another location"
+                        "New login from another location",
+                        session_key=old_session_key
                     )
-                    # Clear the old session
-                    SessionManager.clear_user_session(user, request)
-                    logger.info(f"Force logged out {user.email} from previous session")
+                    
+                    logger.info(f"Force logged out {user.email} from previous session (old key: {old_session_key})")
                     # Return False to allow new login
                     return False, False, None
                     
@@ -167,6 +181,13 @@ class SessionManager:
         request.session['session_created_at'] = timezone.now().isoformat()
         request.session.save()
         
+        # CRITICAL: Update user.current_session_key IMMEDIATELY (before anything else)
+        # This ensures the middleware validates the new session correctly from the start
+        # The old session should already be cleared by check_existing_session
+        old_session_key = user.current_session_key
+        user.set_session(session_key)
+        logger.info(f"User {user.email} session key updated: {old_session_key} -> {session_key}")
+        
         # Track active session by IP
         try:
             from ..models import ActiveSession
@@ -191,42 +212,52 @@ class SessionManager:
         except Exception as e:
             logger.error(f"Error creating active session record: {e}")
         
-        # Only update user model if this is the first session for this user
-        # or if we're replacing an existing session (single-session-per-user)
-        if not user.current_session_key:
-            user.set_session(session_key)
-        else:
-            # Clear the old session from the database
-            old_session_key = user.current_session_key
+        # If there was an old session key, ensure it's deleted from the store
+        # (It should already be deleted by clear_user_session, but double-check for safety)
+        if old_session_key and old_session_key != session_key:
             try:
                 Session.objects.filter(session_key=old_session_key).delete()
                 logger.info(f"Old session {old_session_key} deleted for user {user.email}")
             except Exception as e:
-                logger.error(f"Error deleting old session {old_session_key}: {e}")
-            
-            # Set new session
-            user.set_session(session_key)
+                logger.error(f"Error deleting old session {old_session_key} for user {user.email}: {e}")
         
-        logger.info(f"New session created for user {user.email} with key {session_key}")
+        logger.info(f"New session created for user {user.email} with key {session_key} (replaced {old_session_key})")
         return session_key
     
     @staticmethod
-    def clear_user_session(user, request=None):
+    def clear_user_session(user, request=None, session_key_to_clear=None):
         """
         Clear user's session data both from user model and session store
-        """
-        session_key = user.current_session_key
         
-        # Clear from user model
-        user.clear_session()
+        Args:
+            user: User whose session to clear
+            request: Optional request object (if provided, will flush that request's session)
+            session_key_to_clear: Optional specific session key to clear (if None, clears user.current_session_key)
+        """
+        # Determine which session key to clear
+        if session_key_to_clear:
+            target_session_key = session_key_to_clear
+        else:
+            target_session_key = user.current_session_key
         
         # Clear from session store if session key exists
-        if session_key:
+        if target_session_key:
             try:
-                Session.objects.filter(session_key=session_key).delete()
-                logger.info(f"Session {session_key} deleted from store for user {user.email}")
+                Session.objects.filter(session_key=target_session_key).delete()
+                logger.info(f"Session {target_session_key} deleted from store for user {user.email}")
             except Exception as e:
-                logger.error(f"Error deleting session {session_key} for user {user.email}: {e}")
+                logger.error(f"Error deleting session {target_session_key} for user {user.email}: {e}")
+        
+        # Only clear user.current_session_key if we're clearing the current one
+        # Don't clear if we're clearing a specific old session (it will be updated by create_new_session)
+        if not session_key_to_clear:
+            # Clearing all sessions - clear from user model
+            user.clear_session()
+        elif target_session_key == user.current_session_key:
+            # Clearing the current session - clear from user model
+            user.clear_session()
+        # If session_key_to_clear is provided and different from current, don't clear user.current_session_key
+        # (it will be updated when the new session is created)
         
         # Clear active session records
         try:
@@ -239,9 +270,13 @@ class SessionManager:
                 ).delete()
                 logger.info(f"Active session cleared for user {user.email} from IP {ip_address}")
             else:
-                # Clear all active sessions for this user
-                ActiveSession.objects.filter(user=user).delete()
-                logger.info(f"All active sessions cleared for user {user.email}")
+                # Clear all active sessions for this user, or specific session if provided
+                if session_key_to_clear:
+                    ActiveSession.objects.filter(user=user, session_key=session_key_to_clear).delete()
+                    logger.info(f"Active session {session_key_to_clear} cleared for user {user.email}")
+                else:
+                    ActiveSession.objects.filter(user=user).delete()
+                    logger.info(f"All active sessions cleared for user {user.email}")
         except Exception as e:
             logger.error(f"Error clearing active session records for user {user.email}: {e}")
         

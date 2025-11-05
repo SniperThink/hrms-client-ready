@@ -41,6 +41,39 @@ export function useSessionConflict() {
     handlerRef.current = (eventType: string, data: SSEEventData) => {
       logger.info( '🚪 Force Logout Received:', data);
       logger.info( '🚪 Event Type:', eventType);
+      
+      // CRITICAL: Check if this event is for our session
+      // Get current session key from localStorage (stored during login)
+      const currentSessionKey = localStorage.getItem('session_key');
+      const eventSessionKey = data.session_key || data.target_session_key;
+      const targetEmail = data.target_email || data.user?.email;
+      const currentUserEmail = JSON.parse(localStorage.getItem('user') || '{}')?.email;
+      
+      logger.info( '🔍 Session Key Check:', {
+        currentSessionKey,
+        eventSessionKey,
+        targetEmail,
+        currentUserEmail,
+        shouldLogout: eventSessionKey ? (eventSessionKey === currentSessionKey) : (targetEmail === currentUserEmail)
+      });
+      
+      // Only logout if:
+      // 1. The event has a session_key AND it matches our current session_key, OR
+      // 2. The event has no session_key BUT the target_email matches our email (fallback for old events)
+      const shouldLogout = eventSessionKey 
+        ? (eventSessionKey === currentSessionKey)
+        : (targetEmail === currentUserEmail);
+      
+      if (!shouldLogout) {
+        logger.info( '✅ Ignoring force_logout event - not for this session', {
+          eventSessionKey,
+          currentSessionKey,
+          targetEmail,
+          currentUserEmail
+        });
+        return; // Don't logout - this event is for a different session
+      }
+      
       logger.info( '🚪 Setting modal to show...');
 
       let message = 'Another login was detected. ';

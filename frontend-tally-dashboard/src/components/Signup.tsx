@@ -60,6 +60,10 @@ const Signup: React.FC = () => {
         localStorage.setItem('access', response.access);
         localStorage.setItem('refresh', response.refresh);
       }
+      // Store session_key if provided (for SSE force_logout filtering)
+      if (response.session_key) {
+        localStorage.setItem('session_key', response.session_key);
+      }
       if (response.user) {
         localStorage.setItem('user', JSON.stringify(response.user));
       }

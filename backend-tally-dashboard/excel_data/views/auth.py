@@ -2220,6 +2220,10 @@ class ChangePasswordView(APIView):
 
             user.save()
 
+            # Create new session for immediate login
+            from ..utils.session_manager import SessionManager
+            session_key = SessionManager.create_new_session(user, request)
+
             # Generate JWT tokens for immediate login
 
             refresh = RefreshToken.for_user(user)
@@ -2242,6 +2246,7 @@ class ChangePasswordView(APIView):
                         "access": str(refresh.access_token),
                         "refresh": str(refresh),
                     },
+                    "session_key": session_key,
                 },
                 status=status.HTTP_200_OK,
             )

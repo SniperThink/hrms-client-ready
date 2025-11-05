@@ -222,7 +222,7 @@ class SSENotifier:
         SSENotifier.publish_conflict_event('login_attempt_blocked', data)
     
     @staticmethod
-    def notify_force_logout(user, ip_address, reason):
+    def notify_force_logout(user, ip_address, reason, session_key=None):
         """
         Notify a user that they are being forcefully logged out
         
@@ -230,6 +230,7 @@ class SSENotifier:
             user: User being logged out
             ip_address: IP address where logout is initiated
             reason: Reason for force logout
+            session_key: Optional session key to identify which session should logout
         """
         data = {
             'ip_address': ip_address,
@@ -239,8 +240,16 @@ class SSENotifier:
                 'role': user.role
             },
             'reason': reason,
-            'action': 'force_logout'
+            'action': 'force_logout',
+            'target_email': user.email  # Include email so frontend can filter by user
         }
         
+        # Include session key if provided - frontend MUST check if it matches their session
+        # Only the window with this specific session_key should logout
+        if session_key:
+            data['session_key'] = session_key
+            data['target_session_key'] = session_key  # Explicit naming for clarity
+        
+        logger.info(f"📢 Broadcasting force_logout event for user {user.email}, session_key: {session_key}")
         SSENotifier.publish_conflict_event('force_logout', data)
 

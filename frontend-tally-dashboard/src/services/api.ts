@@ -30,6 +30,10 @@ const refreshAuthToken = async (): Promise<boolean> => {
       const data = await response.json();
       localStorage.setItem("access", data.access);
       localStorage.setItem("refresh", data.refresh);
+      // Store session_key if provided (for SSE force_logout filtering)
+      if (data.session_key) {
+        localStorage.setItem("session_key", data.session_key);
+      }
       return true;
     }
   } catch (error) {

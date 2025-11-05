@@ -91,6 +91,12 @@ const Login: React.FC = () => {
         localStorage.setItem('refresh', response.refresh);
         localStorage.setItem('user', JSON.stringify(response.user));
         
+        // Store session_key if provided (for SSE force_logout filtering)
+        if (response.session_key) {
+          localStorage.setItem('session_key', response.session_key);
+          logger.info( '✅ Session key stored:', response.session_key);
+        }
+        
         // Store tenant information
         if (response.tenant) {
           localStorage.setItem('tenant', JSON.stringify(response.tenant));
@@ -295,6 +301,12 @@ const Login: React.FC = () => {
               localStorage.setItem('access', response.access);
               localStorage.setItem('refresh', response.refresh);
               localStorage.setItem('user', JSON.stringify(response.user));
+              
+              // Store session_key if provided (for SSE force_logout filtering)
+              if (response.session_key) {
+                localStorage.setItem('session_key', response.session_key);
+                logger.info( '✅ Session key stored (recovery):', response.session_key);
+              }
               
               if (response.tenant) {
                 localStorage.setItem('tenant', JSON.stringify(response.tenant));

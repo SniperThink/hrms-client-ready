@@ -91,6 +91,21 @@ const ChangePassword: React.FC = () => {
       if (response.ok) {
         const data = await response.json();
         
+        // Store tokens and session_key if provided
+        if (data.tokens) {
+          localStorage.setItem('access', data.tokens.access);
+          localStorage.setItem('refresh', data.tokens.refresh);
+        }
+        if (data.session_key) {
+          localStorage.setItem('session_key', data.session_key);
+        }
+        if (data.user) {
+          localStorage.setItem('user', JSON.stringify(data.user));
+        }
+        if (data.tenant) {
+          localStorage.setItem('tenant', JSON.stringify(data.tenant));
+        }
+        
         // Show success message
         setMessage('Password changed successfully!');
         setError('');

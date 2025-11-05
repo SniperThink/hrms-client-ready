@@ -83,17 +83,41 @@ const AcceptInvitation: React.FC = () => {
       });
 
       if (response.ok) {
-        setMessage({ type: 'success', text: 'Account created successfully! Redirecting to login...' });
+        const data = await response.json();
         
-        // Store user data and redirect to login
-        setTimeout(() => {
-          navigate('/login', { 
-            state: { 
-              message: 'Account created successfully! You can now login with your credentials.',
-              email: invitationDetails?.email 
-            } 
-          });
-        }, 2000);
+        // Store tokens and session_key if provided (for immediate login)
+        if (data.tokens) {
+          localStorage.setItem('access', data.tokens.access);
+          localStorage.setItem('refresh', data.tokens.refresh);
+        }
+        if (data.session_key) {
+          localStorage.setItem('session_key', data.session_key);
+        }
+        if (data.user) {
+          localStorage.setItem('user', JSON.stringify(data.user));
+        }
+        if (data.tenant) {
+          localStorage.setItem('tenant', JSON.stringify(data.tenant));
+        }
+        
+        // If tokens are provided, navigate directly to dashboard
+        if (data.tokens && data.session_key) {
+          setMessage({ type: 'success', text: 'Account created successfully! Redirecting...' });
+          setTimeout(() => {
+            navigate('/hr-management');
+          }, 2000);
+        } else {
+          // Otherwise, redirect to login
+          setMessage({ type: 'success', text: 'Account created successfully! Redirecting to login...' });
+          setTimeout(() => {
+            navigate('/login', { 
+              state: { 
+                message: 'Account created successfully! You can now login with your credentials.',
+                email: invitationDetails?.email 
+              } 
+            });
+          }, 2000);
+        }
       } else {
         const errorData = await response.json();
         setMessage({ type: 'error', text: errorData.error || 'Failed to accept invitation' });

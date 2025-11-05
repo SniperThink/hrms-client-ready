@@ -138,6 +138,7 @@ export const logout = async () => {
   } catch (error) {
     logger.error('Force logout error:', error);
   } finally {
+    // Clear all auth data including session_key
     localStorage.clear();
     window.location.href = '/login';
   }
