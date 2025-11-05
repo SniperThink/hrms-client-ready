@@ -217,6 +217,21 @@ class Tenant(models.Model):
         recovery_deadline = self.deactivated_at + timedelta(days=recovery_period_days)
         return timezone.now() > recovery_deadline
     
+    def should_send_deletion_warning(self, recovery_period_days=30, warning_days=3):
+        """Check if tenant should receive a deletion warning email (3 days before permanent deletion)"""
+        if not self.deactivated_at:
+            return False
+        
+        from django.utils import timezone
+        from datetime import timedelta
+        
+        recovery_deadline = self.deactivated_at + timedelta(days=recovery_period_days)
+        warning_date = recovery_deadline - timedelta(days=warning_days)
+        now = timezone.now()
+        
+        # Send warning if we're within the warning period and haven't sent it yet
+        return warning_date <= now < recovery_deadline
+    
     def permanently_delete(self):
         """Permanently delete tenant and all related data"""
         from excel_data.models.auth import CustomUser

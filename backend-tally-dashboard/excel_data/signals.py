@@ -33,16 +33,35 @@ def sync_attendance_from_daily(sender, instance, **kwargs):
     """
     Automatically aggregate DailyAttendance into monthly Attendance records.
     This ensures that when daily attendance is recorded, monthly attendance is automatically updated.
+    Only processes attendance for active employees.
     """
     import logging
     logger = logging.getLogger(__name__)
-    logger.info(f"🔄 SIGNAL TRIGGERED: {instance.employee_id} - {instance.date} - {instance.attendance_status}")
+    
+    # Get basic info first
+    tenant = instance.tenant
+    employee_id = instance.employee_id
+    
+    if not tenant or not employee_id:
+        return
+    
+    # Early exit: Skip processing for deactivated or non-existent employees
+    try:
+        employee = EmployeeProfile.objects.get(tenant=tenant, employee_id=employee_id, is_active=True)
+        employee_name = f"{employee.first_name} {employee.last_name}".strip()
+        department = employee.department or 'General'
+    except EmployeeProfile.DoesNotExist:
+        # Employee doesn't exist or is deactivated - skip processing silently
+        return
+    except Exception:
+        # Any other error - skip processing
+        return
     
     try:
-        tenant = instance.tenant
         year = instance.date.year
         month = instance.date.month
-        employee_id = instance.employee_id
+
+        logger.info(f"🔄 SIGNAL TRIGGERED: {instance.employee_id} - {instance.date} - {instance.attendance_status}")
 
         # Get all daily attendance records for this employee for this month
         daily_records = DailyAttendance.objects.filter(
@@ -55,16 +74,6 @@ def sync_attendance_from_daily(sender, instance, **kwargs):
         # Calculate aggregated values
         from django.db.models import Sum, Case, When, FloatField, Value, Count
         import calendar
-        
-        # Get employee info
-        try:
-            employee = EmployeeProfile.objects.get(tenant=tenant, employee_id=employee_id)
-            employee_name = f"{employee.first_name} {employee.last_name}".strip()
-            department = employee.department or 'General'
-        except EmployeeProfile.DoesNotExist:
-            # Fallback to daily record data
-            employee_name = instance.employee_name
-            department = instance.department or 'General'
 
         # Aggregate present days (PRESENT and PAID_LEAVE count as 1, HALF_DAY as 0.5)
         present_aggregate = daily_records.aggregate(
@@ -88,20 +97,15 @@ def sync_attendance_from_daily(sender, instance, **kwargs):
         days_in_month = calendar.monthrange(year, month)[1]
         
         try:
-            from ..services.salary_service import SalaryCalculationService
-            employee = EmployeeProfile.objects.get(tenant=tenant, employee_id=employee_id, is_active=True)
+            from excel_data.services.salary_service import SalaryCalculationService
             month_names = ['JAN', 'FEB', 'MAR', 'APR', 'MAY', 'JUN', 'JUL', 'AUG', 'SEP', 'OCT', 'NOV', 'DEC']
             total_working_days = SalaryCalculationService._calculate_employee_working_days(
                 employee, year, month_names[month - 1]
             )
-        except EmployeeProfile.DoesNotExist:
-            # Fallback: use calendar days if employee not found
-            total_working_days = days_in_month
-            logger.warning(f'Employee {employee_id} not found in signal, using calendar days for working days calculation')
         except Exception as e:
             # Fallback: use calendar days if calculation fails
             total_working_days = days_in_month
-            logger.warning(f'Could not calculate working days for employee {employee_id} in signal: {str(e)}')
+            logger.debug(f'Could not calculate working days for employee {employee_id} in signal: {str(e)}')
         
         absent_days = max(0, total_working_days - present_days)
 
@@ -235,12 +239,23 @@ def update_total_advance_on_payment(sender, instance, **kwargs):
 
 @receiver([post_save, post_delete], sender=DailyAttendance)
 def update_monthly_attendance_summary(sender, instance, **kwargs):
-    """Maintain per-employee MonthlyAttendanceSummary aggregates."""
+    """Maintain per-employee MonthlyAttendanceSummary aggregates. Only for active employees."""
     try:
         tenant = instance.tenant
+        employee_id = instance.employee_id
+        
+        if not tenant or not employee_id:
+            return
+        
+        # Early exit: Skip processing for deactivated or non-existent employees
+        try:
+            EmployeeProfile.objects.get(tenant=tenant, employee_id=employee_id, is_active=True)
+        except EmployeeProfile.DoesNotExist:
+            # Employee doesn't exist or is deactivated - skip processing
+            return
+        
         year = instance.date.year
         month = instance.date.month
-        employee_id = instance.employee_id
 
         # Pull all daily attendance rows for the employee for the same month
         qs = DailyAttendance.objects.filter(
