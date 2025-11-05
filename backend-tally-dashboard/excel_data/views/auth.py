@@ -24,6 +24,8 @@
 
 
 import logging
+import secrets
+import string
 import uuid
 
 from django.conf import settings
@@ -44,6 +46,7 @@ from ..serializers import (
     UserRegistrationSerializer,
     UserSerializer,
 )
+from ..services.zeptomail_service import send_email_via_zeptomail
 
 # Initialize logger
 logger = logging.getLogger(__name__)
@@ -779,8 +782,6 @@ class TenantSignupView(APIView):
             )
 
             # Generate a secure temporary password (similar to HR invitations)
-            import secrets
-            import string
             temp_password = "".join(
                 secrets.choice(string.ascii_letters + string.digits) for _ in range(12)
             )
@@ -802,10 +803,8 @@ class TenantSignupView(APIView):
                 )
 
                 # Send email with credentials (like HR invitations)
-                from ..services.zeptomail_service import send_email_via_zeptomail
                 from ..services.email_templates import render_company_signup_email
                 from django.utils.html import strip_tags
-                from django.conf import settings
                 
                 try:
                     frontend_url = getattr(settings, 'FRONTEND_URL', 'http://35.154.9.249')
@@ -867,10 +866,8 @@ class TenantSignupView(APIView):
     def send_verification_email(self, user, verification):
         """Send verification email to user"""
         try:
-            from ..services.zeptomail_service import send_email_via_zeptomail
             from ..services.email_templates import render_email_verification_email
             from django.utils.html import strip_tags
-            from django.conf import settings
 
             # Create verification URL (pointing to backend API)
             verification_url = (
@@ -1010,10 +1007,8 @@ class ResendVerificationView(APIView):
     def send_verification_email(self, user, verification):
         """Send verification email to user using the working email service"""
         try:
-            from ..services.zeptomail_service import send_email_via_zeptomail
             from ..services.email_templates import render_email_verification_email
             from django.utils.html import strip_tags
-            from django.conf import settings
 
             # Create verification URL (pointing to backend API)
             verification_url = (
@@ -1485,10 +1480,8 @@ class UserInvitationViewSet(viewsets.ModelViewSet):
             # Send invitation email with temporary password
             # SECURITY: Never return password in API response - only send via email
             try:
-                from ..services.zeptomail_service import send_email_via_zeptomail
                 from ..services.email_templates import render_invitation_email
                 from django.utils.html import strip_tags
-                from django.conf import settings
                 frontend_url = getattr(settings, 'FRONTEND_URL', 'http://localhost:5173')
                 
                 subject = f"Welcome to {request.user.tenant.name} - Your Account Details"
@@ -1580,15 +1573,6 @@ class EnhancedInvitationView(APIView):
     def post(self, request):
 
         try:
-
-            import secrets
-
-            import string
-
-            from ..services.zeptomail_service import send_email_via_zeptomail
-
-            from django.conf import settings
-
             data = request.data
 
             # Check if user has a tenant
