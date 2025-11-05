@@ -41,10 +41,47 @@ class SessionConflictSSEView(View):
                 logger.info(f"SSE client connected from IP: {self._get_client_ip(request)}")
                 
                 # Send periodic keepalive and listen for events
+                from queue import Empty as QueueEmpty
+                from django.core.cache import cache
+                from django.conf import settings
+                
+                USE_DB_BROADCASTING = not getattr(settings, 'DEBUG', True)
+                last_event_check = 0
+                last_event_hash = None
+                channel = InMemorySSEBroadcaster.CHANNEL_NAME
+                
                 while True:
                     try:
-                        # Wait for event with timeout (for keepalive)
-                        event_data = event_queue.get(timeout=15)
+                        # In production, also check database cache for events from other workers
+                        if USE_DB_BROADCASTING:
+                            try:
+                                import time
+                                import hashlib
+                                current_time = time.time()
+                                # Check database cache every 1 second
+                                if current_time - last_event_check > 1.0:
+                                    channel_key = f"sse_channel_{channel}"
+                                    cached_events = cache.get(channel_key, [])
+                                    # Create hash of events to detect changes
+                                    events_str = json.dumps(cached_events, sort_keys=True)
+                                    current_hash = hashlib.md5(events_str.encode()).hexdigest()
+                                    
+                                    # Only process if events have changed
+                                    if current_hash != last_event_hash and cached_events:
+                                        # Process only the last event (most recent)
+                                        latest_event = cached_events[-1]
+                                        event_type = latest_event.get('event_type', 'unknown')
+                                        data = latest_event.get('data', {})
+                                        sse_message = f"event: {event_type}\ndata: {json.dumps(data)}\n\n"
+                                        yield sse_message
+                                        last_event_hash = current_hash
+                                    
+                                    last_event_check = current_time
+                            except Exception as e:
+                                logger.debug(f"Error checking database cache: {e}")
+                        
+                        # Wait for event from in-memory queue with timeout (for keepalive)
+                        event_data = event_queue.get(timeout=2)  # Shorter timeout to check cache more frequently
                         
                         event_type = event_data.get('event_type', 'unknown')
                         data = event_data.get('data', {})
@@ -53,14 +90,13 @@ class SessionConflictSSEView(View):
                         sse_message = f"event: {event_type}\ndata: {json.dumps(data)}\n\n"
                         yield sse_message
                         
+                    except QueueEmpty:
+                        # Queue timeout - send keepalive comment
+                        yield ": keepalive\n\n"
                     except Exception as e:
-                        # Timeout or other error - send keepalive
-                        if "Empty" in str(type(e).__name__):
-                            # Queue timeout - send keepalive comment
-                            yield ": keepalive\n\n"
-                        else:
-                            logger.error(f"Error in SSE stream: {e}")
-                            break
+                        # Other error - log and break
+                        logger.error(f"Error in SSE stream: {e}")
+                        break
                 
             except GeneratorExit:
                 # Client disconnected normally
@@ -78,9 +114,14 @@ class SessionConflictSSEView(View):
             content_type='text/event-stream'
         )
         
-        # SSE headers to prevent caching
+        # SSE headers to prevent caching and buffering (critical for production)
         response['Cache-Control'] = 'no-cache, no-transform'
+        response['Connection'] = 'keep-alive'  # Keep connection alive
         response['X-Accel-Buffering'] = 'no'  # Disable nginx buffering
+        response['X-Nginx-Cache'] = 'off'  # Disable nginx caching
+        
+        # Additional headers for load balancers and proxies
+        response['Transfer-Encoding'] = 'chunked'  # Enable chunked transfer
         
         return response
     

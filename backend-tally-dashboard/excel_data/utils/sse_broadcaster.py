@@ -1,14 +1,21 @@
 """
 In-memory SSE broadcaster - No Redis required!
 Works great for development and single-server deployments
+
+For production with multiple workers, uses database cache as fallback
 """
 import json
 import logging
 import queue
 import threading
 from typing import Dict, Set
+from django.core.cache import cache
+from django.conf import settings
 
 logger = logging.getLogger(__name__)
+
+# Use database broadcasting in production (when multiple workers)
+USE_DB_BROADCASTING = not getattr(settings, 'DEBUG', True)
 
 
 class InMemorySSEBroadcaster:
@@ -53,22 +60,45 @@ class InMemorySSEBroadcaster:
     def publish(cls, channel: str, event_type: str, data: dict):
         """
         Publish an event to all subscribers of a channel
+        Uses database cache for multi-worker production deployments
         """
         event_data = {
             'event_type': event_type,
-            'data': data
+            'data': data,
+            'timestamp': json.dumps({'time': str(logging.Formatter().formatTime(logging.LogRecord('', 0, '', 0, '', (), None)))}) if hasattr(logging, 'Formatter') else ''
         }
         
         logger.info(f"📡 Publishing event: {event_type} to channel: {channel}")
         logger.info(f"📡 Event data: {data}")
         
+        # In production with multiple workers, use database cache
+        if USE_DB_BROADCASTING:
+            try:
+                # Store event in cache with short TTL for workers to poll
+                cache_key = f"sse_event_{channel}_{event_type}"
+                cache.set(cache_key, event_data, timeout=5)  # 5 second TTL
+                
+                # Also store in a list for this channel (last 10 events)
+                channel_key = f"sse_channel_{channel}"
+                events = cache.get(channel_key, [])
+                events.append(event_data)
+                # Keep only last 10 events
+                events = events[-10:]
+                cache.set(channel_key, events, timeout=30)
+                
+                logger.info(f"✅ Published {event_type} to database cache (multi-worker mode)")
+            except Exception as e:
+                logger.error(f"Error publishing to database cache: {e}")
+                # Continue with in-memory fallback
+        
+        # In-memory broadcasting (for same worker)
         with cls._lock:
             if channel not in cls._listeners or not cls._listeners[channel]:
-                logger.warning(f"⚠️ No subscribers for channel '{channel}'")
+                logger.warning(f"⚠️ No in-memory subscribers for channel '{channel}'")
                 return
             
             subscriber_count = len(cls._listeners[channel])
-            logger.info(f"📡 Sending to {subscriber_count} subscribers")
+            logger.info(f"📡 Sending to {subscriber_count} in-memory subscribers")
             
             # Send to all subscribers
             dead_queues = set()
@@ -88,7 +118,7 @@ class InMemorySSEBroadcaster:
             for dead_queue in dead_queues:
                 cls._listeners[channel].discard(dead_queue)
             
-            logger.info(f"✅ Published {event_type} to {sent_count}/{subscriber_count} subscribers")
+            logger.info(f"✅ Published {event_type} to {sent_count}/{subscriber_count} in-memory subscribers")
     
     @classmethod
     def get_subscriber_count(cls, channel: str = CHANNEL_NAME) -> int:
