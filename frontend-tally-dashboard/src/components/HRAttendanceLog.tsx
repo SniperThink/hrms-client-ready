@@ -71,7 +71,10 @@ interface AttendanceEntry {
 
 const HRAttendanceLog: React.FC = () => {
   const user = JSON.parse(localStorage.getItem('user') || '{}');
-  const isHRManager = user?.role === 'hr_manager';
+  const isHRManager = user?.role === 'hr_manager' || user?.role === 'hr-manager';
+  const isPayrollMaster = user?.role === 'payroll_master';
+  const isAdmin = user?.role === 'admin' || user?.is_admin || user?.is_superuser;
+  const canViewEmployeeDetails = isAdmin || isPayrollMaster; // Admin and Payroll Master can view employee details
   const navigate = useNavigate();
   // (employees state not used anymore)
   const [attendanceEntries, setAttendanceEntries] = useState<Map<string, AttendanceEntry>>(new Map());
@@ -1090,7 +1093,7 @@ const HRAttendanceLog: React.FC = () => {
                       <tr key={employee.employee_id} className={`hover:bg-gray-50 ${entry.status === 'unmarked' ? 'bg-yellow-50 border-l-4 border-yellow-400' : ''}`}>
                         <td className="px-4 py-3 text-sm font-medium">{employee.employee_id}</td>
                         <td className="px-4 py-3 text-sm">
-                          {isHRManager ? (
+                          {isHRManager && !canViewEmployeeDetails ? (
                             <span className="text-gray-900">
                               {employee.first_name && employee.last_name
                                 ? `${employee.first_name} ${employee.last_name}`

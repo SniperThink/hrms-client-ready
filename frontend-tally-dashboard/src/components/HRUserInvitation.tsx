@@ -73,6 +73,14 @@ const HRUserInvitation: React.FC = () => {
       can_manage_payroll: false, // HR Managers cannot manage payroll
       can_export_data: true,
       can_access_settings: true
+    },
+    payroll_master: {
+      can_view: true,
+      can_modify: true,
+      can_invite_users: false, // Payroll Masters cannot invite other users
+      can_manage_payroll: true,
+      can_export_data: true,
+      can_access_settings: true
     }
   };
 
@@ -270,12 +278,17 @@ const HRUserInvitation: React.FC = () => {
     { 
       value: 'admin', 
       label: 'Admin',
-      description: 'Full system access - Can manage all employees, payroll, settings, and invite HR managers'
+      description: 'Full system access - Can manage all employees, payroll, settings, and invite team members'
     },
     { 
       value: 'hr_manager', 
       label: 'HR Manager',
       description: 'HR management access - Can manage attendance, employees, team management, and settings'
+    },
+    { 
+      value: 'payroll_master', 
+      label: 'Payroll Master',
+      description: 'Payroll management access - Can manage all employees, payroll, and settings (cannot invite users or delete account)'
     }
   ];
 

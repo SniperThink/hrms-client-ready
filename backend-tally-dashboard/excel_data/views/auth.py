@@ -453,11 +453,11 @@ class AdminForceLogoutView(APIView):
     def post(self, request):
         from ..utils.session_manager import SessionManager
 
-        # Check if user has admin or hr_manager role
-        if request.user.role not in ["admin", "hr_manager"]:
+        # Check if user has admin, hr_manager, or payroll_master role
+        if request.user.role not in ["admin", "hr_manager", "payroll_master"]:
             return Response(
                 {
-                    "error": "Insufficient permissions. Admin or HR Manager role required."
+                    "error": "Insufficient permissions. Admin, HR Manager, or Payroll Master role required."
                 },
                 status=status.HTTP_403_FORBIDDEN,
             )
@@ -625,9 +625,9 @@ class UserManagementViewSet(viewsets.ModelViewSet):
         # Update user role if provided
         role = request.data.get("role")
         if role:
-            # VALIDATION: Only 1 HR Manager and 1 Admin allowed per tenant
-            # Only check if role is changing to hr_manager or admin
-            if role in ["hr_manager", "admin"] and user.role != role:
+            # VALIDATION: Only 1 HR Manager, 1 Admin, and 1 Payroll Master allowed per tenant
+            # Only check if role is changing to hr_manager, admin, or payroll_master
+            if role in ["hr_manager", "admin", "payroll_master"] and user.role != role:
                 tenant = user.tenant
                 
                 if role == "hr_manager":
@@ -649,6 +649,17 @@ class UserManagementViewSet(viewsets.ModelViewSet):
                     if existing_admin_count >= 1:
                         return Response(
                             {"error": "Only one Admin is allowed per organization. An Admin already exists."},
+                            status=status.HTTP_400_BAD_REQUEST,
+                        )
+                
+                elif role == "payroll_master":
+                    existing_payroll_master_count = CustomUser.objects.filter(
+                        tenant=tenant,
+                        role="payroll_master"
+                    ).exclude(id=user.id).count()  # Exclude current user
+                    if existing_payroll_master_count >= 1:
+                        return Response(
+                            {"error": "Only one Payroll Master is allowed per organization. A Payroll Master already exists."},
                             status=status.HTTP_400_BAD_REQUEST,
                         )
             
@@ -796,38 +807,29 @@ class TenantSignupView(APIView):
                 from django.utils.html import strip_tags
                 from django.conf import settings
                 
-                # Check rate limit
-                from ..services.email_rate_limiter import can_send_email, record_email_sent, format_time_remaining
-                can_send, time_remaining = can_send_email(admin_email)
-                if not can_send:
-                    time_str = format_time_remaining(time_remaining)
-                    logger.warning(f"Email rate limit exceeded for {admin_email} (company signup email). Please try again in {time_str}.")
-                    email_sent = False
-                else:
-                    try:
-                        frontend_url = getattr(settings, 'FRONTEND_URL', 'http://35.154.9.249')
-                        subject = f"Welcome to SniperThink - Your Account Details"
+                try:
+                    frontend_url = getattr(settings, 'FRONTEND_URL', 'http://35.154.9.249')
+                    subject = f"Welcome to SniperThink - Your Account Details"
 
-                        html_message = render_company_signup_email(
-                            admin_user, tenant.name, temp_password, frontend_url
-                        )
-                        text_message = strip_tags(html_message).strip()
+                    html_message = render_company_signup_email(
+                        admin_user, tenant.name, temp_password, frontend_url
+                    )
+                    text_message = strip_tags(html_message).strip()
 
-                        success = send_email_via_zeptomail(
-                            to_email=admin_email,
-                            subject=subject,
-                            html_body=html_message,
-                            text_body=text_message,
-                            from_name="SniperThink"
-                        )
-                        if success:
-                            record_email_sent(admin_email)
-                            email_sent = True
-                        else:
-                            email_sent = False
-                    except Exception as email_error:
-                        logger.error(f"Failed to send credentials email to {admin_email}: {email_error}")
+                    success = send_email_via_zeptomail(
+                        to_email=admin_email,
+                        subject=subject,
+                        html_body=html_message,
+                        text_body=text_message,
+                        from_name="SniperThink"
+                    )
+                    if success:
+                        email_sent = True
+                    else:
                         email_sent = False
+                except Exception as email_error:
+                    logger.error(f"Failed to send credentials email to {admin_email}: {email_error}")
+                    email_sent = False
 
                 if email_sent:
                     return Response(
@@ -875,15 +877,6 @@ class TenantSignupView(APIView):
                 f"http://localhost:8000/api/verify-email/{verification.token}/"
             )
 
-            # Check rate limit
-            from ..services.email_rate_limiter import can_send_email, record_email_sent, format_time_remaining
-            can_send, time_remaining = can_send_email(user.email)
-            if not can_send:
-                time_str = format_time_remaining(time_remaining)
-                logger.warning(f"Email rate limit exceeded for {user.email} (verification email). Please try again in {time_str}.")
-                # Don't send verification email if rate limited
-                return
-
             # Create email content using template
             subject = (
                 f"Verify your email - {user.tenant.name if user.tenant else 'HRMS'}"
@@ -902,7 +895,6 @@ class TenantSignupView(APIView):
             )
 
             if success:
-                record_email_sent(user.email)
                 logger.info(f"Verification email sent to {user.email}")
             else:
                 logger.error(f"Failed to send verification email to {user.email}")
@@ -1028,15 +1020,6 @@ class ResendVerificationView(APIView):
                 f"http://localhost:8000/api/verify-email/{verification.token}/"
             )
 
-            # Check rate limit
-            from ..services.email_rate_limiter import can_send_email, record_email_sent, format_time_remaining
-            can_send, time_remaining = can_send_email(user.email)
-            if not can_send:
-                time_str = format_time_remaining(time_remaining)
-                logger.warning(f"Email rate limit exceeded for {user.email} (verification email). Please try again in {time_str}.")
-                # Don't send verification email if rate limited
-                return
-
             # Create email content using template
             subject = (
                 f"Verify your email - {user.tenant.name if user.tenant else 'HRMS'}"
@@ -1055,7 +1038,6 @@ class ResendVerificationView(APIView):
             )
 
             if success:
-                record_email_sent(user.email)
                 logger.info(f"Verification email sent to {user.email}")
             else:
                 logger.error(f"Failed to send verification email to {user.email}")
@@ -1398,6 +1380,13 @@ class UserInvitationViewSet(viewsets.ModelViewSet):
 
             data = request.data
 
+            # Check if user has permission to invite
+            if not (request.user.permissions and request.user.permissions.can_invite_users):
+                return Response(
+                    {"error": "You do not have permission to invite users. Only admins can invite users."},
+                    status=status.HTTP_403_FORBIDDEN,
+                )
+
             # Validate required fields
 
             required_fields = ["email", "first_name", "last_name", "role"]
@@ -1420,7 +1409,7 @@ class UserInvitationViewSet(viewsets.ModelViewSet):
                     status=status.HTTP_400_BAD_REQUEST,
                 )
 
-            # VALIDATION: Only 1 HR Manager and 1 Admin allowed per tenant
+            # VALIDATION: Only 1 HR Manager, 1 Admin, and 1 Payroll Master allowed per tenant
             role = data.get("role")
             tenant = request.user.tenant
             
@@ -1443,6 +1432,17 @@ class UserInvitationViewSet(viewsets.ModelViewSet):
                 if existing_admin_count >= 1:
                     return Response(
                         {"error": "Only one Admin is allowed per organization. An Admin already exists."},
+                        status=status.HTTP_400_BAD_REQUEST,
+                    )
+            
+            elif role == "payroll_master":
+                existing_payroll_master_count = CustomUser.objects.filter(
+                    tenant=tenant,
+                    role="payroll_master"
+                ).count()
+                if existing_payroll_master_count >= 1:
+                    return Response(
+                        {"error": "Only one Payroll Master is allowed per organization. A Payroll Master already exists."},
                         status=status.HTTP_400_BAD_REQUEST,
                     )
 
@@ -1491,35 +1491,26 @@ class UserInvitationViewSet(viewsets.ModelViewSet):
                 from django.conf import settings
                 frontend_url = getattr(settings, 'FRONTEND_URL', 'http://localhost:5173')
                 
-                # Check rate limit
-                from ..services.email_rate_limiter import can_send_email, record_email_sent, format_time_remaining
-                can_send, time_remaining = can_send_email(data['email'])
-                if not can_send:
-                    time_str = format_time_remaining(time_remaining)
-                    logger.warning(f"Email rate limit exceeded for {data['email']} (invitation email). Please try again in {time_str}.")
-                    email_sent = False
+                subject = f"Welcome to {request.user.tenant.name} - Your Account Details"
+                inviter_name = f"{request.user.first_name} {request.user.last_name}"
+                
+                html_message = render_invitation_email(
+                    user, inviter_name, request.user.tenant.name, temp_password, frontend_url
+                )
+                text_message = strip_tags(html_message).strip()
+                
+                success = send_email_via_zeptomail(
+                    to_email=data['email'],
+                    subject=subject,
+                    html_body=html_message,
+                    text_body=text_message,
+                    from_name="SniperThink"
+                )
+                
+                if success:
+                    email_sent = True
                 else:
-                    subject = f"Welcome to {request.user.tenant.name} - Your Account Details"
-                    inviter_name = f"{request.user.first_name} {request.user.last_name}"
-                    
-                    html_message = render_invitation_email(
-                        user, inviter_name, request.user.tenant.name, temp_password, frontend_url
-                    )
-                    text_message = strip_tags(html_message).strip()
-                    
-                    success = send_email_via_zeptomail(
-                        to_email=data['email'],
-                        subject=subject,
-                        html_body=html_message,
-                        text_body=text_message,
-                        from_name="SniperThink"
-                    )
-                    
-                    if success:
-                        record_email_sent(data['email'])
-                        email_sent = True
-                    else:
-                        email_sent = False
+                    email_sent = False
             except Exception as email_error:
                 logger.error(f"Failed to send invitation email: {email_error}")
                 email_sent = False
@@ -1635,7 +1626,14 @@ class EnhancedInvitationView(APIView):
                     status=status.HTTP_400_BAD_REQUEST,
                 )
 
-            # VALIDATION: Only 1 HR Manager and 1 Admin allowed per tenant
+            # Check if user has permission to invite
+            if not (request.user.permissions and request.user.permissions.can_invite_users):
+                return Response(
+                    {"error": "You do not have permission to invite users. Only admins can invite users."},
+                    status=status.HTTP_403_FORBIDDEN,
+                )
+
+            # VALIDATION: Only 1 HR Manager, 1 Admin, and 1 Payroll Master allowed per tenant
             role = data.get("role")
             tenant = request.user.tenant
             
@@ -1658,6 +1656,17 @@ class EnhancedInvitationView(APIView):
                 if existing_admin_count >= 1:
                     return Response(
                         {"error": "Only one Admin is allowed per organization. An Admin already exists."},
+                        status=status.HTTP_400_BAD_REQUEST,
+                    )
+            
+            elif role == "payroll_master":
+                existing_payroll_master_count = CustomUser.objects.filter(
+                    tenant=tenant,
+                    role="payroll_master"
+                ).count()
+                if existing_payroll_master_count >= 1:
+                    return Response(
+                        {"error": "Only one Payroll Master is allowed per organization. A Payroll Master already exists."},
                         status=status.HTTP_400_BAD_REQUEST,
                     )
 
@@ -1694,34 +1703,25 @@ class EnhancedInvitationView(APIView):
 
                 try:
                     from ..services.email_templates import render_invitation_email
-                    from ..services.email_rate_limiter import can_send_email, record_email_sent, format_time_remaining
                     from django.utils.html import strip_tags
                     
-                    # Check rate limit
-                    can_send, time_remaining = can_send_email(email)
-                    if not can_send:
-                        time_str = format_time_remaining(time_remaining)
-                        logger.warning(f"Email rate limit exceeded for {email} (invitation email). Please try again in {time_str}.")
-                        email_sent = False
+                    html_message = render_invitation_email(
+                        user, inviter_name, request.user.tenant.name, temp_password, frontend_url
+                    )
+                    text_message = strip_tags(html_message).strip()
+
+                    success = send_email_via_zeptomail(
+                        to_email=email,
+                        subject=subject,
+                        html_body=html_message,
+                        text_body=text_message,
+                        from_name="SniperThink"
+                    )
+
+                    if success:
+                        email_sent = True
                     else:
-                        html_message = render_invitation_email(
-                            user, inviter_name, request.user.tenant.name, temp_password, frontend_url
-                        )
-                        text_message = strip_tags(html_message).strip()
-
-                        success = send_email_via_zeptomail(
-                            to_email=email,
-                            subject=subject,
-                            html_body=html_message,
-                            text_body=text_message,
-                            from_name="SniperThink"
-                        )
-
-                        if success:
-                            record_email_sent(email)
-                            email_sent = True
-                        else:
-                            email_sent = False
+                        email_sent = False
 
                 except Exception as email_error:
                     logger.error(f"Failed to send invitation email: {email_error}")
@@ -2395,7 +2395,7 @@ class DeleteAccountView(APIView):
                     status=status.HTTP_403_FORBIDDEN,
                 )
 
-            # Prevent HR managers from deleting their accounts
+            # Prevent HR managers and Payroll Masters from deleting their accounts
             # Check role in multiple ways to handle different formats
             user_role = getattr(user, 'role', None)
             
@@ -2404,17 +2404,23 @@ class DeleteAccountView(APIView):
             logger = logging.getLogger(__name__)
             logger.warning(f"DeleteAccountView - User {user.email} attempting to delete account. Role: {user_role}, Role type: {type(user_role)}")
             
-            # Check if user is HR Manager (handle various formats)
-            is_hr_manager = False
+            # Check if user is HR Manager or Payroll Master (handle various formats)
+            is_restricted_role = False
+            restricted_role_name = None
             if user_role:
                 role_str = str(user_role).strip().lower().replace('-', '_')
-                is_hr_manager = role_str == 'hr_manager'
+                if role_str == 'hr_manager':
+                    is_restricted_role = True
+                    restricted_role_name = 'HR Manager'
+                elif role_str == 'payroll_master':
+                    is_restricted_role = True
+                    restricted_role_name = 'Payroll Master'
             
-            if is_hr_manager:
-                logger.warning(f"DeleteAccountView - Blocked HR Manager {user.email} from deleting account")
+            if is_restricted_role:
+                logger.warning(f"DeleteAccountView - Blocked {restricted_role_name} {user.email} from deleting account")
                 return Response(
                     {
-                        "error": "HR Manager accounts cannot be deleted. Please contact your administrator."
+                        "error": f"{restricted_role_name} accounts cannot be deleted. Please contact your administrator."
                     },
                     status=status.HTTP_403_FORBIDDEN,
                 )

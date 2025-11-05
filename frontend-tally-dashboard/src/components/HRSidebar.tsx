@@ -24,22 +24,27 @@ const HRSidebar: React.FC<HRSidebarProps> = ({ activePage, onPageChange }) => {
   const user = JSON.parse(localStorage.getItem('user') || '{}');
   const isAdmin = user?.role === 'admin' || user?.is_admin || user?.is_superuser || false;
   const isHRManager = user?.role === 'hr_manager' || user?.role === 'hr-manager' || false;
+  const isPayrollMaster = user?.role === 'payroll_master' || false;
   
   const navItems = [
-    { name: "Overview", icon: LayoutGrid, id: "overview", path: "/hr-management", roles: ['admin'] },
-    { name: "All Employees", icon: Users, id: "directory", path: "/hr-management/directory", roles: ['admin'] },
-    { name: "Add Employee", icon: PlusCircle, id: "add-employee", path: "/hr-management/directory/add", roles: ['admin'] },
-    { name: "Upload Data", icon: Upload, id: "data-upload", path: "/hr-management/data-upload", roles: ['admin'] },
-    { name: "Attendance Log", icon: ClipboardList, id: "attendance-log", path: "/hr-management/attendance-log", roles: ['admin', 'hr_manager'] },
-    { name: "Attendance Tracker", icon: CalendarCheck, id: "attendance-tracker", path: "/hr-management/attendance-tracker", roles: ['admin', 'hr_manager'] },
-    { name: "Payroll", icon: CircleDollarSign, id: "payroll", path: "/hr-management/payroll", roles: ['admin'] },
+    { name: "Overview", icon: LayoutGrid, id: "overview", path: "/hr-management", roles: ['admin', 'payroll_master'] },
+    { name: "All Employees", icon: Users, id: "directory", path: "/hr-management/directory", roles: ['admin', 'payroll_master'] },
+    { name: "Add Employee", icon: PlusCircle, id: "add-employee", path: "/hr-management/directory/add", roles: ['admin', 'payroll_master'] },
+    { name: "Upload Data", icon: Upload, id: "data-upload", path: "/hr-management/data-upload", roles: ['admin', 'payroll_master'] },
+    { name: "Attendance Log", icon: ClipboardList, id: "attendance-log", path: "/hr-management/attendance-log", roles: ['admin', 'hr_manager', 'payroll_master'] },
+    { name: "Attendance Tracker", icon: CalendarCheck, id: "attendance-tracker", path: "/hr-management/attendance-tracker", roles: ['admin', 'hr_manager', 'payroll_master'] },
+    { name: "Payroll", icon: CircleDollarSign, id: "payroll", path: "/hr-management/payroll", roles: ['admin', 'payroll_master'] },
     { name: "Team Management", icon: Shield, id: "team", path: "/hr-management/team", roles: ['admin'] },
-    { name: "Settings", icon: Settings, id: "settings", path: "/hr-management/settings", roles: ['admin', 'hr_manager'] }
+    { name: "Settings", icon: Settings, id: "settings", path: "/hr-management/settings", roles: ['admin', 'hr_manager', 'payroll_master'] }
   ];
 
   // Filter items based on user role
   const itemsToShow = navItems.filter(item => {
     if (isAdmin) return true; // Admin can see everything
+    if (isPayrollMaster) {
+      // Payroll master can see everything except Team Management
+      return item.id !== 'team';
+    }
     if (isHRManager) return ['attendance-log', 'attendance-tracker', 'settings'].includes(item.id);
     return false; // No access for other roles
   });

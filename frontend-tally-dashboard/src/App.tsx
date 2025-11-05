@@ -179,8 +179,9 @@ function AppContent({ dark, setDark }: { dark: boolean; setDark: (v: boolean) =>
       const user = JSON.parse(localStorage.getItem('user') || '{}');
       const isHRManager = user?.role === 'hr_manager' || user?.role === 'hr-manager' || false;
       const isAdmin = user?.role === 'admin' || user?.is_admin || user?.is_superuser || false;
+      const isPayrollMaster = user?.role === 'payroll_master' || false;
       
-      if (isHRManager && !isAdmin) {
+      if (isHRManager && !isAdmin && !isPayrollMaster) {
         // HR managers should go to attendance log instead of directory
         navigate('/hr-management/attendance-log');
       } else {

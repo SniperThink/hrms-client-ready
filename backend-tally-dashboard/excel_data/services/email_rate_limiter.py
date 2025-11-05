@@ -5,14 +5,14 @@ Prevents email abuse by limiting the number of emails sent per email address
 
 import time
 from django.core.cache import cache
-from django.conf import settings
+from decouple import config
 import logging
 
 logger = logging.getLogger(__name__)
 
 # Rate limiting configuration
-EMAIL_RATE_LIMIT_COUNT = 3  # Maximum number of emails per time window
-EMAIL_RATE_LIMIT_WINDOW = 7200  # Time window in seconds (2 hours = 7200 seconds)
+EMAIL_RATE_LIMIT_COUNT = config('EMAIL_RATE_LIMIT_COUNT', default=1000, cast=int)  # Maximum number of emails per time window
+EMAIL_RATE_LIMIT_WINDOW = config('EMAIL_RATE_LIMIT_WINDOW', default=7200, cast=int)  # Time window in seconds (2 hours = 7200 seconds)
 CACHE_KEY_PREFIX = 'email_rate_limit_'
 
 
@@ -163,4 +163,60 @@ def format_time_remaining(seconds):
         return f"{minutes} minute{'s' if minutes > 1 else ''}"
     else:
         return f"{seconds} second{'s' if seconds > 1 else ''}"
+
+
+def clear_email_rate_limit(email_address):
+    """
+    Clear rate limit cache for a specific email address.
+    
+    Args:
+        email_address: The email address to clear rate limit for
+        
+    Returns:
+        bool: True if cache was cleared, False if email address was invalid or cache didn't exist
+    """
+    if not email_address:
+        return False
+    
+    email_address = email_address.lower().strip()
+    cache_key = f"{CACHE_KEY_PREFIX}{email_address}"
+    
+    try:
+        deleted = cache.delete(cache_key)
+        if deleted:
+            logger.info(f"Cleared rate limit cache for {email_address}")
+        return deleted
+    except Exception as e:
+        logger.error(f"Error clearing rate limit cache for {email_address}: {str(e)}")
+        return False
+
+
+def clear_all_email_rate_limits():
+    """
+    Clear all email rate limit cache entries.
+    Note: This uses pattern deletion which may not be supported by all cache backends.
+    If pattern deletion is not supported, it will attempt to clear all cache.
+    
+    Returns:
+        int: Number of cache entries cleared (approximate)
+    """
+    try:
+        # Try to use pattern deletion (works with Redis and some other backends)
+        if hasattr(cache, 'delete_pattern'):
+            try:
+                cache.delete_pattern(f"{CACHE_KEY_PREFIX}*")
+                logger.info("Cleared all email rate limit cache entries using pattern deletion")
+                return -1  # Count unknown with pattern deletion
+            except (AttributeError, NotImplementedError):
+                pass
+        
+        # Fallback: Clear all cache if pattern deletion is not supported
+        # This is a more aggressive approach but ensures all rate limit cache is cleared
+        cache.clear()
+        logger.warning("Pattern deletion not supported. Cleared ALL cache (including non-rate-limit cache)")
+        return -1
+        
+    except Exception as e:
+        logger.error(f"Error clearing email rate limit cache: {str(e)}")
+        return 0
 

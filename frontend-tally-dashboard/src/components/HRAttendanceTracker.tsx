@@ -589,7 +589,10 @@ const HRAttendanceTracker: React.FC = () => {
     : (totalWorkingDaysAgg > 0 ? (totalPresentDays / totalWorkingDaysAgg) * 100 : 0);
 
   const user = JSON.parse(localStorage.getItem('user') || '{}');
-  const isHRManager = user?.role === 'hr_manager';
+  const isHRManager = user?.role === 'hr_manager' || user?.role === 'hr-manager';
+  const isPayrollMaster = user?.role === 'payroll_master';
+  const isAdmin = user?.role === 'admin' || user?.is_admin || user?.is_superuser;
+  const canViewEmployeeDetails = isAdmin || isPayrollMaster; // Admin and Payroll Master can view employee details
 
   return (
     <div className="space-y-6">
@@ -859,7 +862,7 @@ const HRAttendanceTracker: React.FC = () => {
                       <tr key={index} className="hover:bg-gray-50">
                         <td className="px-4 py-3 text-sm">{record.employee_id}</td>
                         <td className="px-4 py-3 text-sm">
-                          {isHRManager ? (
+                          {isHRManager && !canViewEmployeeDetails ? (
                             <span className="text-black">{record.name}</span>
                           ) : (
                             <button

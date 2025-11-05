@@ -82,6 +82,7 @@ class CustomUser(AbstractUser):
     ROLE_CHOICES = [
         ('admin', 'Admin'),
         ('hr_manager', 'HR Manager'),
+        ('payroll_master', 'Payroll Master'),
         ('supervisor', 'Supervisor'),
         ('employee', 'Employee'),
     ]
@@ -121,16 +122,35 @@ class CustomUser(AbstractUser):
         db_table = 'users'
         
     def save(self, *args, **kwargs):
-        # Create default permissions if not exists
+        # Create or update default permissions based on role
         if not self.permissions:
             permissions = UserPermissions.objects.create(
                 can_view=True,
-                can_modify=self.role in ['admin', 'hr_manager'],
+                can_modify=self.role in ['admin', 'hr_manager', 'payroll_master'],
                 can_invite_users=self.role in ['admin'],
-                can_manage_payroll=self.role in ['admin', 'hr_manager'],
-                can_export_data=self.role in ['admin', 'hr_manager']
+                can_manage_payroll=self.role in ['admin', 'hr_manager', 'payroll_master'],
+                can_export_data=self.role in ['admin', 'hr_manager', 'payroll_master']
             )
             self.permissions = permissions
+        else:
+            # Update permissions when role changes (only for role-based permissions)
+            # Preserve manual permission overrides but update role-based defaults
+            if self.role in ['admin', 'hr_manager', 'payroll_master']:
+                self.permissions.can_modify = True
+                self.permissions.can_manage_payroll = True
+                self.permissions.can_export_data = True
+            else:
+                self.permissions.can_modify = False
+                self.permissions.can_manage_payroll = False
+                self.permissions.can_export_data = False
+            
+            # can_invite_users is only for admin
+            if self.role == 'admin':
+                self.permissions.can_invite_users = True
+            else:
+                self.permissions.can_invite_users = False
+            
+            self.permissions.save()
         super().save(*args, **kwargs)
     
     # Session management fields for single-login enforcement

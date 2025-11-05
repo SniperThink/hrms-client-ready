@@ -12,7 +12,6 @@ from .email_templates import (
     render_email_verification_email,
     render_account_recovery_email,
 )
-from .email_rate_limiter import can_send_email, record_email_sent, format_time_remaining
 
 logger = logging.getLogger(__name__)
 
@@ -28,25 +27,10 @@ def send_password_reset_otp(email, otp_code):
     
     Returns:
         dict: {
-            'success': bool,
-            'rate_limited': bool (optional),
-            'time_remaining': int (optional, seconds),
-            'time_remaining_formatted': str (optional, human-readable)
+            'success': bool
         }
     """
     try:
-        # Check rate limit
-        can_send, time_remaining = can_send_email(email)
-        if not can_send:
-            time_str = format_time_remaining(time_remaining)
-            logger.warning(f"Email rate limit exceeded for {email}. Please try again in {time_str}.")
-            return {
-                'success': False,
-                'rate_limited': True,
-                'time_remaining': time_remaining,
-                'time_remaining_formatted': time_str
-            }
-        
         subject = "Password Reset OTP - SniperThink HRMS"
         frontend_url = getattr(settings, 'FRONTEND_URL', 'http://35.154.9.249')
         expire_minutes = getattr(settings, 'PASSWORD_RESET_EXPIRE_MINUTES', 30)
@@ -63,7 +47,6 @@ def send_password_reset_otp(email, otp_code):
         )
         
         if success:
-            record_email_sent(email)
             logger.info(f"Password reset OTP sent successfully to {email}")
             return {'success': True}
         else:
@@ -78,16 +61,6 @@ def send_password_reset_otp(email, otp_code):
 def send_welcome_email(user):
     """Send welcome email after successful registration"""
     try:
-        # Check rate limit
-        can_send, time_remaining = can_send_email(user.email)
-        if not can_send:
-            time_str = format_time_remaining(time_remaining)
-            logger.warning(f"Email rate limit exceeded for {user.email}. Welcome email skipped. Please try again in {time_str}.")
-            # For welcome emails, we still want to send them even if rate limited
-            # but we'll log it as a warning
-            # Uncomment the return False line below to strictly enforce rate limiting
-            # return False
-        
         subject = f"Welcome to SniperThink - HRMS"
         frontend_url = getattr(settings, 'FRONTEND_URL', 'http://35.154.9.249')
         
@@ -103,7 +76,6 @@ def send_welcome_email(user):
         )
         
         if success:
-            record_email_sent(user.email)
             logger.info(f"Welcome email sent successfully to {user.email}")
             return True
         else:
@@ -137,13 +109,6 @@ def send_deletion_warning_email(tenant):
         # Send email to all admin users
         email_sent = False
         for admin_user in admin_users:
-            # Check rate limit - but deletion warnings are critical, so we'll still send them
-            # but log if rate limited
-            can_send, time_remaining = can_send_email(admin_user.email)
-            if not can_send:
-                time_str = format_time_remaining(time_remaining)
-                logger.warning(f"Email rate limit exceeded for {admin_user.email} (deletion warning). Email will still be sent due to critical nature.")
-            
             subject = f"⚠️ Important: Your HRMS Account Will Be Deleted in 3 Days - {tenant.name}"
             
             html_message = render_deletion_warning_email(
@@ -160,7 +125,6 @@ def send_deletion_warning_email(tenant):
             )
             
             if success:
-                record_email_sent(admin_user.email)
                 email_sent = True
                 logger.info(f"Deletion warning email sent to admin user {admin_user.email} for tenant {tenant.name}")
             else:

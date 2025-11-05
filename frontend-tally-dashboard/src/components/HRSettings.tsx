@@ -122,9 +122,12 @@ const HRSettings: React.FC = () => {
                         userFromStorage?.is_superuser || 
                         currentUser?.is_superuser || 
                         false;
+    
+    // Check if user is payroll master (cannot delete their account)
+    const userIsPayrollMaster = userRole === 'payroll_master' || false;
 
-    // Only allow admins to delete accounts
-    if (!userIsAdmin) {
+    // Only allow admins to delete accounts (payroll masters cannot delete their account)
+    if (!userIsAdmin || userIsPayrollMaster) {
       alert('Only administrators can delete accounts. Please contact your administrator.');
       return;
     }
@@ -194,6 +197,9 @@ const HRSettings: React.FC = () => {
   const isHRManager = userRole === 'hr_manager' || 
                       userRole === 'hr-manager' || 
                       false;
+  
+  // Check if user is Payroll Master
+  const isPayrollMaster = userRole === 'payroll_master' || false;
   
   // Debug logging
   useEffect(() => {
