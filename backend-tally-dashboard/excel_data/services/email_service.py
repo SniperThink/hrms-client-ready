@@ -4,14 +4,6 @@ from django.conf import settings
 from django.utils import timezone
 from django.utils.html import strip_tags
 import logging
-from .zeptomail_service import send_email_via_zeptomail
-from .email_templates import (
-    render_deletion_warning_email,
-    render_welcome_email,
-    render_password_reset_email,
-    render_email_verification_email,
-    render_account_recovery_email,
-)
 
 logger = logging.getLogger(__name__)
 
@@ -31,6 +23,9 @@ def send_password_reset_otp(email, otp_code):
         }
     """
     try:
+        from .zeptomail_service import send_email_via_zeptomail
+        from .email_templates import render_password_reset_email
+        
         subject = "Password Reset OTP - SniperThink HRMS"
         frontend_url = getattr(settings, 'FRONTEND_URL', 'http://35.154.9.249')
         expire_minutes = getattr(settings, 'PASSWORD_RESET_EXPIRE_MINUTES', 30)
@@ -61,6 +56,9 @@ def send_password_reset_otp(email, otp_code):
 def send_welcome_email(user):
     """Send welcome email after successful registration"""
     try:
+        from .zeptomail_service import send_email_via_zeptomail
+        from .email_templates import render_welcome_email
+        
         subject = f"Welcome to SniperThink - HRMS"
         frontend_url = getattr(settings, 'FRONTEND_URL', 'http://35.154.9.249')
         
@@ -90,6 +88,8 @@ def send_welcome_email(user):
 def send_deletion_warning_email(tenant):
     """Send warning email to admin users 3 days before account permanent deletion"""
     try:
+        from .zeptomail_service import send_email_via_zeptomail
+        from .email_templates import render_deletion_warning_email
         from ..models.auth import CustomUser
         from datetime import timedelta
         
