@@ -46,7 +46,6 @@ from ..serializers import (
     UserRegistrationSerializer,
     UserSerializer,
 )
-from ..services.zeptomail_service import send_email_via_zeptomail
 
 # Initialize logger
 logger = logging.getLogger(__name__)
@@ -807,6 +806,8 @@ class TenantSignupView(APIView):
                 from django.utils.html import strip_tags
                 
                 try:
+                    from ..services.zeptomail_service import send_email_via_zeptomail
+                    
                     frontend_url = getattr(settings, 'FRONTEND_URL', 'http://35.154.9.249')
                     subject = f"Welcome to SniperThink - Your Account Details"
 
@@ -868,6 +869,7 @@ class TenantSignupView(APIView):
         try:
             from ..services.email_templates import render_email_verification_email
             from django.utils.html import strip_tags
+            from ..services.zeptomail_service import send_email_via_zeptomail
 
             # Create verification URL (pointing to backend API)
             verification_url = (
@@ -1009,6 +1011,7 @@ class ResendVerificationView(APIView):
         try:
             from ..services.email_templates import render_email_verification_email
             from django.utils.html import strip_tags
+            from ..services.zeptomail_service import send_email_via_zeptomail
 
             # Create verification URL (pointing to backend API)
             verification_url = (
@@ -1482,6 +1485,8 @@ class UserInvitationViewSet(viewsets.ModelViewSet):
             try:
                 from ..services.email_templates import render_invitation_email
                 from django.utils.html import strip_tags
+                from ..services.zeptomail_service import send_email_via_zeptomail
+                
                 frontend_url = getattr(settings, 'FRONTEND_URL', 'http://localhost:5173')
                 
                 subject = f"Welcome to {request.user.tenant.name} - Your Account Details"
@@ -1688,6 +1693,7 @@ class EnhancedInvitationView(APIView):
                 try:
                     from ..services.email_templates import render_invitation_email
                     from django.utils.html import strip_tags
+                    from ..services.zeptomail_service import send_email_via_zeptomail
                     
                     html_message = render_invitation_email(
                         user, inviter_name, request.user.tenant.name, temp_password, frontend_url
