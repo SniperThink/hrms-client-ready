@@ -132,10 +132,49 @@ class EmployeeFormSerializer(serializers.ModelSerializer):
         ]
         
     def get_ot_calculation(self, obj):
-        """Show OT calculation formula"""
-        if obj.basic_salary:
-            return f"{obj.basic_salary} ÷ 240 = {round(obj.basic_salary / 240, 2)}"
-        return "Enter basic salary to calculate"
+        """Show OT calculation formula: (shift_end_time - shift_start_time) × working_days"""
+        from datetime import datetime, timedelta
+        
+        if obj.shift_start_time and obj.shift_end_time:
+            # Calculate shift hours
+            start_dt = datetime.combine(datetime.today().date(), obj.shift_start_time)
+            end_dt = datetime.combine(datetime.today().date(), obj.shift_end_time)
+            if end_dt <= start_dt:
+                end_dt += timedelta(days=1)
+            shift_hours = (end_dt - start_dt).total_seconds() / 3600
+            
+            # Calculate working days for current month
+            from calendar import monthrange
+            from datetime import date
+            now = date.today()
+            total_days = monthrange(now.year, now.month)[1]
+            month_start = date(now.year, now.month, 1)
+            month_end = date(now.year, now.month, total_days)
+            
+            # Build off-day set
+            off_days = set()
+            if obj.off_monday: off_days.add(0)
+            if obj.off_tuesday: off_days.add(1)
+            if obj.off_wednesday: off_days.add(2)
+            if obj.off_thursday: off_days.add(3)
+            if obj.off_friday: off_days.add(4)
+            if obj.off_saturday: off_days.add(5)
+            if obj.off_sunday: off_days.add(6)
+            
+            # Calculate working days
+            working_days = 0
+            current_date = month_start
+            while current_date <= month_end:
+                if current_date.weekday() not in off_days:
+                    working_days += 1
+                current_date += timedelta(days=1)
+            
+            if shift_hours > 0 and working_days > 0:
+                ot_rate = shift_hours * working_days
+                return f"({shift_hours:.2f} hrs × {working_days} days) = {round(ot_rate, 2)}"
+            else:
+                return "Invalid shift times or working days"
+        return "Enter shift times to calculate"
         
     def validate(self, data):
         """Custom validation for mandatory fields"""

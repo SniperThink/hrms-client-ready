@@ -259,20 +259,44 @@ def get_dropdown_options(request):
 @permission_classes([IsAuthenticated])
 def calculate_ot_rate(request):
     """
-    Calculate OT rate based on basic salary
+    Calculate OT rate based on shift times and working days
+    Formula: OT Rate = (shift_end_time - shift_start_time) × working_days
     """
     try:
-        basic_salary = float(request.data.get('basic_salary', 0))
-        if basic_salary > 0:
-            ot_rate = basic_salary / 240
-            return Response({
-                'ot_rate': round(ot_rate, 2),
-                'calculation': f"{basic_salary} ÷ 240 = {round(ot_rate, 2)}"
-            })
-        else:
-            return Response({'ot_rate': 0, 'calculation': 'Enter basic salary to calculate OT rate'})
-    except (ValueError, TypeError):
-        return Response({'error': 'Invalid salary amount'}, status=400)
+        from datetime import datetime, timedelta
+        
+        shift_start_time_str = request.data.get('shift_start_time', '09:00')
+        shift_end_time_str = request.data.get('shift_end_time', '18:00')
+        working_days = int(request.data.get('working_days', 30))
+        
+        # Parse shift times
+        try:
+            shift_start_time = datetime.strptime(shift_start_time_str, '%H:%M').time()
+            shift_end_time = datetime.strptime(shift_end_time_str, '%H:%M').time()
+        except (ValueError, TypeError):
+            shift_start_time = datetime.strptime('09:00', '%H:%M').time()
+            shift_end_time = datetime.strptime('18:00', '%H:%M').time()
+        
+        # Calculate shift hours
+        start_dt = datetime.combine(datetime.today().date(), shift_start_time)
+        end_dt = datetime.combine(datetime.today().date(), shift_end_time)
+        if end_dt <= start_dt:
+            end_dt += timedelta(days=1)
+        shift_hours = (end_dt - start_dt).total_seconds() / 3600
+        
+        # Calculate OT rate: shift_hours × working_days
+        ot_rate = shift_hours * working_days
+        calculation = f"{shift_hours:.2f} hours × {working_days} days = {round(ot_rate, 2)}"
+        
+        return Response({
+            'ot_rate': round(ot_rate, 2),
+            'calculation': calculation,
+            'shift_hours_per_day': round(shift_hours, 2),
+            'working_days': working_days,
+            'total_hours': round(ot_rate, 2)
+        })
+    except (ValueError, TypeError) as e:
+        return Response({'error': f'Invalid input: {str(e)}'}, status=400)
 
 @api_view(['GET'])
 @permission_classes([IsAuthenticated])

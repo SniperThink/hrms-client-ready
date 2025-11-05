@@ -377,18 +377,35 @@ class SalaryCalculationService:
             working_days = SalaryCalculationService._calculate_employee_working_days(
                 employee, payroll_period.year, payroll_period.month
             )
-            hours_per_day = 8  # Standard working hours
-            minutes_per_day = hours_per_day * 60
             
-            basic_salary_per_hour = basic_salary / (working_days * hours_per_day) if working_days > 0 else Decimal('0')
-            basic_salary_per_minute = basic_salary / (working_days * minutes_per_day) if working_days > 0 else Decimal('0')
+            # Calculate shift hours from shift_start_time and shift_end_time
+            from datetime import datetime, timedelta
+            shift_hours_per_day = Decimal('0')
+            if hasattr(employee, 'shift_start_time') and hasattr(employee, 'shift_end_time') and \
+               employee.shift_start_time and employee.shift_end_time:
+                start_dt = datetime.combine(datetime.today().date(), employee.shift_start_time)
+                end_dt = datetime.combine(datetime.today().date(), employee.shift_end_time)
+                # Handle overnight shifts
+                if end_dt <= start_dt:
+                    end_dt += timedelta(days=1)
+                delta = end_dt - start_dt
+                shift_hours_per_day = Decimal(str(delta.total_seconds() / 3600))
+            else:
+                # Fallback to 8 hours if shift times not set
+                shift_hours_per_day = Decimal('8')
             
-            # Use employee's OT rate if available, otherwise calculate from basic salary
+            minutes_per_day = shift_hours_per_day * Decimal('60')
+            
+            basic_salary_per_hour = basic_salary / (working_days * shift_hours_per_day) if working_days > 0 and shift_hours_per_day > 0 else Decimal('0')
+            basic_salary_per_minute = basic_salary / (working_days * minutes_per_day) if working_days > 0 and minutes_per_day > 0 else Decimal('0')
+            
+            # Use employee's OT rate if available, otherwise calculate from shift hours and working days
             if employee.ot_charge_per_hour:
                 ot_rate_per_hour = employee.ot_charge_per_hour
             else:
-                # Calculate OT rate as Basic Salary ÷ 240 hours (standard formula)
-                ot_rate_per_hour = basic_salary / Decimal('240') if basic_salary > 0 else Decimal('0')
+                # Calculate OT rate as (shift_hours × working_days)
+                # Formula: OT Charge per Hour = (shift_end_time - shift_start_time) × working_days
+                ot_rate_per_hour = shift_hours_per_day * Decimal(str(working_days))
             
             # Use employee's TDS percentage if available, otherwise use period default
             employee_tds_rate = employee.tds_percentage if employee.tds_percentage is not None else payroll_period.tds_rate

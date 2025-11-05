@@ -288,6 +288,111 @@ const HRAddEmployee: React.FC = () => {
     }));
   };
 
+  // Helper function to calculate shift hours from start and end times
+  const calculateShiftHours = (startTime: string, endTime: string): number => {
+    if (!startTime || !endTime) return 0;
+    
+    try {
+      // Parse time strings (format: HH:MM or HH:MM:SS)
+      const parseTime = (timeStr: string): number => {
+        const parts = timeStr.split(':');
+        const hours = parseInt(parts[0] || '0', 10);
+        const minutes = parseInt(parts[1] || '0', 10);
+        return hours + minutes / 60;
+      };
+      
+      const start = parseTime(startTime);
+      let end = parseTime(endTime);
+      
+      // Handle overnight shifts (end time before start time means next day)
+      if (end <= start) {
+        end += 24;
+      }
+      
+      return end - start;
+    } catch (error) {
+      logger.error('Error calculating shift hours:', error);
+      return 0;
+    }
+  };
+
+  // Helper function to calculate working days from off days
+  const calculateWorkingDays = (offDays: {
+    off_monday: boolean;
+    off_tuesday: boolean;
+    off_wednesday: boolean;
+    off_thursday: boolean;
+    off_friday: boolean;
+    off_saturday: boolean;
+    off_sunday: boolean;
+  }): number => {
+    const now = new Date();
+    const year = now.getFullYear();
+    const month = now.getMonth();
+    
+    // Get total days in current month
+    const totalDays = new Date(year, month + 1, 0).getDate();
+    
+    // Build off-day set (0 = Monday, 6 = Sunday)
+    const offDaySet = new Set<number>();
+    if (offDays.off_monday) offDaySet.add(0);
+    if (offDays.off_tuesday) offDaySet.add(1);
+    if (offDays.off_wednesday) offDaySet.add(2);
+    if (offDays.off_thursday) offDaySet.add(3);
+    if (offDays.off_friday) offDaySet.add(4);
+    if (offDays.off_saturday) offDaySet.add(5);
+    if (offDays.off_sunday) offDaySet.add(6);
+    
+    // Calculate working days excluding off days
+    let workingDays = 0;
+    for (let day = 1; day <= totalDays; day++) {
+      const date = new Date(year, month, day);
+      const weekday = (date.getDay() + 6) % 7; // Convert to Monday=0 format
+      if (!offDaySet.has(weekday)) {
+        workingDays++;
+      }
+    }
+    
+    return workingDays;
+  };
+
+  // Helper function to calculate OT rate using formula: (shift_hours × working_days)
+  const calculateOTRate = (
+    basicSalary: string,
+    shiftStartTime: string,
+    shiftEndTime: string,
+    offDays: {
+      off_monday: boolean;
+      off_tuesday: boolean;
+      off_wednesday: boolean;
+      off_thursday: boolean;
+      off_friday: boolean;
+      off_saturday: boolean;
+      off_sunday: boolean;
+    }
+  ): string => {
+    if (!shiftStartTime || !shiftEndTime) {
+      return '';
+    }
+    
+    // Calculate (end_time - start_time) in hours
+    const shiftHours = calculateShiftHours(shiftStartTime, shiftEndTime);
+    if (shiftHours <= 0) {
+      return '';
+    }
+    
+    // Calculate working days
+    const workingDays = calculateWorkingDays(offDays);
+    if (workingDays <= 0) {
+      return '';
+    }
+    
+    // OT Charge per Hour = shift_hours × working_days
+    const otRate = shiftHours * workingDays;
+    
+    return otRate.toFixed(2);
+  };
+
   // Handle input changes
   const handleInputChange = (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>) => {
     const { name, value, type } = e.target;
@@ -295,47 +400,82 @@ const HRAddEmployee: React.FC = () => {
     // Handle checkboxes separately
     if (type === 'checkbox') {
       const checked = (e.target as HTMLInputElement).checked;
-      setFormData(prev => ({
-        ...prev,
-        [name]: checked
-      }));
+      setFormData(prev => {
+        const updated = { ...prev, [name]: checked };
+        // Recalculate OT rate when off days change
+        if (name.startsWith('off_')) {
+          updated.ot_charge = calculateOTRate(
+            updated.basic_salary,
+            updated.shift_start_time,
+            updated.shift_end_time,
+            {
+              off_monday: updated.off_monday,
+              off_tuesday: updated.off_tuesday,
+              off_wednesday: updated.off_wednesday,
+              off_thursday: updated.off_thursday,
+              off_friday: updated.off_friday,
+              off_saturday: updated.off_saturday,
+              off_sunday: updated.off_sunday,
+            }
+          );
+        }
+        return updated;
+      });
     } else {
       setFormData(prev => {
         const updated = { ...prev, [name]: value };
-        if (name === 'basic_salary') {
-          const salaryNum = parseFloat(value.replace(/,/g, ''));
-          if (!isNaN(salaryNum) && salaryNum > 0) {
-            updated.ot_charge = (salaryNum / 240).toFixed(2);
-          } else {
-            updated.ot_charge = '';
-          }
+        // Recalculate OT rate when shift start time or shift end time changes
+        if (name === 'shift_start_time' || name === 'shift_end_time') {
+          updated.ot_charge = calculateOTRate(
+            updated.basic_salary,
+            updated.shift_start_time,
+            updated.shift_end_time,
+            {
+              off_monday: updated.off_monday,
+              off_tuesday: updated.off_tuesday,
+              off_wednesday: updated.off_wednesday,
+              off_thursday: updated.off_thursday,
+              off_friday: updated.off_friday,
+              off_saturday: updated.off_saturday,
+              off_sunday: updated.off_sunday,
+            }
+          );
         }
         return updated;
       });
     }
   };
 
-  // Handle salary dropdown changes with OT calculation
+  // Handle salary dropdown changes
   const handleSalaryChange = (value: string) => {
-    setFormData(prev => {
-      const updated = { ...prev, basic_salary: value };
-      const salaryNum = parseFloat(value);
-      if (!isNaN(salaryNum) && salaryNum > 0) {
-        updated.ot_charge = (salaryNum / 240).toFixed(2);
-      } else {
-        updated.ot_charge = '';
-      }
-      return updated;
-    });
+    setFormData(prev => ({
+      ...prev,
+      basic_salary: value
+    }));
   };
 
   // Handle checkbox changes for off days
   const handleCheckboxChange = (day: string) => {
     const fieldName = `off_${day.toLowerCase()}` as keyof EmployeeFormState;
-    setFormData(prev => ({
-      ...prev,
-      [fieldName]: !prev[fieldName]
-    }));
+    setFormData(prev => {
+      const updated = { ...prev, [fieldName]: !prev[fieldName] };
+      // Recalculate OT rate when off days change
+      updated.ot_charge = calculateOTRate(
+        updated.basic_salary,
+        updated.shift_start_time,
+        updated.shift_end_time,
+        {
+          off_monday: updated.off_monday,
+          off_tuesday: updated.off_tuesday,
+          off_wednesday: updated.off_wednesday,
+          off_thursday: updated.off_thursday,
+          off_friday: updated.off_friday,
+          off_saturday: updated.off_saturday,
+          off_sunday: updated.off_sunday,
+        }
+      );
+      return updated;
+    });
   };
 
   // Function to validate the form based on active tab
@@ -654,7 +794,7 @@ const HRAddEmployee: React.FC = () => {
               <li><strong>Gender:</strong> Male, Female, Other</li>
               <li><strong>Shift Times:</strong> Use HH:MM:SS format (e.g., 09:00:00)</li>
               <li><strong>Basic Salary:</strong> Enter as number only (e.g., 50000)</li>
-              <li><strong>OT Rate (per hour):</strong> Overtime hourly rate (e.g., 208.33). If not provided, auto-calculated as Basic Salary ÷ 240</li>
+              <li><strong>OT Rate (per hour):</strong> Overtime hourly rate. Auto-calculated as (Shift Hours × Working Days)</li>
               <li><strong>Dates:</strong> Use YYYY-MM-DD format (e.g., 2024-01-01)</li>
               <li><strong>TDS:</strong> Enter as percentage number (e.g., 10 for 10%)</li>
               <li><strong>OFF DAY:</strong> Monday, Tuesday, etc. (comma-separated for multiple days)</li>
@@ -931,9 +1071,10 @@ const HRAddEmployee: React.FC = () => {
             <div className="flex items-center gap-2">
               <input
                 type="time"
+                name="shift_start_time"
                 value={formData.shift_start_time}
                 onFocus={e => (e.currentTarget as HTMLInputElement).showPicker?.()}
-                onChange={e => setFormData(prev => ({ ...prev, shift_start_time: e.target.value }))}
+                onChange={handleInputChange}
                 className="time-input-styled w-28 px-3 py-3 border border-gray-200 rounded-lg text-sm focus:outline-none focus:border-teal-500 focus:ring-1 focus:ring-teal-500 bg-white text-gray-700 hover:border-gray-300 transition-colors duration-200"
               />
               <span className="text-sm text-gray-500">Shift Start Time</span>
@@ -942,9 +1083,10 @@ const HRAddEmployee: React.FC = () => {
             <div className="flex items-center gap-2">
               <input
                 type="time"
+                name="shift_end_time"
                 value={formData.shift_end_time}
                 onFocus={e => (e.currentTarget as HTMLInputElement).showPicker?.()}
-                onChange={e => setFormData(prev => ({ ...prev, shift_end_time: e.target.value }))}
+                onChange={handleInputChange}
                 className="time-input-styled w-28 px-3 py-3 border border-gray-200 rounded-lg text-sm focus:outline-none focus:border-teal-500 focus:ring-1 focus:ring-teal-500 bg-white text-gray-700 hover:border-gray-300 transition-colors duration-200"
               />
               <span className="text-sm text-gray-500">Shift End Time</span>
@@ -1001,9 +1143,17 @@ const HRAddEmployee: React.FC = () => {
                 className="w-full p-3 border border-gray-200 rounded-lg focus:outline-none focus:ring-1 focus:ring-teal-500 text-gray-500 placeholder-gray-500"
                 readOnly
               />
-              {formData.basic_salary && formData.ot_charge && (
+              {formData.ot_charge && formData.shift_start_time && formData.shift_end_time && (
                 <div className="absolute top-full left-0 right-0 text-xs text-gray-500 mt-1">
-                  Calculation: {formData.basic_salary} ÷ 240 = {formData.ot_charge}
+                  Calculation: ({calculateShiftHours(formData.shift_start_time, formData.shift_end_time).toFixed(2)} hours × {calculateWorkingDays({
+                    off_monday: formData.off_monday,
+                    off_tuesday: formData.off_tuesday,
+                    off_wednesday: formData.off_wednesday,
+                    off_thursday: formData.off_thursday,
+                    off_friday: formData.off_friday,
+                    off_saturday: formData.off_saturday,
+                    off_sunday: formData.off_sunday,
+                  })} days) = {formData.ot_charge}
                 </div>
               )}
             </div>

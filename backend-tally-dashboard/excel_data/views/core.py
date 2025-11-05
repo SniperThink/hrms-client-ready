@@ -3540,8 +3540,8 @@ class EmployeeProfileViewSet(viewsets.ModelViewSet):
             for index, emp_data in enumerate(employees_data):
                 employee_id = employee_id_mapping[index]
                 
-                # Calculate OT charge per hour (basic_salary / 240)
-                ot_charge_per_hour = emp_data['basic_salary'] / 240 if emp_data['basic_salary'] > 0 else 0
+                # OT charge per hour will be auto-calculated in save() method
+                # using formula: (shift_end_time - shift_start_time) × working_days
                 
                 employee_objects.append(EmployeeProfile(
                     tenant=tenant,
@@ -3566,7 +3566,7 @@ class EmployeeProfileViewSet(viewsets.ModelViewSet):
                     shift_end_time=emp_data['shift_end_time'],
                     basic_salary=emp_data['basic_salary'],
                     tds_percentage=emp_data['tds_percentage'],
-                    ot_charge_per_hour=ot_charge_per_hour,
+                    # ot_charge_per_hour will be auto-calculated in save() method
                     off_monday=emp_data['off_monday'],
                     off_tuesday=emp_data['off_tuesday'],
                     off_wednesday=emp_data['off_wednesday'],
@@ -3716,8 +3716,8 @@ class EmployeeProfileViewSet(viewsets.ModelViewSet):
                     print(f"⚠️  Warning: No valid basic salary provided for employee {emp_data.get('name', 'Unknown')}, using 0")
                     basic_salary = 0
                 
-                # Calculate OT charge per hour (basic salary / 240)
-                ot_charge_per_hour = basic_salary / 240
+                # OT charge per hour will be auto-calculated in save() method
+                # using formula: (shift_end_time - shift_start_time) × working_days
                 
                 # Handle last name properly - avoid "nan" values
                 last_name = emp_data.get('last_name', '')
@@ -3760,7 +3760,7 @@ class EmployeeProfileViewSet(viewsets.ModelViewSet):
                     shift_end_time=dt_time(18, 0),   # 18:00
                     basic_salary=basic_salary,
                     tds_percentage=0,
-                    ot_charge_per_hour=ot_charge_per_hour,
+                    # ot_charge_per_hour will be auto-calculated in save() method
                     off_monday=False,
                     off_tuesday=False,
                     off_wednesday=False,

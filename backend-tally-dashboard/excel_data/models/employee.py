@@ -1,5 +1,6 @@
 from django.db import models
 from .tenant import TenantAwareModel
+from datetime import datetime, timedelta
 
 
 class EmployeeProfile(TenantAwareModel):
@@ -77,6 +78,66 @@ class EmployeeProfile(TenantAwareModel):
             models.Index(fields=['is_active', 'employee_id'], name='employee_lookup_idx'),
         ]
 
+    def _calculate_shift_hours(self):
+        """Calculate shift duration in hours from shift_start_time to shift_end_time"""
+        if not self.shift_start_time or not self.shift_end_time:
+            return 0
+        
+        # Convert time objects to datetime for calculation
+        start_dt = datetime.combine(datetime.today().date(), self.shift_start_time)
+        end_dt = datetime.combine(datetime.today().date(), self.shift_end_time)
+        
+        # Handle overnight shifts (end time before start time means next day)
+        if end_dt <= start_dt:
+            end_dt += timedelta(days=1)
+        
+        # Calculate difference in hours
+        delta = end_dt - start_dt
+        return delta.total_seconds() / 3600  # Convert to hours
+    
+    def _calculate_working_days_for_month(self, year=None, month=None):
+        """Calculate working days for a given month based on off days"""
+        from calendar import monthrange
+        from datetime import date
+        
+        # Use current month if not specified
+        if year is None or month is None:
+            now = date.today()
+            year = now.year
+            month = now.month
+        elif isinstance(month, str):
+            # Convert month name to number if needed
+            month_names = ['JAN', 'FEB', 'MAR', 'APR', 'MAY', 'JUN', 
+                          'JUL', 'AUG', 'SEP', 'OCT', 'NOV', 'DEC']
+            try:
+                month = month_names.index(month.upper()) + 1
+            except ValueError:
+                month = date.today().month
+        
+        total_days = monthrange(year, month)[1]
+        month_start = date(year, month, 1)
+        month_end = date(year, month, total_days)
+        
+        # Build off-day set
+        off_days = set()
+        if self.off_monday: off_days.add(0)
+        if self.off_tuesday: off_days.add(1)
+        if self.off_wednesday: off_days.add(2)
+        if self.off_thursday: off_days.add(3)
+        if self.off_friday: off_days.add(4)
+        if self.off_saturday: off_days.add(5)
+        if self.off_sunday: off_days.add(6)
+        
+        # Calculate working days excluding off days
+        working_days = 0
+        current_date = month_start
+        while current_date <= month_end:
+            if current_date.weekday() not in off_days:
+                working_days += 1
+            current_date += timedelta(days=1)
+        
+        return working_days
+    
     def save(self, *args, **kwargs):
         # Generate employee_id if not provided
         if not self.employee_id and self.first_name and self.last_name and self.tenant_id:
@@ -84,9 +145,15 @@ class EmployeeProfile(TenantAwareModel):
             full_name = f"{self.first_name} {self.last_name}"
             self.employee_id = generate_employee_id(full_name, self.tenant_id, self.department)
         
-        # Auto-calculate OT charge per hour (basic_salary / 240 hours)
-        if self.basic_salary:
-            self.ot_charge_per_hour = self.basic_salary / 240
+        # Auto-calculate OT charge per hour using formula: (shift_hours × working_days)
+        # Formula: OT Charge per Hour = (shift_end_time - shift_start_time) × working_days
+        if self.shift_start_time and self.shift_end_time:
+            # Calculate (end_time - start_time) in hours
+            shift_hours_per_day = self._calculate_shift_hours()  # This is (shift_end_time - shift_start_time)
+            working_days = self._calculate_working_days_for_month()
+            
+            # OT Charge per Hour = shift_hours × working_days
+            self.ot_charge_per_hour = shift_hours_per_day * working_days
         
         super().save(*args, **kwargs)
 

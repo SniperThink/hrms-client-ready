@@ -581,7 +581,8 @@ const SimplePayrollCalculator: React.FC = () => {
                 <p><span className="font-medium">Gross Salary</span> = (Base Salary ÷ Working Days × Present Days) + OT Charges - Late Deduction</p>
                 <p><span className="font-medium">Advance Deduction</span> = Min(50% of Salary After TDS, Total Advance Balance)</p>
                 <p><span className="font-medium">Net Salary</span> = Gross Salary - TDS Amount - Advance Deduction</p>
-                <p><span className="font-medium">OT Charges</span> = OT Hours × (Base Salary ÷ 240)</p>
+                <p><span className="font-medium">OT Charges</span> = OT Hours × OT Rate per Hour</p>
+                <p className="text-xs text-gray-500 ml-2">OT Rate = Base Salary ÷ ((End Time - Start Time) × Working Days)</p>
                 <p><span className="font-medium">Late Deduction</span> = Late Minutes × (OT Rate ÷ 60)</p>
                 <p><span className="font-medium text-orange-600">Advance Balance</span> = Total of all approved advances for employee</p>
               </div>
