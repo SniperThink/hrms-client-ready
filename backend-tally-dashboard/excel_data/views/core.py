@@ -763,11 +763,11 @@ class SalaryDataViewSet(viewsets.ModelViewSet):
             else:
                 selected_periods = current_month_periods.none()  # Return an empty queryset
                 logger.info("Current month not found, returning empty result")
-            #     Fallback to newest period if current month not calculated yet
-            #     selected_periods = payroll_periods[:1]
-            #     logger.info(f"Current month not found, using fallback: {list(selected_periods.values('year', 'month'))}")
-            #     if selected_periods:
-            #         fallback_period = selected_periods[0]
+                #Fallback to newest period if current month not calculated yet
+                selected_periods = payroll_periods[:1]
+                logger.info(f"Current month not found, using fallback: {list(selected_periods.values('year', 'month'))}")
+                if selected_periods:
+                    fallback_period = selected_periods[0]
                     
                 
         elif time_period == 'last_6_months' or time_period == 'last_12_months':
