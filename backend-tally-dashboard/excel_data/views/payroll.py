@@ -2411,12 +2411,20 @@ def calculate_simple_payroll_ultra_fast(request):
                 month_num = list(calendar.month_name).index(month.title())
             else:
                 month_num = int(month)
-        except (ValueError, TypeError):
-            return Response({"error": "Invalid year or month format"}, status=400)
+            
+            # Validate month_num is in valid range (1-12)
+            if month_num < 1 or month_num > 12:
+                return Response({"error": f"Invalid month number: {month_num}. Must be between 1 and 12."}, status=400)
+        except (ValueError, TypeError, IndexError) as e:
+            return Response({"error": f"Invalid year or month format: {str(e)}"}, status=400)
         
         # Get total days in the month (actual working days = total days - off days for each employee)
         # For summary display, we'll show total days in month
-        total_days_in_month = calendar.monthrange(year, month_num)[1]
+        try:
+            total_days_in_month = calendar.monthrange(year, month_num)[1]
+        except (ValueError, TypeError) as e:
+            return Response({"error": f"Invalid year or month for date calculation: {str(e)}"}, status=400)
+        
         working_days = total_days_in_month  # Use total days for summary display
         month_name_upper = calendar.month_name[month_num].upper()
         
@@ -2935,22 +2943,38 @@ def calculate_simple_payroll_ultra_fast(request):
             """
             
             # Count all %s placeholders: 
-            # 1 working_days (line 2433), 2-15 working_days for OT rate calculations (14 times), 
-            # 16-18 attendance (3 params), 19-20 advance (2 params), 21 total_advance (1 param), 22 employee filter (1 param)
+            # Total: 24 placeholders
+            # 1: working_days display (line 2441)
+            # 2-3: OT rate fallback - first calculation (lines 2509, 2521)
+            # 4-5: gross_salary working days check and division (lines 2531, 2532)
+            # 6-7: OT rate in gross_salary fallback (lines 2573, 2585)
+            # 8-9: OT rate in late deduction (gross_salary) fallback - first (lines 2632, 2644)
+            # 10-11: OT rate in late deduction (gross_salary) fallback - second (lines 2690, 2702)
+            # 12-13: OT rate in ot_charges fallback (lines 2754, 2766)
+            # 14-15: OT rate in late_deduction fallback - first (lines 2815, 2827)
+            # 16-17: OT rate in late_deduction fallback - second (lines 2873, 2885)
+            # 18-20: attendance parameters (lines 2913-2915)
+            # 21-22: advance parameters (lines 2924-2925)
+            # 23: total advance parameters (line 2935)
+            # 24: employee filter (line 2940)
             cursor.execute(sql, [
                 working_days,  # 1: working_days display
                 working_days, working_days,  # 2-3: OT rate fallback (first calculation)
-                working_days, working_days,  # 4-5: gross_salary working days
+                working_days, working_days,  # 4-5: gross_salary working days (WHEN check and division)
                 working_days, working_days,  # 6-7: OT rate in gross_salary fallback
-                working_days, working_days,  # 8-9: OT rate in late deduction (gross_salary) fallback
-                working_days, working_days,  # 10-11: OT rate in ot_charges fallback
-                working_days, working_days,  # 12-13: OT rate in late_deduction fallback (first)
-                working_days, working_days,  # 14-15: OT rate in late_deduction fallback (second)
-                tenant.id, year, month_num,  # 16-18: attendance parameters
-                tenant.id, f'%{month_year_string}%',  # 19-20: advance parameters
-                tenant.id,  # 21: total advance parameters
-                tenant.id  # 22: employee filter
+                working_days, working_days,  # 8-9: OT rate in late deduction (gross_salary) fallback - first
+                working_days, working_days,  # 10-11: OT rate in late deduction (gross_salary) fallback - second
+                working_days, working_days,  # 12-13: OT rate in ot_charges fallback
+                working_days, working_days,  # 14-15: OT rate in late_deduction fallback - first
+                working_days, working_days,  # 16-17: OT rate in late_deduction fallback - second
+                tenant.id, year, month_num,  # 18-20: attendance parameters
+                tenant.id, f'%{month_year_string}%',  # 21-22: advance parameters
+                tenant.id,  # 23: total advance parameters
+                tenant.id  # 24: employee filter
             ])
+            
+            if not cursor.description:
+                return Response({"error": "SQL query returned no columns"}, status=500)
             
             columns = [col[0] for col in cursor.description]
             raw_results = cursor.fetchall()
@@ -2974,13 +2998,19 @@ def calculate_simple_payroll_ultra_fast(request):
         for row in raw_results:
             data = dict(zip(columns, row))
             
+            # Extract employee_id early and validate
+            employee_id = data.get('employee_id')
+            if not employee_id:
+                logger.warning(f"Skipping row - missing employee_id: {data}")
+                continue
+            
             # Skip employees with no attendance data (present_days = 0 and absent_days = 0)
             present_days = float(data.get('present_days', 0) or 0)
             absent_days = float(data.get('absent_days', 0) or 0)
             
             # FIXED: Only process employees who have attendance data
             if present_days == 0 and absent_days == 0:
-                logger.debug(f"Skipping employee {data.get('employee_id')} - no attendance data")
+                logger.debug(f"Skipping employee {employee_id} - no attendance data")
                 continue
             
             # FIXED: Use uploaded working days from attendance data if available, otherwise calculate
@@ -2991,7 +3021,7 @@ def calculate_simple_payroll_ultra_fast(request):
                 employee_working_days = uploaded_working_days
             else:
                 # Fallback: SMART CALCULATION with DOJ awareness
-                employee = employees_map.get(data['employee_id'])
+                employee = employees_map.get(employee_id)
                 if employee:
                     employee_working_days = SalaryCalculationService._calculate_employee_working_days(
                         employee, year, month_name_upper
@@ -3003,8 +3033,8 @@ def calculate_simple_payroll_ultra_fast(request):
             # Calculate OT rate dynamically based on this month's working days
             # OT rate changes monthly because working days change monthly
             # Formula: OT Charge per Hour = basic_salary / (shift_hours × working_days)
-            base_salary = float(data['base_salary'] or 0)
-            employee = employees_map.get(data['employee_id'])
+            base_salary = float(data.get('base_salary', 0) or 0)
+            employee = employees_map.get(employee_id)
             
             # Calculate shift hours
             shift_hours_per_day = 0
@@ -3079,9 +3109,9 @@ def calculate_simple_payroll_ultra_fast(request):
             net_salary_rounded = round(net_salary, 2)
             
             payroll_data.append({
-                'employee_id': data['employee_id'],
-                'employee_name': data['employee_name'],
-                'department': data['department'],
+                'employee_id': employee_id,
+                'employee_name': data.get('employee_name', ''),
+                'department': data.get('department', 'N/A'),
                 'base_salary': base_salary,
                 'working_days': int(employee_working_days),
                 'present_days': int(data['present_days'] or 0),
@@ -3127,7 +3157,9 @@ def calculate_simple_payroll_ultra_fast(request):
         })
         
     except Exception as e:
-        logger.error(f"Error in calculate_simple_payroll_ultra_fast: {str(e)}")
+        import traceback
+        error_traceback = traceback.format_exc()
+        logger.error(f"Error in calculate_simple_payroll_ultra_fast: {str(e)}\n{error_traceback}")
         return Response({"error": f"Ultra-fast calculation failed: {str(e)}"}, status=500)
 
 @api_view(['POST'])
