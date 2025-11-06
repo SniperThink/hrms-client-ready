@@ -74,12 +74,34 @@ const HRDirectory: React.FC = () => {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // Listen for attendance updates to refresh directory data
+  useEffect(() => {
+    const handleAttendanceUpdate = () => {
+      logger.info('🔄 Attendance updated event received - refreshing directory data');
+      // Refresh directory data to show updated OT hours and late minutes
+      // Reset offset to start from beginning and force fresh data
+      setOffset(0);
+      setEmployees([]); // Clear existing data to force fresh fetch
+      refreshEmployeeData(false, true); // Force full refresh with cache bypass
+    };
+
+    // Listen for custom events that indicate data changes
+    window.addEventListener('attendanceUpdated', handleAttendanceUpdate);
+    window.addEventListener('refreshEmployeeData', handleAttendanceUpdate);
+
+    return () => {
+      window.removeEventListener('attendanceUpdated', handleAttendanceUpdate);
+      window.removeEventListener('refreshEmployeeData', handleAttendanceUpdate);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   // Note: Infinite scroll removed - now using automatic batch loading like attendance tracker
   // Background loading happens automatically after initial load with 500ms delays
 
 
   // Progressive loading function (like attendance tracker)
-  const refreshEmployeeData = async (loadMore: boolean = false) => {
+  const refreshEmployeeData = async (loadMore: boolean = false, forceRefresh: boolean = false) => {
     try {
       // Show appropriate loading indicator
       if (loadMore) {
@@ -95,7 +117,12 @@ const HRDirectory: React.FC = () => {
       params.append('offset', currentOffset.toString());
       params.append('limit', BATCH_SIZE.toString());
       
-      // Don't clear cache - keep cached data for fast loading
+      // Add cache-busting parameter when force refreshing (e.g., after attendance update)
+      // This ensures we get fresh data with updated OT hours and late minutes
+      // The backend clears cache on attendance save, but this ensures fresh data
+      if (forceRefresh) {
+        params.append('no_cache', 'true'); // Force fresh data from database
+      }
       
       logger.info( `⚡ Fetching employees: offset=${currentOffset}, limit=${BATCH_SIZE}, loadMore=${loadMore}`);
       logger.info( `📡 API URL: /api/employees/directory_data/?${params.toString()}`);

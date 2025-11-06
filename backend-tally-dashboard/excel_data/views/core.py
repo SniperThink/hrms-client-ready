@@ -2568,7 +2568,6 @@ class EmployeeProfileViewSet(viewsets.ModelViewSet):
                 f"directory_data_{tenant.id}",
                 f"directory_data_full_{tenant.id}",
                 f"payroll_overview_{tenant.id}",
-                f"attendance_all_records_{tenant.id}",
                 f"all_departments_{tenant.id}",
             ]
             
@@ -2579,6 +2578,25 @@ class EmployeeProfileViewSet(viewsets.ModelViewSet):
             # Clear all cache keys
             for key in cache_keys:
                 cache.delete(key)
+            
+            # CRITICAL: Clear all attendance_all_records cache variations (pattern-based)
+            # This ensures attendance log cache is cleared when employee profile changes
+            try:
+                cache.delete_pattern(f"attendance_all_records_{tenant.id}_*")
+                logger.info(f"✅ Cleared all attendance_all_records cache variations (pattern) for tenant {tenant.id}")
+            except (AttributeError, NotImplementedError):
+                # Fallback: Clear common variations manually
+                common_time_periods = ['last_6_months', 'last_12_months', 'last_5_years', 'this_month', 'custom', 'custom_month', 'custom_range', 'one_day']
+                for period in common_time_periods:
+                    variations = [
+                        f"attendance_all_records_{tenant.id}_{period}_None_None_None_None_rt_1",
+                        f"attendance_all_records_{tenant.id}_{period}_None_None_None_None_rt_0",
+                    ]
+                    for var_key in variations:
+                        cache.delete(var_key)
+                # Also clear base key
+                cache.delete(f"attendance_all_records_{tenant.id}")
+                logger.info(f"✅ Cleared attendance_all_records cache variations (manual fallback) for tenant {tenant.id}")
             
             # Clear frontend charts cache
             try:
@@ -2834,29 +2852,54 @@ class EmployeeProfileViewSet(viewsets.ModelViewSet):
         # Initialize aggregated lookup dictionary
         attendance_lookup = {}
         
-        # SOURCE 1: Get latest salary data (uploaded Excel)
+        # Get employee DOJ dates for filtering (needed for DailyAttendance aggregation)
+        employee_doj_map = {
+            emp.employee_id: emp.date_of_joining 
+            for emp in employees_page 
+            if emp.date_of_joining
+        }
+        
+        # SOURCE 1: Get latest salary data (uploaded Excel) - Will be used as fallback if DailyAttendance not found
         latest_salary_attendance = SalaryData.objects.filter(
             tenant=tenant,
             employee_id__in=employee_ids
         ).values('employee_id', 'days', 'absent', 'ot', 'late').order_by('employee_id', '-year', '-month')
         
+        # Store Excel data as fallback (will be overridden by DailyAttendance if present)
+        excel_fallback = {}
         for record in latest_salary_attendance:
             emp_id = record['employee_id']
-            if emp_id not in attendance_lookup:  # Only keep the latest record per employee
-                attendance_lookup[emp_id] = {
+            if emp_id not in excel_fallback:  # Only keep the latest record per employee
+                excel_fallback[emp_id] = {
                     'present_days': float(record['days'] or 0),
                     'absent_days': float(record['absent'] or 0),
                     'ot_hours': float(record['ot'] or 0),
                     'late_minutes': int(record['late'] or 0)
                 }
         
-        # SOURCE 2: Aggregate manually marked DailyAttendance
-        daily_attendance_records = DailyAttendance.objects.filter(
+        # SOURCE 2: Aggregate manually marked DailyAttendance (PRIORITY 1)
+        # For present/absent days: filter by current month (for accurate monthly display)
+        # For OT/late totals: aggregate all records from employee's DOJ (to show cumulative totals from manual entries)
+        
+        # Get current month records for present/absent days
+        daily_attendance_current_month = DailyAttendance.objects.filter(
+            tenant=tenant,
+            employee_id__in=employee_ids,
+            date__year=current_year,
+            date__month=current_month
+        ).values('employee_id', 'attendance_status', 'ot_hours', 'late_minutes')
+        
+        # Get all records from DOJ onwards to aggregate OT/late totals (cumulative from DOJ)
+        # We'll filter in Python since we need per-employee DOJ filtering
+        daily_attendance_all_records = DailyAttendance.objects.filter(
             tenant=tenant,
             employee_id__in=employee_ids
-        ).values('employee_id', 'attendance_status')
+        ).values('employee_id', 'date', 'ot_hours', 'late_minutes')
         
-        # Group by employee and count statuses
+        # Use current month records for counting statuses
+        daily_attendance_records = daily_attendance_current_month
+        
+        # Group by employee and aggregate statuses (current month only)
         daily_attendance_grouped = {}
         for record in daily_attendance_records:
             emp_id = record['employee_id']
@@ -2864,29 +2907,136 @@ class EmployeeProfileViewSet(viewsets.ModelViewSet):
             
             if emp_id not in daily_attendance_grouped:
                 daily_attendance_grouped[emp_id] = {
-                    'PRESENT': 0, 'ABSENT': 0, 'HALF_DAY': 0, 'PAID_LEAVE': 0
+                    'PRESENT': 0, 'ABSENT': 0, 'HALF_DAY': 0, 'PAID_LEAVE': 0,
+                    'ot_hours': 0.0,
+                    'late_minutes': 0
                 }
             
             if status in daily_attendance_grouped[emp_id]:
                 daily_attendance_grouped[emp_id][status] += 1
         
-        # Add manually marked attendance to aggregated data
+        # Aggregate OT hours and late minutes from ALL DailyAttendance records from DOJ onwards
+        # This ensures totals include all manual entries from when employee joined
+        for record in daily_attendance_all_records:
+            emp_id = record['employee_id']
+            record_date = record['date']
+            ot_hours = float(record['ot_hours'] or 0)
+            late_minutes = int(record['late_minutes'] or 0)
+            
+            # Filter by employee's DOJ - only include records from DOJ onwards
+            employee_doj = employee_doj_map.get(emp_id)
+            if employee_doj and record_date < employee_doj:
+                continue  # Skip records before DOJ
+            
+            if emp_id not in daily_attendance_grouped:
+                daily_attendance_grouped[emp_id] = {
+                    'PRESENT': 0, 'ABSENT': 0, 'HALF_DAY': 0, 'PAID_LEAVE': 0,
+                    'ot_hours': 0.0,
+                    'late_minutes': 0
+                }
+            
+            # Aggregate OT hours and late minutes from all records (from DOJ onwards)
+            daily_attendance_grouped[emp_id]['ot_hours'] += ot_hours
+            daily_attendance_grouped[emp_id]['late_minutes'] += late_minutes
+        
+        # Add manually marked attendance to aggregated data (PRIORITY 1)
+        # Store DailyAttendance data first (will override Excel data)
+        daily_attendance_data = {}
         for emp_id, counts in daily_attendance_grouped.items():
             manual_present = counts['PRESENT'] + counts['PAID_LEAVE'] + (counts['HALF_DAY'] * 0.5)
             manual_absent = counts['ABSENT'] + (counts['HALF_DAY'] * 0.5)
+            manual_ot_hours = counts['ot_hours']
+            manual_late_minutes = counts['late_minutes']
             
-            if emp_id in attendance_lookup:
-                attendance_lookup[emp_id]['present_days'] += manual_present
-                attendance_lookup[emp_id]['absent_days'] += manual_absent
-            else:
+            # Store DailyAttendance data (PRIORITY 1)
+            daily_attendance_data[emp_id] = {
+                'present_days': manual_present,
+                'absent_days': manual_absent,
+                'ot_hours': manual_ot_hours,
+                'late_minutes': manual_late_minutes,
+                'has_daily_records': (counts['PRESENT'] + counts['ABSENT'] + counts['HALF_DAY'] + counts['PAID_LEAVE']) > 0
+            }
+        
+        # Now build final attendance_lookup with correct priority:
+        # PRIORITY 1: DailyAttendance (manual entries from attendance log) - for current month
+        # PRIORITY 2: Excel uploads (SalaryData or Attendance) - for previous months or fallback
+        # COMBINE: Current month from DailyAttendance + Previous months from Excel (if available)
+        for emp_id in employee_ids:
+            if emp_id in daily_attendance_data:
+                # PRIORITY 1: DailyAttendance has data for current month
+                daily_data = daily_attendance_data[emp_id]
+                
+                # Start with DailyAttendance data (current month)
                 attendance_lookup[emp_id] = {
-                    'present_days': manual_present,
-                    'absent_days': manual_absent,
-                    'ot_hours': 0,
-                    'late_minutes': 0
+                    'present_days': daily_data['present_days'],
+                    'absent_days': daily_data['absent_days'],
+                    'ot_hours': daily_data['ot_hours'],
+                    'late_minutes': daily_data['late_minutes']
+                }
+                
+                # COMBINE with Excel data for previous months (if available)
+                # Scenario: Current month has DailyAttendance, previous months have Excel uploads
+                # Strategy:
+                # - Present/absent days: Use DailyAttendance (current month only - already filtered)
+                # - OT/late totals: DailyAttendance (cumulative from DOJ) + Excel (for periods not covered by DailyAttendance)
+                #                   To avoid double counting, we'll sum both assuming:
+                #                   - DailyAttendance covers: from DOJ to current date
+                #                   - Excel covers: different periods (previous months before DailyAttendance started, or cumulative)
+                #                   - If Excel > DailyAttendance, it likely has additional data for periods not in DailyAttendance
+                #                   - So we'll use: max(DailyAttendance, Excel) + difference if Excel has additional data
+                if emp_id in excel_fallback:
+                    excel_data = excel_fallback[emp_id]
+                    
+                    # For OT/late: Combine both sources
+                    # DailyAttendance is cumulative from DOJ (covers period from DOJ to now)
+                    # Excel might cover periods before DailyAttendance started or different months
+                    # Strategy: Sum both sources
+                    # - DailyAttendance totals (cumulative from DOJ) 
+                    # - Excel totals (for periods not covered by DailyAttendance)
+                    # 
+                    # Note: This assumes Excel covers different periods than DailyAttendance
+                    # If Excel > DailyAttendance, it likely includes all periods (cumulative)
+                    # In that case, we use Excel (which already includes DailyAttendance periods)
+                    # Otherwise, we sum them (assuming Excel covers periods not in DailyAttendance)
+                    daily_ot = daily_data['ot_hours']
+                    daily_late = daily_data['late_minutes']
+                    excel_ot = excel_data['ot_hours']
+                    excel_late = excel_data['late_minutes']
+                    
+                    # Combine logic:
+                    # If Excel > DailyAttendance: Excel likely includes all periods (cumulative), use Excel
+                    # If Excel <= DailyAttendance: Sum both (Excel covers periods not in DailyAttendance)
+                    if excel_ot > daily_ot:
+                        # Excel has more OT - likely cumulative and includes all periods
+                        attendance_lookup[emp_id]['ot_hours'] = excel_ot
+                    else:
+                        # Sum both (Excel covers periods not in DailyAttendance)
+                        attendance_lookup[emp_id]['ot_hours'] = daily_ot + excel_ot
+                    
+                    if excel_late > daily_late:
+                        # Excel has more late minutes - likely cumulative and includes all periods
+                        attendance_lookup[emp_id]['late_minutes'] = excel_late
+                    else:
+                        # Sum both (Excel covers periods not in DailyAttendance)
+                        attendance_lookup[emp_id]['late_minutes'] = daily_late + excel_late
+                    
+                    # For present/absent days: Keep DailyAttendance (current month only)
+                    # Excel data might be for different months, so we don't combine it
+                    # Directory shows current month's attendance from DailyAttendance
+                    
+            elif emp_id in excel_fallback:
+                # PRIORITY 2: No DailyAttendance data, use Excel data as fallback
+                excel_data = excel_fallback[emp_id]
+                attendance_lookup[emp_id] = {
+                    'present_days': excel_data['present_days'],
+                    'absent_days': excel_data['absent_days'],
+                    'ot_hours': excel_data['ot_hours'],
+                    'late_minutes': excel_data['late_minutes']
                 }
         
-        # SOURCE 3: Get uploaded attendance Excel data (for additional OT/late info)
+        # SOURCE 3: Get uploaded attendance Excel data (PRIORITY 2 - fallback)
+        # This is now handled in the priority logic above, but keep for backward compatibility
+        # Only use Attendance Excel data if no DailyAttendance data exists
         latest_attendance_excel = Attendance.objects.filter(
             tenant=tenant,
             employee_id__in=employee_ids
@@ -2895,13 +3045,14 @@ class EmployeeProfileViewSet(viewsets.ModelViewSet):
         # Track which employees we've processed to only take latest
         processed_excel_employees = set()
         
-        # Add OT and late minutes from attendance Excel if not already set
+        # Add OT and late minutes from attendance Excel only if no DailyAttendance data exists
         for record in latest_attendance_excel:
             emp_id = record['employee_id']
             if emp_id not in processed_excel_employees:
                 processed_excel_employees.add(emp_id)
                 
-                if emp_id in attendance_lookup:
+                # Only use Attendance Excel if employee not in DailyAttendance data (PRIORITY 1 already handled)
+                if emp_id not in daily_attendance_data and emp_id in attendance_lookup:
                     # Update OT and late if they're still 0 (use attendance Excel as fallback)
                     if attendance_lookup[emp_id]['ot_hours'] == 0:
                         attendance_lookup[emp_id]['ot_hours'] = float(record['ot_hours'] or 0)
@@ -5556,36 +5707,120 @@ class CacheManagementViewSet(viewsets.ViewSet):
             if not tenant:
                 return Response({'error': 'No tenant found'}, status=400)
             
-            # Clear directory-related cache keys
+            tenant_id = tenant.id
+            cleared_keys = []
+            
+            # Clear directory data cache
             cache_keys_to_clear = [
-                f"directory_data_{tenant.id}_*",
-                f"frontend_charts_{tenant.id}_*",
-                f"all_departments_{tenant.id}",
-                f"employee_profiles_{tenant.id}_*",
-                f"attendance_all_records_{tenant.id}_*"
+                f"directory_data_{tenant_id}",
+                f"directory_data_full_{tenant_id}",
+                f"all_departments_{tenant_id}",
             ]
             
-            cleared_count = 0
-            for pattern in cache_keys_to_clear:
-                # Note: Django cache doesn't support pattern matching
-                # We'll clear specific known keys
-                if "*" in pattern:
-                    # For patterns with wildcards, we need to clear known keys
-                    # This is a simplified approach - in production, you might want to use Redis
-                    pass
-                else:
-                    cache.delete(pattern)
-                    cleared_count += 1
+            for key in cache_keys_to_clear:
+                if cache.delete(key):
+                    cleared_keys.append(key)
+            
+            # Clear pattern-based caches (directory, charts, attendance)
+            patterns_to_clear = [
+                f"directory_data_{tenant_id}_*",
+                f"frontend_charts_{tenant_id}_*",
+                f"attendance_all_records_{tenant_id}_*",
+            ]
+            
+            for pattern in patterns_to_clear:
+                try:
+                    # Try pattern-based deletion if available (Redis cache)
+                    cache.delete_pattern(pattern)
+                    cleared_keys.append(pattern)
+                except (AttributeError, NotImplementedError):
+                    # Fallback: Clear common variations manually
+                    if 'attendance_all_records' in pattern:
+                        common_time_periods = ['last_6_months', 'last_12_months', 'last_5_years', 'this_month', 'custom', 'custom_month', 'custom_range', 'one_day']
+                        for period in common_time_periods:
+                            variations = [
+                                f"attendance_all_records_{tenant_id}_{period}_None_None_None_None_rt_1",
+                                f"attendance_all_records_{tenant_id}_{period}_None_None_None_None_rt_0",
+                            ]
+                            for var_key in variations:
+                                if cache.delete(var_key):
+                                    cleared_keys.append(var_key)
+                        # Also clear base key
+                        if cache.delete(f"attendance_all_records_{tenant_id}"):
+                            cleared_keys.append(f"attendance_all_records_{tenant_id}")
+                    elif 'frontend_charts' in pattern:
+                        chart_keys = [
+                            f"frontend_charts_{tenant_id}_this_month_All_",
+                            f"frontend_charts_{tenant_id}_last_6_months_All_",
+                            f"frontend_charts_{tenant_id}_last_12_months_All_",
+                            f"frontend_charts_{tenant_id}_last_5_years_All_"
+                        ]
+                        for key in chart_keys:
+                            if cache.delete(key):
+                                cleared_keys.append(key)
+            
+            logger.info(f"✅ Cleared {len(cleared_keys)} cache keys for tenant {tenant_id}")
             
             return Response({
                 'success': True,
-                'message': f'Directory cache cleared for tenant {tenant.id}',
-                'keys_cleared': cleared_count,
+                'message': f'Directory and related cache cleared for tenant {tenant_id}',
+                'keys_cleared': len(cleared_keys),
+                'cleared_keys': cleared_keys[:10],  # Return first 10 keys for reference
                 'timestamp': time.time()
             })
         except Exception as e:
+            logger.error(f"Failed to clear directory cache: {e}")
             return Response({
                 'success': False,
                 'error': f'Failed to clear directory cache: {str(e)}'
+            }, status=500)
+    
+    @action(detail=False, methods=['post'])
+    def clear_attendance_cache(self, request):
+        """
+        Clear attendance log cache for the current tenant
+        """
+        try:
+            from django.core.cache import cache
+            tenant = getattr(request, 'tenant', None)
+            if not tenant:
+                return Response({'error': 'No tenant found'}, status=400)
+            
+            tenant_id = tenant.id
+            cleared_keys = []
+            
+            # CRITICAL: Clear all attendance_all_records cache variations (pattern-based)
+            try:
+                cache.delete_pattern(f"attendance_all_records_{tenant_id}_*")
+                cleared_keys.append(f"attendance_all_records_{tenant_id}_* (pattern)")
+                logger.info(f"✅ Cleared all attendance_all_records cache variations (pattern) for tenant {tenant_id}")
+            except (AttributeError, NotImplementedError):
+                # Fallback: Clear common variations manually
+                common_time_periods = ['last_6_months', 'last_12_months', 'last_5_years', 'this_month', 'custom', 'custom_month', 'custom_range', 'one_day']
+                for period in common_time_periods:
+                    variations = [
+                        f"attendance_all_records_{tenant_id}_{period}_None_None_None_None_rt_1",
+                        f"attendance_all_records_{tenant_id}_{period}_None_None_None_None_rt_0",
+                    ]
+                    for var_key in variations:
+                        if cache.delete(var_key):
+                            cleared_keys.append(var_key)
+                # Also clear base key
+                if cache.delete(f"attendance_all_records_{tenant_id}"):
+                    cleared_keys.append(f"attendance_all_records_{tenant_id}")
+                logger.info(f"✅ Cleared attendance_all_records cache variations (manual fallback) for tenant {tenant_id}")
+            
+            return Response({
+                'success': True,
+                'message': f'Attendance cache cleared for tenant {tenant_id}',
+                'keys_cleared': len(cleared_keys),
+                'cleared_keys': cleared_keys[:10],  # Return first 10 keys for reference
+                'timestamp': time.time()
+            })
+        except Exception as e:
+            logger.error(f"Failed to clear attendance cache: {e}")
+            return Response({
+                'success': False,
+                'error': f'Failed to clear attendance cache: {str(e)}'
             }, status=500)
 

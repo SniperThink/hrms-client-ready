@@ -59,6 +59,7 @@ const HRAddEmployee: React.FC = () => {
   const navigate = useNavigate();
   const [isSubmitting, setIsSubmitting] = useState<boolean>(false);
   const [error, setError] = useState<string | null>(null);
+  const [isOTChargeManuallyEdited, setIsOTChargeManuallyEdited] = useState<boolean>(false);
 
   // Dropdown options state
   const [dropdownOptions, setDropdownOptions] = useState({
@@ -356,7 +357,7 @@ const HRAddEmployee: React.FC = () => {
     return workingDays;
   };
 
-  // Helper function to calculate OT rate using formula: (shift_hours × working_days)
+  // Helper function to calculate OT rate using formula: basic_salary / (shift_hours × working_days)
   const calculateOTRate = (
     basicSalary: string,
     shiftStartTime: string,
@@ -371,7 +372,7 @@ const HRAddEmployee: React.FC = () => {
       off_sunday: boolean;
     }
   ): string => {
-    if (!shiftStartTime || !shiftEndTime) {
+    if (!shiftStartTime || !shiftEndTime || !basicSalary) {
       return '';
     }
     
@@ -387,8 +388,14 @@ const HRAddEmployee: React.FC = () => {
       return '';
     }
     
-    // OT Charge per Hour = shift_hours × working_days
-    const otRate = shiftHours * workingDays;
+    // Parse basic salary (remove commas if any)
+    const basicSalaryNum = parseFloat(basicSalary.replace(/,/g, ''));
+    if (isNaN(basicSalaryNum) || basicSalaryNum <= 0) {
+      return '';
+    }
+    
+    // OT Charge per Hour = basic_salary / (shift_hours × working_days)
+    const otRate = basicSalaryNum / (shiftHours * workingDays);
     
     return otRate.toFixed(2);
   };
@@ -424,9 +431,17 @@ const HRAddEmployee: React.FC = () => {
     } else {
       setFormData(prev => {
         const updated = { ...prev, [name]: value };
+        
+        // Track if OT charge is manually edited
+        if (name === 'ot_charge') {
+          // If field is cleared, show hint again
+          setIsOTChargeManuallyEdited(value !== '' && value !== null && value !== undefined);
+          return updated;
+        }
+        
         // Recalculate OT rate when shift start time or shift end time changes
         if (name === 'shift_start_time' || name === 'shift_end_time') {
-          updated.ot_charge = calculateOTRate(
+          const autoCalculated = calculateOTRate(
             updated.basic_salary,
             updated.shift_start_time,
             updated.shift_end_time,
@@ -440,6 +455,9 @@ const HRAddEmployee: React.FC = () => {
               off_sunday: updated.off_sunday,
             }
           );
+          updated.ot_charge = autoCalculated;
+          // Reset manual edit flag when auto-calculated
+          setIsOTChargeManuallyEdited(false);
         }
         return updated;
       });
@@ -448,10 +466,27 @@ const HRAddEmployee: React.FC = () => {
 
   // Handle salary dropdown changes
   const handleSalaryChange = (value: string) => {
-    setFormData(prev => ({
-      ...prev,
-      basic_salary: value
-    }));
+    setFormData(prev => {
+      const updated = { ...prev, basic_salary: value };
+      // Recalculate OT rate when basic salary changes
+      updated.ot_charge = calculateOTRate(
+        updated.basic_salary,
+        updated.shift_start_time,
+        updated.shift_end_time,
+        {
+          off_monday: updated.off_monday,
+          off_tuesday: updated.off_tuesday,
+          off_wednesday: updated.off_wednesday,
+          off_thursday: updated.off_thursday,
+          off_friday: updated.off_friday,
+          off_saturday: updated.off_saturday,
+          off_sunday: updated.off_sunday,
+        }
+      );
+      // Reset manual edit flag when auto-calculated
+      setIsOTChargeManuallyEdited(false);
+      return updated;
+    });
   };
 
   // Handle checkbox changes for off days
@@ -474,6 +509,8 @@ const HRAddEmployee: React.FC = () => {
           off_sunday: updated.off_sunday,
         }
       );
+      // Reset manual edit flag when auto-calculated
+      setIsOTChargeManuallyEdited(false);
       return updated;
     });
   };
@@ -794,7 +831,7 @@ const HRAddEmployee: React.FC = () => {
               <li><strong>Gender:</strong> Male, Female, Other</li>
               <li><strong>Shift Times:</strong> Use HH:MM:SS format (e.g., 09:00:00)</li>
               <li><strong>Basic Salary:</strong> Enter as number only (e.g., 50000)</li>
-              <li><strong>OT Rate (per hour):</strong> Overtime hourly rate. Auto-calculated as (Shift Hours × Working Days)</li>
+              <li><strong>OT Rate (per hour):</strong> Overtime hourly rate. Auto-calculated as Basic Salary / (Shift Hours × Working Days)</li>
               <li><strong>Dates:</strong> Use YYYY-MM-DD format (e.g., 2024-01-01)</li>
               <li><strong>TDS:</strong> Enter as percentage number (e.g., 10 for 10%)</li>
               <li><strong>OFF DAY:</strong> Monday, Tuesday, etc. (comma-separated for multiple days)</li>
@@ -1069,27 +1106,55 @@ const HRAddEmployee: React.FC = () => {
             </div>
 
             <div className="flex items-center gap-2">
-              <input
-                type="time"
-                name="shift_start_time"
-                value={formData.shift_start_time}
-                onFocus={e => (e.currentTarget as HTMLInputElement).showPicker?.()}
-                onChange={handleInputChange}
-                className="time-input-styled w-28 px-3 py-3 border border-gray-200 rounded-lg text-sm focus:outline-none focus:border-teal-500 focus:ring-1 focus:ring-teal-500 bg-white text-gray-700 hover:border-gray-300 transition-colors duration-200"
-              />
-              <span className="text-sm text-gray-500">Shift Start Time</span>
+              <div className="relative flex-1">
+                <label htmlFor="shift_start_time" className="block mb-1 text-sm font-medium text-gray-700">Shift Start Time</label>
+                <input
+                  id="shift_start_time"
+                  type="time"
+                  name="shift_start_time"
+                  value={formData.shift_start_time}
+                  onClick={(e) => {
+                    const input = e.currentTarget as HTMLInputElement;
+                    if (input.showPicker) {
+                      input.showPicker();
+                    }
+                  }}
+                  onFocus={(e) => {
+                    const input = e.currentTarget as HTMLInputElement;
+                    if (input.showPicker) {
+                      input.showPicker();
+                    }
+                  }}
+                  onChange={handleInputChange}
+                  className="w-full px-3 py-3 border border-gray-200 rounded-lg text-sm focus:outline-none focus:border-teal-500 focus:ring-1 focus:ring-teal-500 bg-white text-gray-700 hover:border-gray-300 transition-colors duration-200 cursor-pointer"
+                />
+              </div>
             </div>
 
             <div className="flex items-center gap-2">
-              <input
-                type="time"
-                name="shift_end_time"
-                value={formData.shift_end_time}
-                onFocus={e => (e.currentTarget as HTMLInputElement).showPicker?.()}
-                onChange={handleInputChange}
-                className="time-input-styled w-28 px-3 py-3 border border-gray-200 rounded-lg text-sm focus:outline-none focus:border-teal-500 focus:ring-1 focus:ring-teal-500 bg-white text-gray-700 hover:border-gray-300 transition-colors duration-200"
-              />
-              <span className="text-sm text-gray-500">Shift End Time</span>
+              <div className="relative flex-1">
+                <label htmlFor="shift_end_time" className="block mb-1 text-sm font-medium text-gray-700">Shift End Time</label>
+                <input
+                  id="shift_end_time"
+                  type="time"
+                  name="shift_end_time"
+                  value={formData.shift_end_time}
+                  onClick={(e) => {
+                    const input = e.currentTarget as HTMLInputElement;
+                    if (input.showPicker) {
+                      input.showPicker();
+                    }
+                  }}
+                  onFocus={(e) => {
+                    const input = e.currentTarget as HTMLInputElement;
+                    if (input.showPicker) {
+                      input.showPicker();
+                    }
+                  }}
+                  onChange={handleInputChange}
+                  className="w-full px-3 py-3 border border-gray-200 rounded-lg text-sm focus:outline-none focus:border-teal-500 focus:ring-1 focus:ring-teal-500 bg-white text-gray-700 hover:border-gray-300 transition-colors duration-200 cursor-pointer"
+                />
+              </div>
             </div>
             <Dropdown
               options={locationOptions}
@@ -1133,19 +1198,25 @@ const HRAddEmployee: React.FC = () => {
             </div>
             <div className="relative">
               <label className='block mb-1 text-sm font-medium px-1 text-gray-700'>
-                OT Charge per Hour (calculated automatically)
+                OT Charge per Hour
               </label>
               <input
                 type="text"
                 name="ot_charge"
                 value={formData.ot_charge}
                 onChange={handleInputChange}
-                className="w-full p-3 border border-gray-200 rounded-lg focus:outline-none focus:ring-1 focus:ring-teal-500 text-gray-500 placeholder-gray-500"
-                readOnly
+                className="w-full p-3 border border-gray-200 rounded-lg focus:outline-none focus:ring-1 focus:ring-teal-500 text-gray-700 placeholder-gray-400 bg-white"
+                placeholder="Will be calculated automatically if not provided"
               />
-              {formData.ot_charge && formData.shift_start_time && formData.shift_end_time && (
-                <div className="absolute top-full left-0 right-0 text-xs text-gray-500 mt-1">
-                  Calculation: ({calculateShiftHours(formData.shift_start_time, formData.shift_end_time).toFixed(2)} hours × {calculateWorkingDays({
+              {!isOTChargeManuallyEdited && (
+                <div className="mt-1 text-xs text-gray-500">
+                  <p className="mb-1">💡 <strong>Formula:</strong> Basic Salary / (Shift Hours × Working Days)</p>
+                  <p>This will be calculated automatically if not provided. The OT rate changes monthly based on each month's working days.</p>
+                </div>
+              )}
+              {!isOTChargeManuallyEdited && formData.ot_charge && formData.shift_start_time && formData.shift_end_time && formData.basic_salary && (
+                <div className="mt-2 text-xs text-gray-600 bg-teal-50 p-2 rounded border border-teal-200">
+                  <strong>Current Calculation:</strong> {formData.basic_salary.replace(/,/g, '')} / ({calculateShiftHours(formData.shift_start_time, formData.shift_end_time).toFixed(2)} hours × {calculateWorkingDays({
                     off_monday: formData.off_monday,
                     off_tuesday: formData.off_tuesday,
                     off_wednesday: formData.off_wednesday,
@@ -1209,7 +1280,11 @@ const HRAddEmployee: React.FC = () => {
           {activeTab === 'personal' ? (
             <button
               onClick={handleSubmit}
-              className="px-5 py-2 bg-teal-600 text-white rounded-lg"
+              className={`px-5 py-2 bg-teal-600 text-white rounded-lg transition-colors ${
+                isSubmitting 
+                  ? 'opacity-70 cursor-not-allowed' 
+                  : 'hover:bg-teal-700'
+              }`}
               disabled={isSubmitting}
             >
               Next
@@ -1217,9 +1292,19 @@ const HRAddEmployee: React.FC = () => {
           ) : (
             <button
               onClick={handleSubmit}
-              className="px-5 py-2 bg-teal-600 text-white rounded-lg flex items-center justify-center"
+              className={`px-5 py-2 bg-teal-600 text-white rounded-lg flex items-center justify-center gap-2 transition-colors ${
+                isSubmitting 
+                  ? 'opacity-70 cursor-not-allowed' 
+                  : 'hover:bg-teal-700'
+              }`}
               disabled={isSubmitting}
             >
+              {isSubmitting && (
+                <svg className="animate-spin h-4 w-4 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                  <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                  <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                </svg>
+              )}
               {isSubmitting ? 'Saving...' : 'Save'}
             </button>
           )}

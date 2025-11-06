@@ -145,15 +145,23 @@ class EmployeeProfile(TenantAwareModel):
             full_name = f"{self.first_name} {self.last_name}"
             self.employee_id = generate_employee_id(full_name, self.tenant_id, self.department)
         
-        # Auto-calculate OT charge per hour using formula: (shift_hours × working_days)
-        # Formula: OT Charge per Hour = (shift_end_time - shift_start_time) × working_days
-        if self.shift_start_time and self.shift_end_time:
+        # Auto-calculate OT charge per hour using formula: basic_salary / (shift_hours × working_days)
+        # Formula: OT Charge per Hour = basic_salary / ((shift_end_time - shift_start_time) × working_days)
+        # Note: This stored value is for display/reference only. Actual payroll calculations
+        # recalculate OT rate dynamically each month based on that month's working days.
+        if self.shift_start_time and self.shift_end_time and self.basic_salary:
             # Calculate (end_time - start_time) in hours
             shift_hours_per_day = self._calculate_shift_hours()  # This is (shift_end_time - shift_start_time)
             working_days = self._calculate_working_days_for_month()
             
-            # OT Charge per Hour = shift_hours × working_days
-            self.ot_charge_per_hour = shift_hours_per_day * working_days
+            # OT Charge per Hour = basic_salary / (shift_hours × working_days)
+            if shift_hours_per_day > 0 and working_days > 0:
+                from decimal import Decimal
+                # Convert both values to Decimal to avoid type mismatch
+                basic_salary_decimal = Decimal(str(self.basic_salary))
+                shift_hours_decimal = Decimal(str(shift_hours_per_day))
+                working_days_decimal = Decimal(str(working_days))
+                self.ot_charge_per_hour = basic_salary_decimal / (shift_hours_decimal * working_days_decimal)
         
         super().save(*args, **kwargs)
 

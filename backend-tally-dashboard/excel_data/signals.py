@@ -157,8 +157,13 @@ def sync_attendance_from_daily(sender, instance, **kwargs):
         ])
         
         # Clear caches
+        cleared_count = 0
         for key in cache_keys_to_clear:
-            cache.delete(key)
+            if cache.delete(key):
+                cleared_count += 1
+                logger.debug(f"✅ SIGNAL: Cleared cache key: {key}")
+        
+        logger.info(f"🗑️ SIGNAL: Cleared {cleared_count}/{len(cache_keys_to_clear)} cache keys for tenant {tenant_id}")
         
         # CRITICAL: Clear all attendance_all_records cache variations (pattern-based)
         # Cache keys follow pattern: attendance_all_records_{tenant_id}_{param_signature}
@@ -502,9 +507,6 @@ def invalidate_cache_on_employee_update(sender, instance, created, **kwargs):
             # Payroll overview cache
             f"payroll_overview_{tenant_id}",
             
-            # Attendance caches
-            f"attendance_all_records_{tenant_id}",
-            
             # Departments cache (in case department changed)
             f"all_departments_{tenant_id}",
             
@@ -518,6 +520,26 @@ def invalidate_cache_on_employee_update(sender, instance, created, **kwargs):
         # Clear all cache keys
         for key in cache_keys_to_clear:
             cache.delete(key)
+        
+        # CRITICAL: Clear all attendance_all_records cache variations (pattern-based)
+        # Cache keys follow pattern: attendance_all_records_{tenant_id}_{param_signature}
+        # This ensures attendance log cache is cleared when employee profile changes
+        try:
+            cache.delete_pattern(f"attendance_all_records_{tenant_id}_*")
+            logger.debug(f"✅ SIGNAL: Cleared all attendance_all_records cache variations (pattern) for tenant {tenant_id}")
+        except (AttributeError, NotImplementedError):
+            # Fallback: Clear common variations manually (for database cache)
+            common_time_periods = ['last_6_months', 'last_12_months', 'last_5_years', 'this_month', 'custom', 'custom_month', 'custom_range', 'one_day']
+            for period in common_time_periods:
+                variations = [
+                    f"attendance_all_records_{tenant_id}_{period}_None_None_None_None_rt_1",
+                    f"attendance_all_records_{tenant_id}_{period}_None_None_None_None_rt_0",
+                ]
+                for var_key in variations:
+                    cache.delete(var_key)
+            # Also clear base key
+            cache.delete(f"attendance_all_records_{tenant_id}")
+            logger.debug(f"✅ SIGNAL: Cleared attendance_all_records cache variations (manual fallback) for tenant {tenant_id}")
         
         # Clear frontend charts cache (pattern matching)
         try:

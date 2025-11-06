@@ -2119,8 +2119,29 @@ def calculate_simple_payroll(request):
             else:
                 salary_for_present_days = 0
             
+            # Calculate OT rate dynamically based on this month's working days
+            # OT rate changes monthly because working days change monthly
+            # Formula: OT Charge per Hour = basic_salary / (shift_hours × working_days)
+            from datetime import datetime, timedelta
+            shift_hours_per_day = 0
+            if employee.shift_start_time and employee.shift_end_time:
+                start_dt = datetime.combine(datetime.today().date(), employee.shift_start_time)
+                end_dt = datetime.combine(datetime.today().date(), employee.shift_end_time)
+                # Handle overnight shifts
+                if end_dt <= start_dt:
+                    end_dt += timedelta(days=1)
+                shift_hours_per_day = (end_dt - start_dt).total_seconds() / 3600
+            else:
+                # Fallback to 8 hours if shift times not set
+                shift_hours_per_day = 8
+            
+            # Calculate OT rate dynamically for this month
+            if shift_hours_per_day > 0 and employee_working_days > 0 and base_salary > 0:
+                ot_rate = base_salary / (shift_hours_per_day * employee_working_days)
+            else:
+                ot_rate = 0
+            
             # Calculate overtime charges
-            ot_rate = float(employee.ot_charge_per_hour or 0)
             ot_charges = ot_hours * ot_rate
             
             # Calculate late deduction using standardized approach
@@ -2419,27 +2440,446 @@ def calculate_simple_payroll_ultra_fast(request):
                 -- FIXED: Include uploaded working days from attendance data
                 COALESCE(att.uploaded_working_days, 0) as uploaded_working_days,
                 
+                -- Calculate shift hours dynamically from shift_start_time and shift_end_time
+                -- Handle overnight shifts (end time before start time means next day)
+                CASE 
+                    WHEN e.shift_start_time IS NOT NULL AND e.shift_end_time IS NOT NULL THEN
+                        CASE 
+                            WHEN e.shift_end_time <= e.shift_start_time THEN
+                                -- Overnight shift: add 24 hours
+                                EXTRACT(EPOCH FROM (e.shift_end_time::time - '00:00:00'::time + ('24:00:00'::time - e.shift_start_time::time))) / 3600.0
+                            ELSE
+                                EXTRACT(EPOCH FROM (e.shift_end_time::time - e.shift_start_time::time)) / 3600.0
+                        END
+                    ELSE 8.0  -- Fallback to 8 hours if shift times not set
+                END as shift_hours_per_day,
+                
+                -- Calculate OT rate dynamically for this month
+                -- Formula: OT Charge per Hour = basic_salary / (shift_hours × working_days)
+                -- Use uploaded_working_days if available, otherwise use fallback working_days parameter
+                CASE 
+                    WHEN COALESCE(att.uploaded_working_days, 0) > 0 THEN
+                        -- Use uploaded working days from attendance data
+                        CASE 
+                            WHEN (CASE 
+                                WHEN e.shift_start_time IS NOT NULL AND e.shift_end_time IS NOT NULL THEN
+                                    CASE 
+                                        WHEN e.shift_end_time <= e.shift_start_time THEN
+                                            EXTRACT(EPOCH FROM (e.shift_end_time::time - '00:00:00'::time + ('24:00:00'::time - e.shift_start_time::time))) / 3600.0
+                                        ELSE
+                                            EXTRACT(EPOCH FROM (e.shift_end_time::time - e.shift_start_time::time)) / 3600.0
+                                    END
+                                ELSE 8.0
+                            END * COALESCE(att.uploaded_working_days, 0)) > 0 
+                            AND COALESCE(e.basic_salary, 0) > 0 THEN
+                                COALESCE(e.basic_salary, 0) / (
+                                    CASE 
+                                        WHEN e.shift_start_time IS NOT NULL AND e.shift_end_time IS NOT NULL THEN
+                                            CASE 
+                                                WHEN e.shift_end_time <= e.shift_start_time THEN
+                                                    EXTRACT(EPOCH FROM (e.shift_end_time::time - '00:00:00'::time + ('24:00:00'::time - e.shift_start_time::time))) / 3600.0
+                                                ELSE
+                                                    EXTRACT(EPOCH FROM (e.shift_end_time::time - e.shift_start_time::time)) / 3600.0
+                                            END
+                                        ELSE 8.0
+                                    END * COALESCE(att.uploaded_working_days, 0)
+                                )
+                            ELSE 0
+                        END
+                    ELSE
+                        -- Fallback: use working_days parameter (total days in month)
+                        CASE 
+                            WHEN (CASE 
+                                WHEN e.shift_start_time IS NOT NULL AND e.shift_end_time IS NOT NULL THEN
+                                    CASE 
+                                        WHEN e.shift_end_time <= e.shift_start_time THEN
+                                            EXTRACT(EPOCH FROM (e.shift_end_time::time - '00:00:00'::time + ('24:00:00'::time - e.shift_start_time::time))) / 3600.0
+                                        ELSE
+                                            EXTRACT(EPOCH FROM (e.shift_end_time::time - e.shift_start_time::time)) / 3600.0
+                                    END
+                                ELSE 8.0
+                            END * %s) > 0 
+                            AND COALESCE(e.basic_salary, 0) > 0 THEN
+                                COALESCE(e.basic_salary, 0) / (
+                                    CASE 
+                                        WHEN e.shift_start_time IS NOT NULL AND e.shift_end_time IS NOT NULL THEN
+                                            CASE 
+                                                WHEN e.shift_end_time <= e.shift_start_time THEN
+                                                    EXTRACT(EPOCH FROM (e.shift_end_time::time - '00:00:00'::time + ('24:00:00'::time - e.shift_start_time::time))) / 3600.0
+                                                ELSE
+                                                    EXTRACT(EPOCH FROM (e.shift_end_time::time - e.shift_start_time::time)) / 3600.0
+                                            END
+                                        ELSE 8.0
+                                    END * %s
+                                )
+                            ELSE 0
+                        END
+                END as ot_rate,
+                
                 -- Standardized Gross Salary calculation:
                 -- Gross Salary = (Base Salary ÷ Working Days × Present Days) + OT Charges - Late Deduction
+                -- Note: This uses the dynamically calculated OT rate above
                 CASE 
                     WHEN %s > 0 THEN 
                         ((COALESCE(e.basic_salary, 0) / %s) * COALESCE(att.present_days, 0)) + 
-                        (COALESCE(att.ot_hours, 0) * COALESCE(e.ot_charge_per_hour, 0)) - 
+                        (COALESCE(att.ot_hours, 0) * (
+                            CASE 
+                                WHEN COALESCE(att.uploaded_working_days, 0) > 0 THEN
+                                    CASE 
+                                        WHEN (CASE 
+                                            WHEN e.shift_start_time IS NOT NULL AND e.shift_end_time IS NOT NULL THEN
+                                                CASE 
+                                                    WHEN e.shift_end_time <= e.shift_start_time THEN
+                                                        EXTRACT(EPOCH FROM (e.shift_end_time::time - '00:00:00'::time + ('24:00:00'::time - e.shift_start_time::time))) / 3600.0
+                                                    ELSE
+                                                        EXTRACT(EPOCH FROM (e.shift_end_time::time - e.shift_start_time::time)) / 3600.0
+                                                END
+                                            ELSE 8.0
+                                        END * COALESCE(att.uploaded_working_days, 0)) > 0 
+                                        AND COALESCE(e.basic_salary, 0) > 0 THEN
+                                            COALESCE(e.basic_salary, 0) / (
+                                                CASE 
+                                                    WHEN e.shift_start_time IS NOT NULL AND e.shift_end_time IS NOT NULL THEN
+                                                        CASE 
+                                                            WHEN e.shift_end_time <= e.shift_start_time THEN
+                                                                EXTRACT(EPOCH FROM (e.shift_end_time::time - '00:00:00'::time + ('24:00:00'::time - e.shift_start_time::time))) / 3600.0
+                                                            ELSE
+                                                                EXTRACT(EPOCH FROM (e.shift_end_time::time - e.shift_start_time::time)) / 3600.0
+                                                        END
+                                                    ELSE 8.0
+                                                END * COALESCE(att.uploaded_working_days, 0)
+                                            )
+                                        ELSE 0
+                                    END
+                                ELSE
+                                    CASE 
+                                        WHEN (CASE 
+                                            WHEN e.shift_start_time IS NOT NULL AND e.shift_end_time IS NOT NULL THEN
+                                                CASE 
+                                                    WHEN e.shift_end_time <= e.shift_start_time THEN
+                                                        EXTRACT(EPOCH FROM (e.shift_end_time::time - '00:00:00'::time + ('24:00:00'::time - e.shift_start_time::time))) / 3600.0
+                                                    ELSE
+                                                        EXTRACT(EPOCH FROM (e.shift_end_time::time - e.shift_start_time::time)) / 3600.0
+                                                END
+                                            ELSE 8.0
+                                        END * %s) > 0 
+                                        AND COALESCE(e.basic_salary, 0) > 0 THEN
+                                            COALESCE(e.basic_salary, 0) / (
+                                                CASE 
+                                                    WHEN e.shift_start_time IS NOT NULL AND e.shift_end_time IS NOT NULL THEN
+                                                        CASE 
+                                                            WHEN e.shift_end_time <= e.shift_start_time THEN
+                                                                EXTRACT(EPOCH FROM (e.shift_end_time::time - '00:00:00'::time + ('24:00:00'::time - e.shift_start_time::time))) / 3600.0
+                                                            ELSE
+                                                                EXTRACT(EPOCH FROM (e.shift_end_time::time - e.shift_start_time::time)) / 3600.0
+                                                        END
+                                                    ELSE 8.0
+                                                END * %s
+                                            )
+                                        ELSE 0
+                                    END
+                            END
+                        )) - 
                         (CASE 
-                            WHEN COALESCE(e.ot_charge_per_hour, 0) > 0 THEN
-                                COALESCE(att.late_minutes, 0) * (COALESCE(e.ot_charge_per_hour, 0) / 60.0)
+                            WHEN (
+                                CASE 
+                                    WHEN COALESCE(att.uploaded_working_days, 0) > 0 THEN
+                                        CASE 
+                                            WHEN (CASE 
+                                                WHEN e.shift_start_time IS NOT NULL AND e.shift_end_time IS NOT NULL THEN
+                                                    CASE 
+                                                        WHEN e.shift_end_time <= e.shift_start_time THEN
+                                                            EXTRACT(EPOCH FROM (e.shift_end_time::time - '00:00:00'::time + ('24:00:00'::time - e.shift_start_time::time))) / 3600.0
+                                                        ELSE
+                                                            EXTRACT(EPOCH FROM (e.shift_end_time::time - e.shift_start_time::time)) / 3600.0
+                                                    END
+                                                ELSE 8.0
+                                            END * COALESCE(att.uploaded_working_days, 0)) > 0 
+                                            AND COALESCE(e.basic_salary, 0) > 0 THEN
+                                                COALESCE(e.basic_salary, 0) / (
+                                                    CASE 
+                                                        WHEN e.shift_start_time IS NOT NULL AND e.shift_end_time IS NOT NULL THEN
+                                                            CASE 
+                                                                WHEN e.shift_end_time <= e.shift_start_time THEN
+                                                                    EXTRACT(EPOCH FROM (e.shift_end_time::time - '00:00:00'::time + ('24:00:00'::time - e.shift_start_time::time))) / 3600.0
+                                                                ELSE
+                                                                    EXTRACT(EPOCH FROM (e.shift_end_time::time - e.shift_start_time::time)) / 3600.0
+                                                            END
+                                                        ELSE 8.0
+                                                    END * COALESCE(att.uploaded_working_days, 0)
+                                                )
+                                            ELSE 0
+                                        END
+                                    ELSE
+                                        CASE 
+                                            WHEN (CASE 
+                                                WHEN e.shift_start_time IS NOT NULL AND e.shift_end_time IS NOT NULL THEN
+                                                    CASE 
+                                                        WHEN e.shift_end_time <= e.shift_start_time THEN
+                                                            EXTRACT(EPOCH FROM (e.shift_end_time::time - '00:00:00'::time + ('24:00:00'::time - e.shift_start_time::time))) / 3600.0
+                                                        ELSE
+                                                            EXTRACT(EPOCH FROM (e.shift_end_time::time - e.shift_start_time::time)) / 3600.0
+                                                    END
+                                                ELSE 8.0
+                                            END * %s) > 0 
+                                            AND COALESCE(e.basic_salary, 0) > 0 THEN
+                                                COALESCE(e.basic_salary, 0) / (
+                                                    CASE 
+                                                        WHEN e.shift_start_time IS NOT NULL AND e.shift_end_time IS NOT NULL THEN
+                                                            CASE 
+                                                                WHEN e.shift_end_time <= e.shift_start_time THEN
+                                                                    EXTRACT(EPOCH FROM (e.shift_end_time::time - '00:00:00'::time + ('24:00:00'::time - e.shift_start_time::time))) / 3600.0
+                                                                ELSE
+                                                                    EXTRACT(EPOCH FROM (e.shift_end_time::time - e.shift_start_time::time)) / 3600.0
+                                                            END
+                                                        ELSE 8.0
+                                                    END * %s
+                                                )
+                                            ELSE 0
+                                        END
+                                END
+                            ) > 0 THEN
+                                COALESCE(att.late_minutes, 0) * (
+                                    CASE 
+                                        WHEN COALESCE(att.uploaded_working_days, 0) > 0 THEN
+                                            CASE 
+                                                WHEN (CASE 
+                                                    WHEN e.shift_start_time IS NOT NULL AND e.shift_end_time IS NOT NULL THEN
+                                                        CASE 
+                                                            WHEN e.shift_end_time <= e.shift_start_time THEN
+                                                                EXTRACT(EPOCH FROM (e.shift_end_time::time - '00:00:00'::time + ('24:00:00'::time - e.shift_start_time::time))) / 3600.0
+                                                            ELSE
+                                                                EXTRACT(EPOCH FROM (e.shift_end_time::time - e.shift_start_time::time)) / 3600.0
+                                                        END
+                                                    ELSE 8.0
+                                                END * COALESCE(att.uploaded_working_days, 0)) > 0 
+                                                AND COALESCE(e.basic_salary, 0) > 0 THEN
+                                                    COALESCE(e.basic_salary, 0) / (
+                                                        CASE 
+                                                            WHEN e.shift_start_time IS NOT NULL AND e.shift_end_time IS NOT NULL THEN
+                                                                CASE 
+                                                                    WHEN e.shift_end_time <= e.shift_start_time THEN
+                                                                        EXTRACT(EPOCH FROM (e.shift_end_time::time - '00:00:00'::time + ('24:00:00'::time - e.shift_start_time::time))) / 3600.0
+                                                                    ELSE
+                                                                        EXTRACT(EPOCH FROM (e.shift_end_time::time - e.shift_start_time::time)) / 3600.0
+                                                                END
+                                                            ELSE 8.0
+                                                        END * COALESCE(att.uploaded_working_days, 0)
+                                                    )
+                                                ELSE 0
+                                            END
+                                        ELSE
+                                            CASE 
+                                                WHEN (CASE 
+                                                    WHEN e.shift_start_time IS NOT NULL AND e.shift_end_time IS NOT NULL THEN
+                                                        CASE 
+                                                            WHEN e.shift_end_time <= e.shift_start_time THEN
+                                                                EXTRACT(EPOCH FROM (e.shift_end_time::time - '00:00:00'::time + ('24:00:00'::time - e.shift_start_time::time))) / 3600.0
+                                                            ELSE
+                                                                EXTRACT(EPOCH FROM (e.shift_end_time::time - e.shift_start_time::time)) / 3600.0
+                                                        END
+                                                    ELSE 8.0
+                                                END * %s) > 0 
+                                                AND COALESCE(e.basic_salary, 0) > 0 THEN
+                                                    COALESCE(e.basic_salary, 0) / (
+                                                        CASE 
+                                                            WHEN e.shift_start_time IS NOT NULL AND e.shift_end_time IS NOT NULL THEN
+                                                                CASE 
+                                                                    WHEN e.shift_end_time <= e.shift_start_time THEN
+                                                                        EXTRACT(EPOCH FROM (e.shift_end_time::time - '00:00:00'::time + ('24:00:00'::time - e.shift_start_time::time))) / 3600.0
+                                                                    ELSE
+                                                                        EXTRACT(EPOCH FROM (e.shift_end_time::time - e.shift_start_time::time)) / 3600.0
+                                                                END
+                                                            ELSE 8.0
+                                                        END * %s
+                                                    )
+                                                ELSE 0
+                                            END
+                                    END / 60.0
+                                )
                             ELSE 0
                         END)
                     ELSE 0 
                 END as gross_salary,
                 
-                -- OT charges
-                COALESCE(att.ot_hours, 0) * COALESCE(e.ot_charge_per_hour, 0) as ot_charges,
+                -- OT charges (using dynamically calculated OT rate)
+                COALESCE(att.ot_hours, 0) * (
+                    CASE 
+                        WHEN COALESCE(att.uploaded_working_days, 0) > 0 THEN
+                            CASE 
+                                WHEN (CASE 
+                                    WHEN e.shift_start_time IS NOT NULL AND e.shift_end_time IS NOT NULL THEN
+                                        CASE 
+                                            WHEN e.shift_end_time <= e.shift_start_time THEN
+                                                EXTRACT(EPOCH FROM (e.shift_end_time::time - '00:00:00'::time + ('24:00:00'::time - e.shift_start_time::time))) / 3600.0
+                                            ELSE
+                                                EXTRACT(EPOCH FROM (e.shift_end_time::time - e.shift_start_time::time)) / 3600.0
+                                        END
+                                    ELSE 8.0
+                                END * COALESCE(att.uploaded_working_days, 0)) > 0 
+                                AND COALESCE(e.basic_salary, 0) > 0 THEN
+                                    COALESCE(e.basic_salary, 0) / (
+                                        CASE 
+                                            WHEN e.shift_start_time IS NOT NULL AND e.shift_end_time IS NOT NULL THEN
+                                                CASE 
+                                                    WHEN e.shift_end_time <= e.shift_start_time THEN
+                                                        EXTRACT(EPOCH FROM (e.shift_end_time::time - '00:00:00'::time + ('24:00:00'::time - e.shift_start_time::time))) / 3600.0
+                                                    ELSE
+                                                        EXTRACT(EPOCH FROM (e.shift_end_time::time - e.shift_start_time::time)) / 3600.0
+                                                END
+                                            ELSE 8.0
+                                        END * COALESCE(att.uploaded_working_days, 0)
+                                    )
+                                ELSE 0
+                            END
+                        ELSE
+                            CASE 
+                                WHEN (CASE 
+                                    WHEN e.shift_start_time IS NOT NULL AND e.shift_end_time IS NOT NULL THEN
+                                        CASE 
+                                            WHEN e.shift_end_time <= e.shift_start_time THEN
+                                                EXTRACT(EPOCH FROM (e.shift_end_time::time - '00:00:00'::time + ('24:00:00'::time - e.shift_start_time::time))) / 3600.0
+                                            ELSE
+                                                EXTRACT(EPOCH FROM (e.shift_end_time::time - e.shift_start_time::time)) / 3600.0
+                                        END
+                                    ELSE 8.0
+                                END * %s) > 0 
+                                AND COALESCE(e.basic_salary, 0) > 0 THEN
+                                    COALESCE(e.basic_salary, 0) / (
+                                        CASE 
+                                            WHEN e.shift_start_time IS NOT NULL AND e.shift_end_time IS NOT NULL THEN
+                                                CASE 
+                                                    WHEN e.shift_end_time <= e.shift_start_time THEN
+                                                        EXTRACT(EPOCH FROM (e.shift_end_time::time - '00:00:00'::time + ('24:00:00'::time - e.shift_start_time::time))) / 3600.0
+                                                    ELSE
+                                                        EXTRACT(EPOCH FROM (e.shift_end_time::time - e.shift_start_time::time)) / 3600.0
+                                                END
+                                            ELSE 8.0
+                                        END * %s
+                                    )
+                                ELSE 0
+                            END
+                    END
+                ) as ot_charges,
                 
-                -- Late deduction
+                -- Late deduction (using dynamically calculated OT rate)
                 CASE 
-                    WHEN COALESCE(e.ot_charge_per_hour, 0) > 0 THEN
-                        COALESCE(att.late_minutes, 0) * (COALESCE(e.ot_charge_per_hour, 0) / 60.0)
+                    WHEN (
+                        CASE 
+                            WHEN COALESCE(att.uploaded_working_days, 0) > 0 THEN
+                                CASE 
+                                    WHEN (CASE 
+                                        WHEN e.shift_start_time IS NOT NULL AND e.shift_end_time IS NOT NULL THEN
+                                            CASE 
+                                                WHEN e.shift_end_time <= e.shift_start_time THEN
+                                                    EXTRACT(EPOCH FROM (e.shift_end_time::time - '00:00:00'::time + ('24:00:00'::time - e.shift_start_time::time))) / 3600.0
+                                                ELSE
+                                                    EXTRACT(EPOCH FROM (e.shift_end_time::time - e.shift_start_time::time)) / 3600.0
+                                            END
+                                        ELSE 8.0
+                                    END * COALESCE(att.uploaded_working_days, 0)) > 0 
+                                    AND COALESCE(e.basic_salary, 0) > 0 THEN
+                                        COALESCE(e.basic_salary, 0) / (
+                                            CASE 
+                                                WHEN e.shift_start_time IS NOT NULL AND e.shift_end_time IS NOT NULL THEN
+                                                    CASE 
+                                                        WHEN e.shift_end_time <= e.shift_start_time THEN
+                                                            EXTRACT(EPOCH FROM (e.shift_end_time::time - '00:00:00'::time + ('24:00:00'::time - e.shift_start_time::time))) / 3600.0
+                                                        ELSE
+                                                            EXTRACT(EPOCH FROM (e.shift_end_time::time - e.shift_start_time::time)) / 3600.0
+                                                    END
+                                                ELSE 8.0
+                                            END * COALESCE(att.uploaded_working_days, 0)
+                                        )
+                                    ELSE 0
+                                END
+                            ELSE
+                                CASE 
+                                    WHEN (CASE 
+                                        WHEN e.shift_start_time IS NOT NULL AND e.shift_end_time IS NOT NULL THEN
+                                            CASE 
+                                                WHEN e.shift_end_time <= e.shift_start_time THEN
+                                                    EXTRACT(EPOCH FROM (e.shift_end_time::time - '00:00:00'::time + ('24:00:00'::time - e.shift_start_time::time))) / 3600.0
+                                                ELSE
+                                                    EXTRACT(EPOCH FROM (e.shift_end_time::time - e.shift_start_time::time)) / 3600.0
+                                            END
+                                        ELSE 8.0
+                                    END * %s) > 0 
+                                    AND COALESCE(e.basic_salary, 0) > 0 THEN
+                                        COALESCE(e.basic_salary, 0) / (
+                                            CASE 
+                                                WHEN e.shift_start_time IS NOT NULL AND e.shift_end_time IS NOT NULL THEN
+                                                    CASE 
+                                                        WHEN e.shift_end_time <= e.shift_start_time THEN
+                                                            EXTRACT(EPOCH FROM (e.shift_end_time::time - '00:00:00'::time + ('24:00:00'::time - e.shift_start_time::time))) / 3600.0
+                                                        ELSE
+                                                            EXTRACT(EPOCH FROM (e.shift_end_time::time - e.shift_start_time::time)) / 3600.0
+                                                    END
+                                                ELSE 8.0
+                                            END * %s
+                                        )
+                                    ELSE 0
+                                END
+                        END
+                    ) > 0 THEN
+                        COALESCE(att.late_minutes, 0) * (
+                            CASE 
+                                WHEN COALESCE(att.uploaded_working_days, 0) > 0 THEN
+                                    CASE 
+                                        WHEN (CASE 
+                                            WHEN e.shift_start_time IS NOT NULL AND e.shift_end_time IS NOT NULL THEN
+                                                CASE 
+                                                    WHEN e.shift_end_time <= e.shift_start_time THEN
+                                                        EXTRACT(EPOCH FROM (e.shift_end_time::time - '00:00:00'::time + ('24:00:00'::time - e.shift_start_time::time))) / 3600.0
+                                                    ELSE
+                                                        EXTRACT(EPOCH FROM (e.shift_end_time::time - e.shift_start_time::time)) / 3600.0
+                                                END
+                                            ELSE 8.0
+                                        END * COALESCE(att.uploaded_working_days, 0)) > 0 
+                                        AND COALESCE(e.basic_salary, 0) > 0 THEN
+                                            COALESCE(e.basic_salary, 0) / (
+                                                CASE 
+                                                    WHEN e.shift_start_time IS NOT NULL AND e.shift_end_time IS NOT NULL THEN
+                                                        CASE 
+                                                            WHEN e.shift_end_time <= e.shift_start_time THEN
+                                                                EXTRACT(EPOCH FROM (e.shift_end_time::time - '00:00:00'::time + ('24:00:00'::time - e.shift_start_time::time))) / 3600.0
+                                                            ELSE
+                                                                EXTRACT(EPOCH FROM (e.shift_end_time::time - e.shift_start_time::time)) / 3600.0
+                                                        END
+                                                    ELSE 8.0
+                                                END * COALESCE(att.uploaded_working_days, 0)
+                                            )
+                                        ELSE 0
+                                    END
+                                ELSE
+                                    CASE 
+                                        WHEN (CASE 
+                                            WHEN e.shift_start_time IS NOT NULL AND e.shift_end_time IS NOT NULL THEN
+                                                CASE 
+                                                    WHEN e.shift_end_time <= e.shift_start_time THEN
+                                                        EXTRACT(EPOCH FROM (e.shift_end_time::time - '00:00:00'::time + ('24:00:00'::time - e.shift_start_time::time))) / 3600.0
+                                                    ELSE
+                                                        EXTRACT(EPOCH FROM (e.shift_end_time::time - e.shift_start_time::time)) / 3600.0
+                                                END
+                                            ELSE 8.0
+                                        END * %s) > 0 
+                                        AND COALESCE(e.basic_salary, 0) > 0 THEN
+                                            COALESCE(e.basic_salary, 0) / (
+                                                CASE 
+                                                    WHEN e.shift_start_time IS NOT NULL AND e.shift_end_time IS NOT NULL THEN
+                                                        CASE 
+                                                            WHEN e.shift_end_time <= e.shift_start_time THEN
+                                                                EXTRACT(EPOCH FROM (e.shift_end_time::time - '00:00:00'::time + ('24:00:00'::time - e.shift_start_time::time))) / 3600.0
+                                                            ELSE
+                                                                EXTRACT(EPOCH FROM (e.shift_end_time::time - e.shift_start_time::time)) / 3600.0
+                                                        END
+                                                    ELSE 8.0
+                                                END * %s
+                                            )
+                                        ELSE 0
+                                    END
+                            END / 60.0
+                        )
                     ELSE 0
                 END as late_deduction,
                 
@@ -2448,10 +2888,7 @@ def calculate_simple_payroll_ultra_fast(request):
                 
                 -- Advance deductions
                 COALESCE(adv.advance_deduction, 0) as advance_deduction,
-                COALESCE(total_adv.total_advance_balance, 0) as total_advance_balance,
-                
-                -- Employee rates
-                COALESCE(e.ot_charge_per_hour, 0) as ot_rate
+                COALESCE(total_adv.total_advance_balance, 0) as total_advance_balance
                 
             FROM excel_data_employeeprofile e
             
@@ -2497,12 +2934,22 @@ def calculate_simple_payroll_ultra_fast(request):
             ORDER BY e.first_name, e.last_name
             """
             
+            # Count all %s placeholders: 
+            # 1 working_days (line 2433), 2-15 working_days for OT rate calculations (14 times), 
+            # 16-18 attendance (3 params), 19-20 advance (2 params), 21 total_advance (1 param), 22 employee filter (1 param)
             cursor.execute(sql, [
-                working_days, working_days, working_days,  # working days parameters
-                tenant.id, year, month_num,  # attendance parameters
-                tenant.id, f'%{month_year_string}%',  # advance parameters
-                tenant.id,  # total advance parameters
-                tenant.id  # employee filter
+                working_days,  # 1: working_days display
+                working_days, working_days,  # 2-3: OT rate fallback (first calculation)
+                working_days, working_days,  # 4-5: gross_salary working days
+                working_days, working_days,  # 6-7: OT rate in gross_salary fallback
+                working_days, working_days,  # 8-9: OT rate in late deduction (gross_salary) fallback
+                working_days, working_days,  # 10-11: OT rate in ot_charges fallback
+                working_days, working_days,  # 12-13: OT rate in late_deduction fallback (first)
+                working_days, working_days,  # 14-15: OT rate in late_deduction fallback (second)
+                tenant.id, year, month_num,  # 16-18: attendance parameters
+                tenant.id, f'%{month_year_string}%',  # 19-20: advance parameters
+                tenant.id,  # 21: total advance parameters
+                tenant.id  # 22: employee filter
             ])
             
             columns = [col[0] for col in cursor.description]
@@ -2553,11 +3000,40 @@ def calculate_simple_payroll_ultra_fast(request):
                     # No employee profile found - use standard 30 days
                     employee_working_days = 30
 
+            # Calculate OT rate dynamically based on this month's working days
+            # OT rate changes monthly because working days change monthly
+            # Formula: OT Charge per Hour = basic_salary / (shift_hours × working_days)
+            base_salary = float(data['base_salary'] or 0)
+            employee = employees_map.get(data['employee_id'])
+            
+            # Calculate shift hours
+            shift_hours_per_day = 0
+            if employee and employee.shift_start_time and employee.shift_end_time:
+                from datetime import datetime, timedelta
+                start_dt = datetime.combine(datetime.today().date(), employee.shift_start_time)
+                end_dt = datetime.combine(datetime.today().date(), employee.shift_end_time)
+                # Handle overnight shifts
+                if end_dt <= start_dt:
+                    end_dt += timedelta(days=1)
+                shift_hours_per_day = (end_dt - start_dt).total_seconds() / 3600
+            else:
+                # Fallback to 8 hours if shift times not set
+                shift_hours_per_day = 8
+            
+            # Calculate OT rate dynamically for this month
+            ot_rate = 0
+            if shift_hours_per_day > 0 and employee_working_days > 0 and base_salary > 0:
+                ot_rate = base_salary / (shift_hours_per_day * employee_working_days)
+            
+            # Recalculate OT charges and late deduction with dynamic OT rate
+            ot_hours = float(data['ot_hours'] or 0)
+            late_minutes = float(data['late_minutes'] or 0)
+            ot_charges = ot_hours * ot_rate
+            late_charge_per_minute = ot_rate / 60 if ot_rate > 0 else 0
+            late_deduction = late_minutes * late_charge_per_minute
+            
             # Recompute gross salary with employee-specific working days
             # Gross Salary = (Base Salary ÷ Working Days × Present Days) + OT Charges - Late Deduction
-            base_salary = float(data['base_salary'] or 0)
-            ot_charges = float(data['ot_charges'] or 0)
-            late_deduction = float(data['late_deduction'] or 0)
             if employee_working_days > 0:
                 gross_salary = ((base_salary / employee_working_days) * present_days) + ot_charges - late_deduction
             else:
@@ -2615,6 +3091,7 @@ def calculate_simple_payroll_ultra_fast(request):
                 'gross_salary': gross_salary_rounded,
                 'ot_charges': ot_charges_rounded,
                 'late_deduction': late_deduction_rounded,
+                'ot_rate': round(ot_rate, 2),  # Include dynamically calculated OT rate
                 'tds_percentage': tds_percentage,
                 'tds_amount': tds_amount_rounded,
                 'total_advance_balance': total_advance_balance,

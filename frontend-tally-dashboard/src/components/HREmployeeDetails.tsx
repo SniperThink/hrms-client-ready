@@ -4,6 +4,7 @@ import { Edit } from 'lucide-react';
 import { apiRequest } from '../services/api';
 import { getDropdownOptions, DropdownOptions } from '../services/dropdownService';
 import { getCountryOptions, getStateOptions, getCityOptions } from '../services/locationService';
+import { State, Country } from 'country-state-city';
 import CustomDateInput from './CustomDateInput';
 import Dropdown, { DropdownOption } from './Dropdown';
 import { logger } from '../utils/logger';
@@ -50,6 +51,8 @@ interface EmployeeProfileData {
   shift_end_time: string;
   basic_salary: string;
   tds_percentage: string;
+  ot_charge?: string;
+  ot_charge_per_hour?: string;
   off_monday?: boolean;
   off_tuesday?: boolean;
   off_wednesday?: boolean;
@@ -95,6 +98,7 @@ const HREmployeeDetails: React.FC = () => {
   const [attendanceRecords, setAttendanceRecords] = useState<AttendanceRecord[]>([]);
   const [loading, setLoading] = useState(true);
   const [initialLoad, setInitialLoad] = useState(true);
+  const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [isEditing, setIsEditing] = useState(false);
   const [editData, setEditData] = useState<Partial<EmployeeProfileData> | null>(null);
@@ -157,15 +161,36 @@ const HREmployeeDetails: React.FC = () => {
   useEffect(() => {
     const loadLocationData = async () => {
       try {
+        logger.info( '🔍 Loading country options...');
         const countries = await getCountryOptions();
+        logger.info( '✅ Loaded countries:', countries.length);
         setCountryOptions(countries);
       } catch (error) {
-        logger.error('Error loading location data:', error);
+        logger.error('❌ Error loading location data:', error);
       }
     };
 
     loadLocationData();
   }, []);
+
+  // Ensure saved country is in options when employee data loads
+  useEffect(() => {
+    if (employeeData && countryOptions.length > 0) {
+      const countryCode = employeeData.country || employeeData.nationality;
+      if (countryCode && !countryOptions.find(c => c.value === countryCode)) {
+        // If saved country is not in options, add it
+        const country = Country.getCountryByCode(countryCode);
+        if (country) {
+          setCountryOptions(prev => [...prev, { value: country.isoCode, label: country.name }]);
+          logger.info( '✅ Added saved country to options:', country.name);
+        } else {
+          // Fallback: add with the code as label
+          setCountryOptions(prev => [...prev, { value: countryCode, label: countryCode }]);
+          logger.info( '⚠️ Added country code to options (not found in library):', countryCode);
+        }
+      }
+    }
+  }, [employeeData, countryOptions.length]);
 
   // Handle country change
   const handleCountryChange = async (countryCode: string) => {
@@ -176,7 +201,8 @@ const HREmployeeDetails: React.FC = () => {
     setCityOptions([]);
 
     if (countryCode && isEditing) {
-      setEditData(prev => ({ ...prev, country: countryCode }));
+      // Update both country and nationality for backward compatibility
+      setEditData(prev => ({ ...prev, country: countryCode, nationality: countryCode }));
     }
 
     if (countryCode) {
@@ -231,9 +257,16 @@ const HREmployeeDetails: React.FC = () => {
     const fieldName = `off_${day.toLowerCase()}` as keyof EmployeeProfileData;
     if (isEditing) {
       setEditData(prev => {
-        const currentValue = prev?.[fieldName] as boolean;
+        // Initialize editData with employeeData if it's null
+        const currentEditData = prev || { ...employeeData };
+        
+        // Get current value from editData, or fall back to original employeeData
+        const currentValue = currentEditData[fieldName] !== undefined 
+          ? (currentEditData[fieldName] as boolean)
+          : (employeeData?.[fieldName] as boolean || false);
+        
         return {
-          ...prev,
+          ...currentEditData,
           [fieldName]: !currentValue
         };
       });
@@ -256,10 +289,31 @@ const HREmployeeDetails: React.FC = () => {
       });
       
       if (data && data.employee) {
-        setEmployeeData(data.employee);
+        // Map ot_charge_per_hour to ot_charge for consistency
+        const employeeDataWithOT = {
+          ...data.employee,
+          ot_charge: data.employee.ot_charge_per_hour || data.employee.ot_charge || ''
+        };
+        setEmployeeData(employeeDataWithOT);
+        // Initialize selected location values from employee data
+        // Use country if available, otherwise use nationality (backward compatibility)
+        const countryCode = employeeDataWithOT.country || employeeDataWithOT.nationality;
+        if (countryCode) {
+          setSelectedCountry(countryCode);
+        }
+        if (employeeDataWithOT.state) {
+          setSelectedState(employeeDataWithOT.state);
+        }
+        if (employeeDataWithOT.city) {
+          setSelectedCity(employeeDataWithOT.city);
+        }
         setError(null);
         setInitialLoad(false);
-        logger.info( '✅ Employee data loaded successfully');
+        logger.info( '✅ Employee data loaded successfully', {
+          country: countryCode,
+          state: data.employee.state,
+          city: data.employee.city
+        });
       } else {
         logger.warn('⚠️ No employee data in response');
         setError('No employee data found');
@@ -326,6 +380,69 @@ const HREmployeeDetails: React.FC = () => {
 
     loadDropdownOptions();
   }, []);
+
+  // Load state options when country is available from employee data
+  useEffect(() => {
+    const loadStateOptions = async () => {
+      // Use country if available, otherwise use nationality (backward compatibility)
+      const countryCode = employeeData?.country || employeeData?.nationality;
+      if (countryCode) {
+        try {
+          const states = await getStateOptions(countryCode);
+          // If employee has a saved state that's not in the options, add it
+          const savedState = employeeData.state;
+          if (savedState && !states.find(s => s.value === savedState)) {
+            // Try to find the state name if it's an ISO code
+            const stateObj = State.getStatesOfCountry(countryCode)?.find(s => s.isoCode === savedState || s.name === savedState);
+            if (stateObj) {
+              states.push({ value: stateObj.isoCode, label: stateObj.name });
+            } else {
+              states.push({ value: savedState, label: savedState });
+            }
+          }
+          setStateOptions(states);
+          logger.info( '✅ Loaded state options for country:', countryCode, 'States:', states.length);
+        } catch (error) {
+          logger.error('Error loading states:', error);
+          // If loading fails but employee has a saved state, add it to options
+          if (employeeData.state) {
+            setStateOptions([{ value: employeeData.state, label: employeeData.state }]);
+          }
+        }
+      }
+    };
+
+    loadStateOptions();
+  }, [employeeData?.country, employeeData?.nationality, employeeData?.state]);
+
+  // Load city options when state is available from employee data
+  useEffect(() => {
+    const loadCityOptions = async () => {
+      // Use country if available, otherwise use nationality (backward compatibility)
+      const countryCode = employeeData?.country || employeeData?.nationality;
+      if (employeeData?.state && countryCode) {
+        try {
+          const stateId = `${countryCode}_${employeeData.state}`;
+          const cities = await getCityOptions(stateId);
+          // If employee has a saved city that's not in the options, add it
+          const savedCity = employeeData.city;
+          if (savedCity && !cities.find(c => c.value === savedCity || c.label === savedCity)) {
+            cities.push({ value: savedCity, label: savedCity });
+          }
+          setCityOptions(cities);
+          logger.info( '✅ Loaded city options for state:', stateId, 'Cities:', cities.length);
+        } catch (error) {
+          logger.error('Error loading cities:', error);
+          // If loading fails but employee has a saved city, add it to options
+          if (employeeData.city) {
+            setCityOptions([{ value: employeeData.city, label: employeeData.city }]);
+          }
+        }
+      }
+    };
+
+    loadCityOptions();
+  }, [employeeData?.state, employeeData?.country, employeeData?.nationality, employeeData?.city]);
 
   if (loading) {
     return (
@@ -401,11 +518,26 @@ const HREmployeeDetails: React.FC = () => {
         oldValue = formatTimeToHHMM(oldValue as string);
       }
       // Handle boolean fields differently (off_days)
+      // For booleans, we need to include both true and false values
       if (k.startsWith('off_')) {
-        if (newValue !== oldValue && newValue !== null && newValue !== undefined) {
+        // Check if value changed (handle both true and false explicitly)
+        if (newValue !== oldValue && typeof newValue === 'boolean') {
           (updatedFields as Record<string, unknown>)[k] = newValue;
         }
-      } else if (newValue !== oldValue && newValue !== '' && newValue !== null && newValue !== undefined) {
+      } 
+      // Handle ot_charge - map to ot_charge_per_hour for backend
+      else if (k === 'ot_charge') {
+        // Only include if it's different from old value AND has a value
+        // If empty, don't include it (backend will use existing calculation)
+        if (newValue !== oldValue && newValue !== '' && newValue !== null && newValue !== undefined) {
+          (updatedFields as Record<string, unknown>)['ot_charge_per_hour'] = newValue;
+        }
+        // If user cleared the field (newValue is empty but oldValue had something), send null to clear
+        else if (newValue === '' && oldValue && oldValue !== '') {
+          (updatedFields as Record<string, unknown>)['ot_charge_per_hour'] = null;
+        }
+      }
+      else if (newValue !== oldValue && newValue !== '' && newValue !== null && newValue !== undefined) {
         (updatedFields as Record<string, unknown>)[k] = newValue;
       }
     });
@@ -415,9 +547,12 @@ const HREmployeeDetails: React.FC = () => {
       return; // Nothing to update
     }
     try {
+      setSaving(true); // Start loading state
+      
       // Use the database ID from employeeData (required for PATCH operation)
       if (!employeeData?.id) {
         alert('Cannot save: Employee database ID not found');
+        setSaving(false);
         return;
       }
       
@@ -436,6 +571,8 @@ const HREmployeeDetails: React.FC = () => {
       alert('✅ Employee profile saved successfully!');
     } catch {
       alert('Failed to save changes');
+    } finally {
+      setSaving(false); // End loading state
     }
   };
 
@@ -458,7 +595,39 @@ const HREmployeeDetails: React.FC = () => {
     <div className="flex flex-col justify-center">
       {!isEditing ? (
         <button
-          onClick={() => {
+          onClick={async () => {
+            // Ensure state and city options are loaded before entering edit mode
+            const countryCode = employeeData?.country || employeeData?.nationality;
+            if (countryCode && !stateOptions.length) {
+              try {
+                const states = await getStateOptions(countryCode);
+                // Add saved state if not in options
+                if (employeeData?.state && !states.find(s => s.value === employeeData.state)) {
+                  const stateObj = State.getStatesOfCountry(countryCode)?.find(s => s.isoCode === employeeData.state || s.name === employeeData.state);
+                  if (stateObj) {
+                    states.push({ value: stateObj.isoCode, label: stateObj.name });
+                  } else {
+                    states.push({ value: employeeData.state, label: employeeData.state });
+                  }
+                }
+                setStateOptions(states);
+              } catch (error) {
+                logger.error('Error loading states:', error);
+              }
+            }
+            if (employeeData?.state && countryCode && !cityOptions.length) {
+              try {
+                const stateId = `${countryCode}_${employeeData.state}`;
+                const cities = await getCityOptions(stateId);
+                // Add saved city if not in options
+                if (employeeData?.city && !cities.find(c => c.value === employeeData.city || c.label === employeeData.city)) {
+                  cities.push({ value: employeeData.city, label: employeeData.city });
+                }
+                setCityOptions(cities);
+              } catch (error) {
+                logger.error('Error loading cities:', error);
+              }
+            }
             setEditData({ ...employeeData });
             setIsEditing(true);
           }}
@@ -471,16 +640,34 @@ const HREmployeeDetails: React.FC = () => {
         <div className="flex gap-2">
           <button
             onClick={handleSave}
-            className="px-4 py-2 bg-[#0B5E59] text-white rounded-lg hover:bg-[#094947] transition-colors"
+            disabled={saving}
+            className={`px-4 py-2 bg-[#0B5E59] text-white rounded-lg transition-colors flex items-center gap-2 ${
+              saving 
+                ? 'opacity-70 cursor-not-allowed' 
+                : 'hover:bg-[#094947]'
+            }`}
           >
-            Save
+            {saving && (
+              <svg className="animate-spin h-4 w-4 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+              </svg>
+            )}
+            {saving ? 'Saving...' : 'Save'}
           </button>
           <button
             onClick={() => {
-              setIsEditing(false);
-              setEditData(null);
+              if (!saving) {
+                setIsEditing(false);
+                setEditData(null);
+              }
             }}
-            className="px-4 py-2 border border-gray-300 rounded-lg text-gray-700 bg-white hover:bg-gray-50"
+            disabled={saving}
+            className={`px-4 py-2 border border-gray-300 rounded-lg text-gray-700 bg-white transition-colors ${
+              saving 
+                ? 'opacity-50 cursor-not-allowed' 
+                : 'hover:bg-gray-50'
+            }`}
           >
             Cancel
           </button>
@@ -684,13 +871,35 @@ const HREmployeeDetails: React.FC = () => {
                 <label className="block mb-1 text-sm font-medium px-1 text-gray-700">
                   Country
                 </label>
-                <Dropdown
-                  options={countryOptions}
-                  value={isEditing ? editData?.country || selectedCountry : employeeData.country || selectedCountry}
-                  onChange={handleCountryChange}
-                  placeholder="Select Country"
-                  disabled={!isEditing}
-                />
+                {countryOptions.length === 0 ? (
+                  <div className="text-sm text-gray-500 italic">Loading countries...</div>
+                ) : (
+                  <Dropdown
+                    options={(() => {
+                      // Ensure saved country is always in options
+                      const currentValue = isEditing 
+                        ? (editData?.country || editData?.nationality || employeeData?.country || employeeData?.nationality || '') 
+                        : (employeeData?.country || employeeData?.nationality || '');
+                      if (currentValue && !countryOptions.find(c => c.value === currentValue)) {
+                        // Try to get country name from library
+                        const country = Country.getCountryByCode(currentValue);
+                        if (country) {
+                          return [...countryOptions, { value: country.isoCode, label: country.name }];
+                        }
+                        // Fallback: add with the code as label
+                        return [...countryOptions, { value: currentValue, label: currentValue }];
+                      }
+                      return countryOptions;
+                    })()}
+                    value={isEditing 
+                      ? (editData?.country || editData?.nationality || employeeData?.country || employeeData?.nationality || selectedCountry || '') 
+                      : (employeeData?.country || employeeData?.nationality || selectedCountry || '')
+                    }
+                    onChange={handleCountryChange}
+                    placeholder={countryOptions.length > 0 ? "Select Country" : "Loading countries..."}
+                    disabled={!isEditing || countryOptions.length === 0}
+                  />
+                )}
               </div>
               <div className="col-span-2">
                 <label className="block mb-1 text-sm font-medium px-1 text-gray-700">
@@ -714,11 +923,23 @@ const HREmployeeDetails: React.FC = () => {
                   State
                 </label>
                 <Dropdown
-                  options={stateOptions}
-                  value={isEditing ? editData?.state || selectedState : employeeData.state || selectedState}
+                  options={(() => {
+                    // Ensure saved state is always in options
+                    const currentValue = isEditing 
+                      ? (editData?.state || employeeData?.state || '') 
+                      : (employeeData?.state || '');
+                    if (currentValue && !stateOptions.find(s => s.value === currentValue)) {
+                      return [...stateOptions, { value: currentValue, label: currentValue }];
+                    }
+                    return stateOptions;
+                  })()}
+                  value={isEditing 
+                    ? (editData?.state || employeeData?.state || selectedState || '') 
+                    : (employeeData?.state || selectedState || '')
+                  }
                   onChange={handleStateChange}
                   placeholder="Select State"
-                  disabled={!isEditing || stateOptions.length === 0}
+                  disabled={!isEditing}
                 />
               </div>
               <div>
@@ -726,11 +947,23 @@ const HREmployeeDetails: React.FC = () => {
                   City
                 </label>
                 <Dropdown
-                  options={cityOptions}
-                  value={isEditing ? editData?.city || selectedCity : employeeData.city || selectedCity}
+                  options={(() => {
+                    // Ensure saved city is always in options
+                    const currentValue = isEditing 
+                      ? (editData?.city || employeeData?.city || '') 
+                      : (employeeData?.city || '');
+                    if (currentValue && !cityOptions.find(c => c.value === currentValue)) {
+                      return [...cityOptions, { value: currentValue, label: currentValue }];
+                    }
+                    return cityOptions;
+                  })()}
+                  value={isEditing 
+                    ? (editData?.city || employeeData?.city || selectedCity || '') 
+                    : (employeeData?.city || selectedCity || '')
+                  }
                   onChange={handleCityChange}
                   placeholder="Select City"
-                  disabled={!isEditing || cityOptions.length === 0}
+                  disabled={!isEditing}
                 />
               </div>
             </div>
@@ -873,15 +1106,35 @@ const HREmployeeDetails: React.FC = () => {
                   Shift Start Time <span className="text-red-500">*</span>
                 </label>
                 <input
-                  type="text"
-                  value={isEditing ? editData?.shift_start_time || '' : employeeData.shift_start_time || ''}
+                  type="time"
+                  value={formatTimeToHHMM(
+                    isEditing 
+                      ? (editData?.shift_start_time || employeeData.shift_start_time || '')
+                      : (employeeData.shift_start_time || '')
+                  )}
                   className={`w-full px-4 py-3 border rounded-lg transition-colors ${
                     isEditing 
-                      ? 'border-teal-300 bg-white focus:border-teal-500 focus:ring-2 focus:ring-teal-200' 
+                      ? 'border-teal-300 bg-white focus:border-teal-500 focus:ring-2 focus:ring-teal-200 cursor-pointer' 
                       : 'border-gray-200 bg-gray-50 text-gray-600 cursor-not-allowed'
                   }`}
                   placeholder="Shift Start Time"
                   readOnly={!isEditing}
+                  onClick={(e) => {
+                    if (isEditing) {
+                      const input = e.currentTarget as HTMLInputElement;
+                      if (input.showPicker) {
+                        input.showPicker();
+                      }
+                    }
+                  }}
+                  onFocus={(e) => {
+                    if (isEditing) {
+                      const input = e.currentTarget as HTMLInputElement;
+                      if (input.showPicker) {
+                        input.showPicker();
+                      }
+                    }
+                  }}
                   onChange={e => isEditing && setEditData(prev => ({ ...prev, shift_start_time: e.target.value }))}
                 />
               </div>
@@ -890,15 +1143,35 @@ const HREmployeeDetails: React.FC = () => {
                   Shift End Time <span className="text-red-500">*</span>
                 </label>
                 <input
-                  type="text"
-                  value={isEditing ? editData?.shift_end_time || '' : employeeData.shift_end_time || ''}
+                  type="time"
+                  value={formatTimeToHHMM(
+                    isEditing 
+                      ? (editData?.shift_end_time || employeeData.shift_end_time || '')
+                      : (employeeData.shift_end_time || '')
+                  )}
                   className={`w-full px-4 py-3 border rounded-lg transition-colors ${
                     isEditing 
-                      ? 'border-teal-300 bg-white focus:border-teal-500 focus:ring-2 focus:ring-teal-200' 
+                      ? 'border-teal-300 bg-white focus:border-teal-500 focus:ring-2 focus:ring-teal-200 cursor-pointer' 
                       : 'border-gray-200 bg-gray-50 text-gray-600 cursor-not-allowed'
                   }`}
                   placeholder="Shift End Time"
                   readOnly={!isEditing}
+                  onClick={(e) => {
+                    if (isEditing) {
+                      const input = e.currentTarget as HTMLInputElement;
+                      if (input.showPicker) {
+                        input.showPicker();
+                      }
+                    }
+                  }}
+                  onFocus={(e) => {
+                    if (isEditing) {
+                      const input = e.currentTarget as HTMLInputElement;
+                      if (input.showPicker) {
+                        input.showPicker();
+                      }
+                    }
+                  }}
                   onChange={e => isEditing && setEditData(prev => ({ ...prev, shift_end_time: e.target.value }))}
                 />
               </div>
@@ -935,14 +1208,49 @@ const HREmployeeDetails: React.FC = () => {
                   onChange={e => isEditing && setEditData(prev => ({ ...prev, tds_percentage: e.target.value }))}
                 />
               </div>
+              <div>
+                <label className="block mb-1 text-gray-700 text-sm font-medium px-1">
+                  OT Charge (per hour)
+                </label>
+                <input
+                  type="text"
+                  value={isEditing 
+                    ? (editData?.ot_charge !== undefined ? editData.ot_charge : (employeeData.ot_charge ? String(employeeData.ot_charge) : '')) 
+                    : (employeeData.ot_charge ? String(employeeData.ot_charge) : '')
+                  }
+                  className={`w-full px-4 py-3 border rounded-lg transition-colors ${
+                    isEditing 
+                      ? 'border-teal-300 bg-white focus:border-teal-500 focus:ring-2 focus:ring-teal-200' 
+                      : 'border-gray-200 bg-gray-50 text-gray-600 cursor-not-allowed'
+                  }`}
+                  placeholder="OT Charge per hour (optional)"
+                  readOnly={!isEditing}
+                  onChange={e => {
+                    if (isEditing) {
+                      const value = e.target.value;
+                      // Allow empty value or valid number
+                      if (value === '' || /^\d*\.?\d*$/.test(value)) {
+                        setEditData(prev => ({ ...prev, ot_charge: value }));
+                      }
+                    }
+                  }}
+                />
+                <div className="mt-1 text-xs text-gray-500">
+                  <p className="mb-1">💡 <strong>Formula:</strong> Basic Salary / (Shift Hours × Working Days)</p>
+                  <p>This will be calculated automatically if not provided. The OT rate changes monthly based on each month's working days.</p>
+                </div>
+              </div>
               <div className="col-span-2">
                 <label className="block mb-2 text-gray-700 text-sm font-medium px-1">Off Days</label>
                 <div className="grid grid-cols-7 gap-2">
                   {['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'].map((day) => {
                     const fieldName = `off_${day.toLowerCase()}` as keyof EmployeeProfileData;
+                    // When editing, use editData value if available, otherwise fall back to employeeData
                     const isChecked = isEditing 
-                      ? editData?.[fieldName] as boolean || false 
-                      : employeeData[fieldName] as boolean || false;
+                      ? (editData?.[fieldName] !== undefined 
+                          ? (editData[fieldName] as boolean)
+                          : (employeeData?.[fieldName] as boolean || false))
+                      : (employeeData?.[fieldName] as boolean || false);
                     
                     return (
                       <div key={day} className="flex items-center">

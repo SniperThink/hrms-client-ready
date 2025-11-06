@@ -399,13 +399,13 @@ class SalaryCalculationService:
             basic_salary_per_hour = basic_salary / (working_days * shift_hours_per_day) if working_days > 0 and shift_hours_per_day > 0 else Decimal('0')
             basic_salary_per_minute = basic_salary / (working_days * minutes_per_day) if working_days > 0 and minutes_per_day > 0 else Decimal('0')
             
-            # Use employee's OT rate if available, otherwise calculate from shift hours and working days
-            if employee.ot_charge_per_hour:
-                ot_rate_per_hour = employee.ot_charge_per_hour
+            # ALWAYS calculate OT rate dynamically based on this month's working days
+            # OT rate changes monthly because working days change monthly
+            # Formula: OT Charge per Hour = basic_salary / ((shift_end_time - shift_start_time) × working_days)
+            if shift_hours_per_day > 0 and working_days > 0 and basic_salary > 0:
+                ot_rate_per_hour = basic_salary / (shift_hours_per_day * Decimal(str(working_days)))
             else:
-                # Calculate OT rate as (shift_hours × working_days)
-                # Formula: OT Charge per Hour = (shift_end_time - shift_start_time) × working_days
-                ot_rate_per_hour = shift_hours_per_day * Decimal(str(working_days))
+                ot_rate_per_hour = Decimal('0')
             
             # Use employee's TDS percentage if available, otherwise use period default
             employee_tds_rate = employee.tds_percentage if employee.tds_percentage is not None else payroll_period.tds_rate

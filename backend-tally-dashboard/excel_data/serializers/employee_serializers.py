@@ -132,10 +132,11 @@ class EmployeeFormSerializer(serializers.ModelSerializer):
         ]
         
     def get_ot_calculation(self, obj):
-        """Show OT calculation formula: (shift_end_time - shift_start_time) × working_days"""
+        """Show OT calculation formula: basic_salary / (shift_hours × working_days)"""
         from datetime import datetime, timedelta
+        from decimal import Decimal
         
-        if obj.shift_start_time and obj.shift_end_time:
+        if obj.shift_start_time and obj.shift_end_time and obj.basic_salary:
             # Calculate shift hours
             start_dt = datetime.combine(datetime.today().date(), obj.shift_start_time)
             end_dt = datetime.combine(datetime.today().date(), obj.shift_end_time)
@@ -169,12 +170,13 @@ class EmployeeFormSerializer(serializers.ModelSerializer):
                     working_days += 1
                 current_date += timedelta(days=1)
             
-            if shift_hours > 0 and working_days > 0:
-                ot_rate = shift_hours * working_days
-                return f"({shift_hours:.2f} hrs × {working_days} days) = {round(ot_rate, 2)}"
+            if shift_hours > 0 and working_days > 0 and obj.basic_salary:
+                basic_salary = Decimal(str(obj.basic_salary))
+                ot_rate = basic_salary / (Decimal(str(shift_hours)) * Decimal(str(working_days)))
+                return f"{basic_salary} / ({shift_hours:.2f} hrs × {working_days} days) = {round(ot_rate, 2)}"
             else:
-                return "Invalid shift times or working days"
-        return "Enter shift times to calculate"
+                return "Invalid shift times, working days, or basic salary"
+        return "Enter shift times and basic salary to calculate"
         
     def validate(self, data):
         """Custom validation for mandatory fields"""

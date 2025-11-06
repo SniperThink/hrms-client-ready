@@ -259,15 +259,20 @@ def get_dropdown_options(request):
 @permission_classes([IsAuthenticated])
 def calculate_ot_rate(request):
     """
-    Calculate OT rate based on shift times and working days
-    Formula: OT Rate = (shift_end_time - shift_start_time) × working_days
+    Calculate OT rate based on shift times, working days, and basic salary
+    Formula: OT Rate = basic_salary / (shift_hours × working_days)
     """
     try:
         from datetime import datetime, timedelta
+        from decimal import Decimal
         
         shift_start_time_str = request.data.get('shift_start_time', '09:00')
         shift_end_time_str = request.data.get('shift_end_time', '18:00')
         working_days = int(request.data.get('working_days', 30))
+        basic_salary = Decimal(str(request.data.get('basic_salary', 0)))
+        
+        if basic_salary <= 0:
+            return Response({'error': 'Basic salary must be greater than 0'}, status=400)
         
         # Parse shift times
         try:
@@ -282,18 +287,21 @@ def calculate_ot_rate(request):
         end_dt = datetime.combine(datetime.today().date(), shift_end_time)
         if end_dt <= start_dt:
             end_dt += timedelta(days=1)
-        shift_hours = (end_dt - start_dt).total_seconds() / 3600
+        shift_hours = Decimal(str((end_dt - start_dt).total_seconds() / 3600))
         
-        # Calculate OT rate: shift_hours × working_days
-        ot_rate = shift_hours * working_days
-        calculation = f"{shift_hours:.2f} hours × {working_days} days = {round(ot_rate, 2)}"
+        if shift_hours <= 0 or working_days <= 0:
+            return Response({'error': 'Shift hours and working days must be greater than 0'}, status=400)
+        
+        # Calculate OT rate: basic_salary / (shift_hours × working_days)
+        ot_rate = basic_salary / (shift_hours * Decimal(str(working_days)))
+        calculation = f"{basic_salary} / ({shift_hours:.2f} hours × {working_days} days) = {round(ot_rate, 2)}"
         
         return Response({
-            'ot_rate': round(ot_rate, 2),
+            'ot_rate': round(float(ot_rate), 2),
             'calculation': calculation,
-            'shift_hours_per_day': round(shift_hours, 2),
+            'shift_hours_per_day': round(float(shift_hours), 2),
             'working_days': working_days,
-            'total_hours': round(ot_rate, 2)
+            'basic_salary': float(basic_salary)
         })
     except (ValueError, TypeError) as e:
         return Response({'error': f'Invalid input: {str(e)}'}, status=400)
@@ -645,11 +653,17 @@ def bulk_update_attendance(request):
             f"eligible_employees_{tenant_id}_{date_str}",  # Critical for attendance log UI
             f"eligible_employees_progressive_{tenant_id}_{date_str}_initial",
             f"eligible_employees_progressive_{tenant_id}_{date_str}_remaining",
+            f"directory_data_{tenant_id}",  # Critical for directory to show updated OT/late totals
+            f"directory_data_full_{tenant_id}",  # Critical for directory full dataset cache
         ]
         
         for key in critical_cache_keys:
-            cache.delete(key)
-            cache_keys_cleared.append(key.split('_')[-2] + '_' + key.split('_')[-1])
+            deleted = cache.delete(key)
+            if deleted:
+                cache_keys_cleared.append(key)
+                logger.debug(f"✅ Cleared critical cache key: {key}")
+        
+        logger.info(f"🗑️ Immediately cleared {len(cache_keys_cleared)} critical cache keys including directory cache")
         
         # CRITICAL: Clear all attendance_all_records cache variations (pattern-based)
         # Cache keys follow pattern: attendance_all_records_{tenant_id}_{param_signature}
@@ -961,7 +975,8 @@ def update_monthly_summaries_parallel(request):
             f"months_with_attendance_{tenant.id}",
             f"eligible_employees_{tenant.id}",
             f"eligible_employees_{tenant.id}_progressive",
-            f"directory_data_{tenant.id}",
+            f"directory_data_{tenant.id}",  # Critical for directory to show updated OT/late totals
+            f"directory_data_full_{tenant.id}",  # Critical for directory full dataset cache
             f"attendance_all_records_{tenant.id}",
             f"attendance_log_{tenant.id}",
             f"attendance_tracker_{tenant.id}",
@@ -995,6 +1010,10 @@ def update_monthly_summaries_parallel(request):
         tenant_id = tenant.id if tenant else 'default'
         cache.delete(f"attendance_all_records_{tenant_id}_{date_str}")
         cache.delete(f"eligible_employees_{tenant_id}_{date_str}")
+        
+        # Clear directory cache (ensure it's cleared even if not in cache_keys_to_clear)
+        cache.delete(f"directory_data_{tenant_id}")
+        cache.delete(f"directory_data_full_{tenant_id}")
         
         # Clear custom date-based all_records cache keys that might exist
         cache.delete(f"attendance_all_records_{tenant_id}_custom_{attendance_date.month}_{attendance_date.year}_None_None")

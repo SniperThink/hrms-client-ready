@@ -79,6 +79,7 @@ const HRAttendanceLog: React.FC = () => {
   // (employees state not used anymore)
   const [attendanceEntries, setAttendanceEntries] = useState<Map<string, AttendanceEntry>>(new Map());
   const [loading, setLoading] = useState<boolean>(true);
+  const [loadingMore, setLoadingMore] = useState<boolean>(false);
   const [saving, setSaving] = useState<boolean>(false);
   const [error, setError] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
@@ -91,6 +92,13 @@ const HRAttendanceLog: React.FC = () => {
   const [progressiveLoadingComplete, setProgressiveLoadingComplete] = useState<boolean>(false); // Track if all loading is complete
   const [initialLoadComplete, setInitialLoadComplete] = useState<boolean>(false); // Track if initial load is complete
   const [hasExcelAttendance, setHasExcelAttendance] = useState<boolean>(false); // Track if Excel attendance exists for this month
+  
+  // Infinite scrolling state (like attendance tracker)
+  const [displayedCount, setDisplayedCount] = useState<number>(30); // Number of employees to display
+  const [hasMore, setHasMore] = useState<boolean>(false);
+  const [totalCount, setTotalCount] = useState<number>(0);
+  const INITIAL_DISPLAY_COUNT = 30;
+  const LOAD_MORE_COUNT = 30;
 
   // Add cache and request tracking to prevent duplicate calls
   const [cache, setCache] = useState<Map<string, { data: Employee[]; dayName: string; hasExcelAttendance: boolean; timestamp: number }>>(new Map());
@@ -204,6 +212,8 @@ const HRAttendanceLog: React.FC = () => {
     setDateLoading(true);
     setSelectedDate(newDate);
     setHasExcelAttendance(false); // Reset Excel attendance flag when date changes
+    setDisplayedCount(INITIAL_DISPLAY_COUNT); // Reset displayed count on date change
+    setHasMore(false); // Reset hasMore on date change
   };
 
   useEffect(() => {
@@ -238,6 +248,11 @@ const HRAttendanceLog: React.FC = () => {
         initializeAttendanceEntries(cachedData.data);
         setLoading(false);
         setInitialLoadComplete(true);
+        // Reset infinite scrolling state for cached data
+        setTotalCount(cachedData.data.length);
+        setDisplayedCount(Math.min(INITIAL_DISPLAY_COUNT, cachedData.data.length));
+        setHasMore(false);
+        setProgressiveLoadingComplete(true);
         return;
       } else if (cachedData && isCacheStale(cachedData.timestamp)) {
         logger.info( '⏰ Cache is stale, fetching fresh data for', selectedDate);
@@ -276,6 +291,7 @@ const HRAttendanceLog: React.FC = () => {
 
       const firstBatch = initialData.eligible_employees || [];
       const dayName = initialData.day_name || '';
+      const totalEmployees = initialData.total_count || firstBatch.length;
 
       // Set initial employees immediately for instant UI update
       setEligibleEmployees(firstBatch);
@@ -284,9 +300,18 @@ const HRAttendanceLog: React.FC = () => {
       initializeAttendanceEntries(firstBatch);
       setLoading(false); // User can start working immediately
       setInitialLoadComplete(true); // Mark initial load as complete
+      
+      // Infinite scrolling state
+      setTotalCount(totalEmployees);
+      const initialDisplay = Math.min(INITIAL_DISPLAY_COUNT, firstBatch.length);
+      setDisplayedCount(initialDisplay);
+      const hasMoreData = firstBatch.length < totalEmployees || (initialData.progressive_loading?.has_more || false);
+      setHasMore(hasMoreData);
+      
       setProgressiveLoadingComplete(false); // Mark as incomplete until all loaded
 
-      // STEP 2: Auto-trigger background loading if there are more employees
+      // STEP 2: Auto-trigger background loading if there are more employees (but don't wait)
+      // Load remaining in background, but don't display until user scrolls
       if (initialData.progressive_loading?.has_more && initialData.progressive_loading?.auto_trigger_remaining) {
         const remainingCount = initialData.progressive_loading.remaining_employees;
         logger.info( `🔄 Auto-triggering background load for ${remainingCount} remaining employees...`);
@@ -305,6 +330,7 @@ const HRAttendanceLog: React.FC = () => {
           timestamp: Date.now() 
         }));
         setProgressiveLoadingComplete(true); // Mark as complete
+        setHasMore(false); // No more data to load
       }
 
       setError(null);
@@ -349,6 +375,13 @@ const HRAttendanceLog: React.FC = () => {
 
       // Update state with all employees
       setEligibleEmployees(allEmployees);
+      
+      // Update infinite scrolling state
+      setTotalCount(remainingData.total_count || allEmployees.length);
+      setHasMore(false); // All data loaded
+      setProgressiveLoadingComplete(true);
+      
+      // Note: Auto-load effect will automatically increase displayedCount to show new employees
 
       // Update attendance entries for new employees only (preserve existing user changes)
       setAttendanceEntries(prevEntries => {
@@ -418,6 +451,7 @@ const HRAttendanceLog: React.FC = () => {
 
       logger.info( `🎉 Progressive loading complete: ${allEmployees.length} total records loaded`);
       setProgressiveLoadingComplete(true); // Mark progressive loading as complete
+      setHasMore(false); // All data loaded
 
     } catch (error) {
       logger.error('❌ Background loading failed:', error);
@@ -724,6 +758,11 @@ const HRAttendanceLog: React.FC = () => {
     fetchAttendanceDates();
   };
 
+  // Reset displayed count when search or department filter changes
+  useEffect(() => {
+    setDisplayedCount(INITIAL_DISPLAY_COUNT);
+  }, [searchQuery, selectedDepartment]);
+  
   // Filter employees based on search query and month
   const filteredEmployees = eligibleEmployees.filter(emp => {
     if (!searchQuery) return true;
@@ -742,10 +781,6 @@ const HRAttendanceLog: React.FC = () => {
     return (emp.department || 'General') === selectedDepartment;
   });
 
-  // Pagination state (move above tabFilteredEmployees and paginatedEmployees)
-  const [currentPage, setCurrentPage] = useState(1);
-  const [rowsPerPage, setRowsPerPage] = useState(20);
-
   // Tabs state
   const [activeTab] = useState<'all' | 'present' | 'absent' | 'off'>('all');
 
@@ -760,7 +795,7 @@ const HRAttendanceLog: React.FC = () => {
     return true;
   });
 
-  // Sort employees by name (first_name + last_name, fallback to name), then paginate
+  // Sort employees by name (first_name + last_name, fallback to name), then slice for infinite scroll
   const sortedEmployees = [...tabFilteredEmployees].sort((a, b) => {
     const nameA = (a.first_name && a.last_name)
       ? `${a.first_name} ${a.last_name}`.toLowerCase()
@@ -770,11 +805,64 @@ const HRAttendanceLog: React.FC = () => {
       : (b.name || '').toLowerCase();
     return nameA.localeCompare(nameB);
   });
-  const paginatedEmployees = sortedEmployees.slice(
-    (currentPage - 1) * rowsPerPage,
-    currentPage * rowsPerPage
-  );
-  const totalPages = Math.ceil(tabFilteredEmployees.length / rowsPerPage);
+  
+  // Infinite scroll: Display only the first 'displayedCount' employees
+  const displayedEmployees = sortedEmployees.slice(0, displayedCount);
+  
+  // Auto-load more employees automatically (background loading)
+  useEffect(() => {
+    // If we have more loaded data to display, automatically increase displayed count
+    if (!loadingMore && displayedCount < sortedEmployees.length && initialLoadComplete) {
+      const timer = setTimeout(() => {
+        const newDisplayedCount = Math.min(displayedCount + LOAD_MORE_COUNT, sortedEmployees.length);
+        setDisplayedCount(newDisplayedCount);
+      }, 200); // 0.2 second delay
+      return () => clearTimeout(timer);
+    }
+  }, [displayedCount, sortedEmployees.length, loadingMore, initialLoadComplete]);
+  
+  // Auto-load more from backend when we've displayed all loaded employees
+  useEffect(() => {
+    if (!loadingMore && displayedCount >= eligibleEmployees.length && hasMore && !progressiveLoadingComplete && initialLoadComplete) {
+      // Automatically load remaining employees from backend after a short delay
+      const timer = setTimeout(async () => {
+        const cacheKey = `eligible-employees-${selectedDate}`;
+        if (!ongoingRequests.has(cacheKey)) {
+          try {
+            setLoadingMore(true);
+            await loadRemainingEmployees(selectedDate, dayName, eligibleEmployees);
+          } catch (error) {
+            logger.error('Error auto-loading more employees:', error);
+          } finally {
+            setLoadingMore(false);
+          }
+        }
+      }, 200); // 0.2 second delay
+      return () => clearTimeout(timer);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [displayedCount, eligibleEmployees.length, hasMore, loadingMore, progressiveLoadingComplete, initialLoadComplete, selectedDate, dayName]);
+  
+  // Infinite scroll: Detect when user scrolls near bottom (optional fallback)
+  useEffect(() => {
+    const handleScroll = () => {
+      // Check if user scrolled near bottom (within 200px)
+      const scrollPosition = window.innerHeight + window.scrollY;
+      const documentHeight = document.documentElement.scrollHeight;
+      
+      if (documentHeight - scrollPosition < 200 && !loadingMore && initialLoadComplete) {
+        // If we have more loaded data to display, show it immediately on scroll
+        if (displayedCount < sortedEmployees.length) {
+          const newDisplayedCount = Math.min(displayedCount + LOAD_MORE_COUNT, sortedEmployees.length);
+          setDisplayedCount(newDisplayedCount);
+        }
+      }
+    };
+    
+    window.addEventListener('scroll', handleScroll);
+    return () => window.removeEventListener('scroll', handleScroll);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [loadingMore, displayedCount, sortedEmployees.length, initialLoadComplete]);
 
   const markAllPresent = () => {
     // Only allow if progressive loading is complete
@@ -1078,14 +1166,14 @@ const HRAttendanceLog: React.FC = () => {
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-100">
-                {paginatedEmployees.length === 0 ? (
+                {displayedEmployees.length === 0 ? (
                   <tr>
                     <td colSpan={8} className="px-4 py-6 text-center text-gray-500">
                       {searchQuery ? 'No employees found matching your search.' : 'No attendance data available for this date.'}
                     </td>
                   </tr>
                 ) : (
-                  paginatedEmployees.map((employee) => {
+                  displayedEmployees.map((employee) => {
                     const entry = attendanceEntries.get(employee.employee_id);
                     if (!entry) return null;
 
@@ -1233,44 +1321,26 @@ const HRAttendanceLog: React.FC = () => {
               </tbody>
             </table>
           </div>
-        </div>
-      )}
-
-      {/* Pagination controls */}
-      {totalPages > 1 && (
-        <div className="flex justify-between items-center px-4 py-3 border-t bg-gray-50">
-          <div className="flex items-center gap-2">
-            <span className="text-sm text-gray-600">Rows per page:</span>
-            <select
-              value={rowsPerPage}
-              onChange={e => {
-                setRowsPerPage(Number(e.target.value));
-                setCurrentPage(1);
-              }}
-              className="border rounded px-2 py-1 text-sm"
-            >
-              {[10, 20, 50, 100].map(n => (
-                <option key={n} value={n}>{n}</option>
-              ))}
-            </select>
-          </div>
-          <div className="flex items-center gap-2">
-            <button
-              onClick={() => setCurrentPage(p => Math.max(1, p - 1))}
-              disabled={currentPage === 1}
-              className="px-2 py-1 rounded border text-sm disabled:opacity-50"
-            >
-              Prev
-            </button>
-            <span className="text-sm">Page {currentPage} of {totalPages}</span>
-            <button
-              onClick={() => setCurrentPage(p => Math.min(totalPages, p + 1))}
-              disabled={currentPage === totalPages}
-              className="px-2 py-1 rounded border text-sm disabled:opacity-50"
-            >
-              Next
-            </button>
-          </div>
+          
+          {/* Infinite scroll loading indicator (like attendance tracker) */}
+          {loadingMore && (
+            <div className="mt-4 flex items-center justify-center gap-3 text-sm text-gray-600 bg-blue-50 border border-blue-200 rounded-lg p-3">
+              <div className="w-4 h-4 border-2 border-blue-300 border-t-blue-600 rounded-full animate-spin"></div>
+              <span>Loading more employees... ({displayedEmployees.length} of {tabFilteredEmployees.length})</span>
+            </div>
+          )}
+          
+          {/* Show completion message when all loaded */}
+          {!hasMore && !loading && !loadingMore && displayedEmployees.length > 0 && tabFilteredEmployees.length > INITIAL_DISPLAY_COUNT && displayedCount >= tabFilteredEmployees.length && (
+            <div className="mt-4 text-center">
+              <div className="inline-flex items-center gap-2 px-4 py-2 bg-teal-50 text-teal-700 rounded-lg text-sm">
+                <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 20 20">
+                  <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clipRule="evenodd" />
+                </svg>
+                <span className="font-medium">✓ All {tabFilteredEmployees.length} employees loaded</span>
+              </div>
+            </div>
+          )}
         </div>
       )}
     </div>
