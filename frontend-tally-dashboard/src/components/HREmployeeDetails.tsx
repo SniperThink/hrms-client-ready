@@ -984,7 +984,7 @@ const HREmployeeDetails: React.FC = () => {
                   readOnly={true}
                 />
               </div>
-              <div>
+              {/* <div>
                 <label className="block mb-1 text-gray-700 text-sm font-medium px-1">
                   User Name
                 </label>
@@ -1000,7 +1000,7 @@ const HREmployeeDetails: React.FC = () => {
                   readOnly={!isEditing}
                   onChange={e => isEditing && setEditData(prev => ({ ...prev, name: e.target.value }))}
                 />
-              </div>
+              </div> */}
               <div>
                 <label className="block mb-1 text-gray-700 text-sm font-medium px-1">
                   Employment Type
@@ -1013,7 +1013,7 @@ const HREmployeeDetails: React.FC = () => {
                   disabled={!isEditing}
                 />
               </div>
-              <div>
+              {/* <div>
                 <label className="block mb-1 text-gray-700 text-sm font-medium px-1">
                   Email Address
                 </label>
@@ -1029,7 +1029,7 @@ const HREmployeeDetails: React.FC = () => {
                   readOnly={!isEditing}
                   onChange={e => isEditing && setEditData(prev => ({ ...prev, email: e.target.value }))}
                 />
-              </div>
+              </div> */}
               <div>
                 <label className="block mb-1 text-gray-700 text-sm font-medium px-1">
                   Department
