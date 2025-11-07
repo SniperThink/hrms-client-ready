@@ -1607,10 +1607,12 @@ class AdvancePaymentViewSet(viewsets.ModelViewSet):
             partial = kwargs.pop('partial', False)
             instance = self.get_object()
             
-            # Don't allow updating employee_id
+            # Don't allow updating employee_id (keep it consistent for tracking)
             data = request.data.copy()
-            # Protect original advance amount
-            data.pop('amount', None)
+            if 'employee_id' in data and data['employee_id'] != instance.employee_id:
+                return Response({
+                    "error": "Cannot change employee ID for an existing advance payment"
+                }, status=400)
             
             serializer = self.get_serializer(instance, data=data, partial=partial)
             serializer.is_valid(raise_exception=True)
