@@ -1575,6 +1575,10 @@ class AdvancePaymentViewSet(viewsets.ModelViewSet):
             cache_key = f"payroll_overview_{tenant.id}"
             cache.delete(cache_key)
             
+            # Clear advance payments list cache
+            advance_payments_cache_key = f"advance_payments_list_{tenant.id}"
+            cache.delete(advance_payments_cache_key)
+            
             # Clear frontend charts cache to refresh dashboard immediately
             try:
                 # Try to clear all frontend charts cache variations
@@ -1583,7 +1587,7 @@ class AdvancePaymentViewSet(viewsets.ModelViewSet):
                 # Fallback: Clear specific common cache keys
                 cache.delete(f"frontend_charts_{tenant.id}")
             
-            logger.info(f"Cleared payroll overview and frontend charts cache for tenant {tenant.id}")
+            logger.info(f"Cleared payroll overview, advance payments list, and frontend charts cache for tenant {tenant.id}")
             
             return Response({
                 'success': True,
@@ -1614,9 +1618,15 @@ class AdvancePaymentViewSet(viewsets.ModelViewSet):
             
             # CLEAR CACHE: Invalidate payroll overview cache when payroll data changes
             from django.core.cache import cache
-            cache_key = f"payroll_overview_{getattr(self.request, 'tenant', None).id}"
+            tenant_id = getattr(self.request, 'tenant', None).id
+            cache_key = f"payroll_overview_{tenant_id}"
             cache.delete(cache_key)
-            logger.info(f"Cleared payroll overview cache for tenant {getattr(self.request, 'tenant', None).id}")
+            
+            # Clear advance payments list cache
+            advance_payments_cache_key = f"advance_payments_list_{tenant_id}"
+            cache.delete(advance_payments_cache_key)
+            
+            logger.info(f"Cleared payroll overview and advance payments list cache for tenant {tenant_id}")
             
             return Response({
                 'success': True,
@@ -1642,6 +1652,18 @@ class AdvancePaymentViewSet(viewsets.ModelViewSet):
                 }, status=400)
             
             instance.delete()
+            
+            # CLEAR CACHE: Invalidate payroll overview and advance payments cache after deletion
+            from django.core.cache import cache
+            tenant_id = getattr(self.request, 'tenant', None).id
+            cache_key = f"payroll_overview_{tenant_id}"
+            cache.delete(cache_key)
+            
+            # Clear advance payments list cache
+            advance_payments_cache_key = f"advance_payments_list_{tenant_id}"
+            cache.delete(advance_payments_cache_key)
+            
+            logger.info(f"Cleared payroll overview and advance payments list cache for tenant {tenant_id}")
             
             return Response({
                 'success': True,
