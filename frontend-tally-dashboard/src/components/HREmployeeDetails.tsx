@@ -950,9 +950,7 @@ const HREmployeeDetails: React.FC = () => {
                   disabled={!isEditing}
                 />
               </div>
-            </div>
-          )}
-          <div className="col-span-2">
+              <div className="col-span-2">
                 <label className="block mb-1 text-sm font-medium px-1 text-gray-700">
                   Address
                 </label>
@@ -969,6 +967,9 @@ const HREmployeeDetails: React.FC = () => {
                   onChange={e => isEditing && setEditData(prev => ({ ...prev, address: e.target.value }))}
                 ></textarea>
               </div>
+            </div>
+
+          )}
 
           {activeTab === 'professional' && (
             <div className="grid grid-cols-2 gap-6">
