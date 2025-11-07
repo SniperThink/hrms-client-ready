@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { Search, Plus, DollarSign, User, AlertCircle, CheckCircle, Edit, Trash2, Loader2 } from 'lucide-react';
 import { apiCall } from '../../services/api';
 import Dropdown, { DropdownOption } from '../Dropdown';
+import MonthYearPicker from '../MonthYearPicker';
 import { logger } from '../../utils/logger';
 
 interface Employee {
@@ -59,6 +60,7 @@ const AdvanceManager: React.FC<AdvanceManagerProps> = ({ showModal, onClose }) =
   const [advanceForm, setAdvanceForm] = useState({
     employee_id: '',
     amount: '',
+    for_month: new Date().toISOString().slice(0, 7), // YYYY-MM format
     payment_method: 'CASH',
     remarks: ''
   });
@@ -203,11 +205,14 @@ const AdvanceManager: React.FC<AdvanceManagerProps> = ({ showModal, onClose }) =
 
   const handleAddAdvance = async () => {
     try {
-      const currentMonth = new Date().toISOString().slice(0, 7); // YYYY-MM format
+      // Format month from YYYY-MM to 'Mon YYYY' (e.g., '2025-03' to 'Mar 2025')
+      const [year, month] = advanceForm.for_month.split('-');
+      const monthNames = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+      const formattedMonth = `${monthNames[parseInt(month) - 1]} ${year}`;
 
       const requestData = {
         ...advanceForm,
-        for_month: currentMonth,
+        for_month: formattedMonth,
         amount: parseFloat(advanceForm.amount)
       };
 
@@ -223,6 +228,7 @@ const AdvanceManager: React.FC<AdvanceManagerProps> = ({ showModal, onClose }) =
       setAdvanceForm({
         employee_id: '',
         amount: '',
+        for_month: new Date().toISOString().slice(0, 7),
         payment_method: 'CASH',
         remarks: ''
       });
@@ -241,8 +247,14 @@ const AdvanceManager: React.FC<AdvanceManagerProps> = ({ showModal, onClose }) =
     if (!editingAdvance) return;
 
     try {
+      // Format month from YYYY-MM to 'Mon YYYY' (e.g., '2025-03' to 'Mar 2025')
+      const [year, month] = advanceForm.for_month.split('-');
+      const monthNames = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+      const formattedMonth = `${monthNames[parseInt(month) - 1]} ${year}`;
+
       const requestData = {
         ...advanceForm,
+        for_month: formattedMonth,
         amount: parseFloat(advanceForm.amount)
       };
 
@@ -258,6 +270,7 @@ const AdvanceManager: React.FC<AdvanceManagerProps> = ({ showModal, onClose }) =
       setAdvanceForm({
         employee_id: '',
         amount: '',
+        for_month: new Date().toISOString().slice(0, 7),
         payment_method: 'CASH',
         remarks: ''
       });
@@ -290,9 +303,26 @@ const AdvanceManager: React.FC<AdvanceManagerProps> = ({ showModal, onClose }) =
 
   const startEdit = (advance: AdvanceRecord) => {
     setEditingAdvance(advance);
+    
+    // Convert for_month from 'Mar 2025' to 'YYYY-MM' format
+    const monthNames = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+    let formattedForMonth = new Date().toISOString().slice(0, 7); // default to current month
+    
+    if (advance.for_month) {
+      const parts = advance.for_month.split(' ');
+      if (parts.length === 2) {
+        const monthIndex = monthNames.indexOf(parts[0]);
+        if (monthIndex !== -1) {
+          const monthNumber = (monthIndex + 1).toString().padStart(2, '0');
+          formattedForMonth = `${parts[1]}-${monthNumber}`;
+        }
+      }
+    }
+    
     setAdvanceForm({
       employee_id: advance.employee_id,
       amount: advance.amount.toString(),
+      for_month: formattedForMonth,
       payment_method: advance.payment_method,
       remarks: advance.remarks
     });
@@ -312,6 +342,7 @@ const AdvanceManager: React.FC<AdvanceManagerProps> = ({ showModal, onClose }) =
     setAdvanceForm({
       employee_id: '',
       amount: '',
+      for_month: new Date().toISOString().slice(0, 7),
       payment_method: 'CASH',
       remarks: ''
     });
@@ -488,6 +519,7 @@ const AdvanceManager: React.FC<AdvanceManagerProps> = ({ showModal, onClose }) =
     setAdvanceForm({
       employee_id: '',
       amount: '',
+      for_month: new Date().toISOString().slice(0, 7),
       payment_method: 'CASH',
       remarks: ''
     });
@@ -553,7 +585,7 @@ const AdvanceManager: React.FC<AdvanceManagerProps> = ({ showModal, onClose }) =
           <div className="flex items-center justify-between">
             <div>
               <h2 className="text-xl font-semibold text-gray-900">Advance Payments Manager</h2>
-              <p className="text-sm text-gray-600">Manage employee advance payments for current month only</p>
+              <p className="text-sm text-gray-600">Manage employee advance payments with flexible month selection</p>
             </div>
             <button
               onClick={onClose}
@@ -791,6 +823,12 @@ const AdvanceManager: React.FC<AdvanceManagerProps> = ({ showModal, onClose }) =
                   />
                 </div>
 
+                <MonthYearPicker
+                  value={advanceForm.for_month}
+                  onChange={(value) => setAdvanceForm(prev => ({ ...prev, for_month: value }))}
+                  label="For Month"
+                />
+
                 <div>
                   <Dropdown
                     options={paymentMethodOptions}
@@ -847,6 +885,9 @@ const AdvanceManager: React.FC<AdvanceManagerProps> = ({ showModal, onClose }) =
                       Amount
                     </th>
                     <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                      For Month
+                    </th>
+                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
                       Remaining Balance
                     </th>
                     <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
@@ -866,7 +907,7 @@ const AdvanceManager: React.FC<AdvanceManagerProps> = ({ showModal, onClose }) =
                 <tbody className="bg-white divide-y divide-gray-200">
                   {advancesLoading ? (
                     <tr>
-                      <td colSpan={7} className="px-6 py-8 text-center">
+                      <td colSpan={8} className="px-6 py-8 text-center">
                         <div className="flex items-center justify-center gap-2 text-gray-500">
                           <Loader2 size={20} className="animate-spin" />
                           Loading advance records...
@@ -875,7 +916,7 @@ const AdvanceManager: React.FC<AdvanceManagerProps> = ({ showModal, onClose }) =
                     </tr>
                   ) : filteredAdvances.length === 0 ? (
                     <tr>
-                      <td colSpan={7} className="px-6 py-8 text-center text-gray-500">
+                      <td colSpan={8} className="px-6 py-8 text-center text-gray-500">
                         No advance records found
                       </td>
                     </tr>
@@ -890,6 +931,9 @@ const AdvanceManager: React.FC<AdvanceManagerProps> = ({ showModal, onClose }) =
                         </td>
                         <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
                           ₹{advance.amount.toLocaleString()}
+                        </td>
+                        <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900 font-medium">
+                          {advance.for_month}
                         </td>
                         <td className="px-6 py-4 whitespace-nowrap">
                           <span className={`text-sm font-medium ${advance.remaining_balance > 0 ? 'text-orange-600' : 'text-teal-600'

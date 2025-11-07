@@ -10,7 +10,7 @@ import {
 import NoDataMessage from './NoDataMessage';
 import { logger } from '../utils/logger';
 
-const COLORS = ['#1A6262', '#FF6700', '#334155', '#E1A940', '#FF5252', '#91C499'];
+const COLORS = ['#1A6262', '#FF6700', '#334155', '#E1A940', '#8B5CF6', '#60A5FA'];
 
 interface HROverviewChartsProps {
   timePeriod: TimePeriod | 'custom_range';
