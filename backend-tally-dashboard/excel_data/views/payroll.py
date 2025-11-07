@@ -1604,7 +1604,8 @@ class AdvancePaymentViewSet(viewsets.ModelViewSet):
         Update an advance payment
         """
         try:
-            partial = kwargs.pop('partial', False)
+            # Always use partial update to allow updating specific fields only
+            partial = True
             instance = self.get_object()
             
             # Don't allow updating employee_id (keep it consistent for tracking)
@@ -1613,6 +1614,12 @@ class AdvancePaymentViewSet(viewsets.ModelViewSet):
                 return Response({
                     "error": "Cannot change employee ID for an existing advance payment"
                 }, status=400)
+            
+            # Don't allow updating employee_name (it's auto-set from employee profile)
+            data.pop('employee_name', None)
+            
+            # Don't allow updating advance_date (it's set when created)
+            data.pop('advance_date', None)
             
             serializer = self.get_serializer(instance, data=data, partial=partial)
             serializer.is_valid(raise_exception=True)
