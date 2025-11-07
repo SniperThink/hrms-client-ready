@@ -901,23 +901,7 @@ const HREmployeeDetails: React.FC = () => {
                   />
                 )}
               </div>
-              <div className="col-span-2">
-                <label className="block mb-1 text-sm font-medium px-1 text-gray-700">
-                  Address
-                </label>
-                <textarea
-                  className={`w-full px-4 py-3 border rounded-lg transition-colors ${
-                    isEditing 
-                      ? 'border-teal-300 bg-white focus:border-teal-500 focus:ring-2 focus:ring-teal-200' 
-                      : 'border-gray-200 bg-gray-50 text-gray-600 cursor-not-allowed'
-                  }`}
-                  placeholder="Address"
-                  rows={3}
-                  value={isEditing ? editData?.address || '' : employeeData.address || ''}
-                  readOnly={!isEditing}
-                  onChange={e => isEditing && setEditData(prev => ({ ...prev, address: e.target.value }))}
-                ></textarea>
-              </div>
+              
               <div>
                 <label className="block mb-1 text-gray-700 text-sm font-medium px-1">
                   State
@@ -968,6 +952,23 @@ const HREmployeeDetails: React.FC = () => {
               </div>
             </div>
           )}
+          <div className="col-span-2">
+                <label className="block mb-1 text-sm font-medium px-1 text-gray-700">
+                  Address
+                </label>
+                <textarea
+                  className={`w-full px-4 py-3 border rounded-lg transition-colors ${
+                    isEditing 
+                      ? 'border-teal-300 bg-white focus:border-teal-500 focus:ring-2 focus:ring-teal-200' 
+                      : 'border-gray-200 bg-gray-50 text-gray-600 cursor-not-allowed'
+                  }`}
+                  placeholder="Address"
+                  rows={3}
+                  value={isEditing ? editData?.address || '' : employeeData.address || ''}
+                  readOnly={!isEditing}
+                  onChange={e => isEditing && setEditData(prev => ({ ...prev, address: e.target.value }))}
+                ></textarea>
+              </div>
 
           {activeTab === 'professional' && (
             <div className="grid grid-cols-2 gap-6">
