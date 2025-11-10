@@ -4618,6 +4618,123 @@ class DailyAttendanceViewSet(viewsets.ModelViewSet):
             queryset = queryset.filter(employee_id=employee_id_param)
 
         return queryset.order_by('-date', 'employee_name')
+    
+    def perform_create(self, serializer):
+        """Check for holidays before creating attendance record"""
+        from ..models import Holiday
+        from ..utils.utils import get_current_tenant
+        
+        # Get the date from the serializer
+        date = serializer.validated_data.get('date')
+        if not date:
+            # If date is not provided, use today's date
+            from django.utils import timezone
+            date = timezone.now().date()
+        else:
+            # Ensure date is a date object
+            if hasattr(date, 'date'):
+                date = date.date()
+        
+        # Get tenant
+        tenant = get_current_tenant()
+        if not tenant:
+            tenant = getattr(self.request, 'tenant', None)
+        
+        if tenant and date:
+            # Check if date is a holiday
+            holiday = Holiday.objects.filter(
+                tenant=tenant,
+                date=date,
+                is_active=True
+            ).first()
+            
+            if holiday:
+                # Check if holiday applies to this employee's department
+                employee_id = serializer.validated_data.get('employee_id')
+                department = serializer.validated_data.get('department', '')
+                
+                # Check if holiday applies to this department
+                applies = holiday.applies_to_all
+                if not applies and holiday.specific_departments:
+                    departments = [d.strip() for d in holiday.specific_departments.split(',')]
+                    applies = department in departments
+                
+                if applies:
+                    # Holiday applies - block attendance creation
+                    from rest_framework.exceptions import ValidationError
+                    error_message = f"Cannot mark attendance on holiday: {holiday.name}"
+                    if holiday.description:
+                        error_message += f" - {holiday.description}"
+                    raise ValidationError({
+                        'date': error_message,
+                        'holiday': {
+                            'name': holiday.name,
+                            'description': holiday.description,
+                            'type': holiday.holiday_type
+                        }
+                    })
+        
+        # No holiday or holiday doesn't apply - proceed with creation
+        serializer.save()
+    
+    def perform_update(self, serializer):
+        """Check for holidays before updating attendance record"""
+        from ..models import Holiday
+        from ..utils.utils import get_current_tenant
+        
+        # Get the date from the serializer (updated date or existing instance date)
+        date = serializer.validated_data.get('date')
+        if not date:
+            # If date is not being updated, use the existing instance date
+            date = serializer.instance.date if serializer.instance else None
+        
+        if date:
+            # Ensure date is a date object
+            if hasattr(date, 'date'):
+                date = date.date()
+        
+        # Get tenant
+        tenant = get_current_tenant()
+        if not tenant:
+            tenant = getattr(self.request, 'tenant', None)
+        
+        if tenant and date:
+            # Check if date is a holiday
+            holiday = Holiday.objects.filter(
+                tenant=tenant,
+                date=date,
+                is_active=True
+            ).first()
+            
+            if holiday:
+                # Check if holiday applies to this employee's department
+                department = serializer.validated_data.get('department')
+                if not department and serializer.instance:
+                    department = serializer.instance.department
+                
+                # Check if holiday applies to this department
+                applies = holiday.applies_to_all
+                if not applies and holiday.specific_departments:
+                    departments = [d.strip() for d in holiday.specific_departments.split(',')]
+                    applies = department in departments if department else False
+                
+                if applies:
+                    # Holiday applies - block attendance update
+                    from rest_framework.exceptions import ValidationError
+                    error_message = f"Cannot mark attendance on holiday: {holiday.name}"
+                    if holiday.description:
+                        error_message += f" - {holiday.description}"
+                    raise ValidationError({
+                        'date': error_message,
+                        'holiday': {
+                            'name': holiday.name,
+                            'description': holiday.description,
+                            'type': holiday.holiday_type
+                        }
+                    })
+        
+        # No holiday or holiday doesn't apply - proceed with update
+        serializer.save()
 
     @action(detail=False, methods=['get'])
     def all_records(self, request):

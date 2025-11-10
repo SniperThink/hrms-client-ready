@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Save, Search, UserCheck, UserX, Loader2 } from 'lucide-react';
+import { Save, Search, UserCheck, UserX, Loader2, AlertCircle, Calendar } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { apiCall } from '../services/api';
 import DatePicker from './DatePicker';
@@ -92,6 +92,8 @@ const HRAttendanceLog: React.FC = () => {
   const [progressiveLoadingComplete, setProgressiveLoadingComplete] = useState<boolean>(false); // Track if all loading is complete
   const [initialLoadComplete, setInitialLoadComplete] = useState<boolean>(false); // Track if initial load is complete
   const [hasExcelAttendance, setHasExcelAttendance] = useState<boolean>(false); // Track if Excel attendance exists for this month
+  const [isHoliday, setIsHoliday] = useState<boolean>(false); // Track if selected date is a holiday
+  const [holidayInfo, setHolidayInfo] = useState<{name: string; description?: string; type: string} | null>(null); // Holiday information
   
   // Infinite scrolling state (like attendance tracker)
   const [displayedCount, setDisplayedCount] = useState<number>(30); // Number of employees to display
@@ -104,6 +106,9 @@ const HRAttendanceLog: React.FC = () => {
   const [cache, setCache] = useState<Map<string, { data: Employee[]; dayName: string; hasExcelAttendance: boolean; timestamp: number }>>(new Map());
   const [ongoingRequests, setOngoingRequests] = useState<Set<string>>(new Set());
   
+  // Holiday cache with 1-hour expiration
+  const [holidayCache, setHolidayCache] = useState<Map<string, { isHoliday: boolean; holidayInfo: {name: string; description?: string; type: string} | null; timestamp: number }>>(new Map());
+  
   // Cache invalidation function
   const invalidateCache = () => {
     logger.info( '🗑️ Invalidating cache due to data changes');
@@ -111,11 +116,24 @@ const HRAttendanceLog: React.FC = () => {
     setOngoingRequests(new Set());
   };
   
-  // Check if cache is stale (older than 5 minutes)
+  // Holiday cache invalidation function
+  const invalidateHolidayCache = () => {
+    logger.info( '🗑️ Invalidating holiday cache due to holiday changes');
+    setHolidayCache(new Map());
+  };
+  
+  // Check if cache is stale (older than 5 minutes for employee data)
   const isCacheStale = (timestamp: number) => {
     const now = Date.now();
     const fiveMinutes = 5 * 60 * 1000; // 5 minutes in milliseconds
     return (now - timestamp) > fiveMinutes;
+  };
+  
+  // Check if holiday cache is stale (older than 1 hour)
+  const isHolidayCacheStale = (timestamp: number) => {
+    const now = Date.now();
+    const oneHour = 60 * 60 * 1000; // 1 hour in milliseconds
+    return (now - timestamp) > oneHour;
   };
 
   // Function to fetch dates with attendance logged
@@ -190,15 +208,22 @@ const HRAttendanceLog: React.FC = () => {
       invalidateCache();
     };
 
+    const handleHolidayChange = () => {
+      logger.info( '🔄 Holiday change detected, invalidating holiday cache');
+      invalidateHolidayCache();
+    };
+
     // Listen for custom events that indicate data changes
     window.addEventListener('dataUploaded', handleDataChange);
     window.addEventListener('employeeAdded', handleDataChange);
     window.addEventListener('attendanceUpdated', handleDataChange);
+    window.addEventListener('holidayUpdated', handleHolidayChange);
 
     return () => {
       window.removeEventListener('dataUploaded', handleDataChange);
       window.removeEventListener('employeeAdded', handleDataChange);
       window.removeEventListener('attendanceUpdated', handleDataChange);
+      window.removeEventListener('holidayUpdated', handleHolidayChange);
     };
   }, []);
 
@@ -207,6 +232,44 @@ const HRAttendanceLog: React.FC = () => {
     logger.info( '📊 Attendance dates state updated:', attendanceDates);
   }, [attendanceDates]);
 
+  // Check if selected date is a holiday (with caching)
+  const checkIfHoliday = async (date: string) => {
+    // Check cache first
+    const cached = holidayCache.get(date);
+    if (cached && !isHolidayCacheStale(cached.timestamp)) {
+      logger.info(`📋 Using cached holiday data for ${date}`);
+      setIsHoliday(cached.isHoliday);
+      setHolidayInfo(cached.holidayInfo);
+      return;
+    }
+
+    try {
+      logger.info(`🔍 Fetching holiday data for ${date}`);
+      const response = await apiCall(`/api/holidays/check_date/?date=${date}`);
+      if (response.ok) {
+        const data = await response.json();
+        const holidayData = {
+          isHoliday: data.is_holiday,
+          holidayInfo: data.is_holiday ? data.holiday : null,
+          timestamp: Date.now()
+        };
+        
+        // Cache the result
+        setHolidayCache(prev => new Map(prev).set(date, holidayData));
+        
+        setIsHoliday(data.is_holiday);
+        setHolidayInfo(data.holiday || null);
+      } else {
+        setIsHoliday(false);
+        setHolidayInfo(null);
+      }
+    } catch (err) {
+      console.error('Failed to check holiday:', err);
+      setIsHoliday(false);
+      setHolidayInfo(null);
+    }
+  };
+
   // Handle date change with loading state
   const handleDateChange = async (newDate: string) => {
     setDateLoading(true);
@@ -214,6 +277,10 @@ const HRAttendanceLog: React.FC = () => {
     setHasExcelAttendance(false); // Reset Excel attendance flag when date changes
     setDisplayedCount(INITIAL_DISPLAY_COUNT); // Reset displayed count on date change
     setHasMore(false); // Reset hasMore on date change
+    setIsHoliday(false); // Reset holiday flag
+    setHolidayInfo(null); // Reset holiday info
+    // Check if date is a holiday
+    await checkIfHoliday(newDate);
   };
 
   useEffect(() => {
@@ -221,6 +288,8 @@ const HRAttendanceLog: React.FC = () => {
     const abortController = new AbortController();
 
     const loadData = async () => {
+      // Check if date is a holiday
+      await checkIfHoliday(selectedDate);
       await fetchEligibleEmployees(abortController.signal);
       setDateLoading(false);
     };
@@ -662,6 +731,13 @@ const HRAttendanceLog: React.FC = () => {
       return;
     }
 
+    // Early return guard: Prevent saving if date is a holiday
+    if (isHoliday && holidayInfo) {
+      const message = `Cannot mark attendance on holiday: ${holidayInfo.name}${holidayInfo.description ? ` - ${holidayInfo.description}` : ''}`;
+      alert(message);
+      return;
+    }
+
     try {
       setSaving(true);
 
@@ -744,12 +820,26 @@ const HRAttendanceLog: React.FC = () => {
       } else {
         // Primary attendance upload failed
         const errorResult = await attendanceResponse.json();
-        throw new Error(errorResult.error || `Failed to save attendance: ${attendanceResponse.status}`);
+        // Check if error is due to holiday
+        if (errorResult.holiday) {
+          const holidayMsg = `Cannot mark attendance on holiday: ${errorResult.holiday.name}${errorResult.holiday.description ? ` - ${errorResult.holiday.description}` : ''}`;
+          setError(holidayMsg);
+          setIsHoliday(true);
+          setHolidayInfo(errorResult.holiday);
+        } else {
+          throw new Error(errorResult.error || `Failed to save attendance: ${attendanceResponse.status}`);
+        }
       }
 
-    } catch (err) {
+    } catch (err: any) {
       logger.error('Error saving attendance:', err);
-      setError('Failed to save attendance');
+      // Check if error is due to holiday
+      if (err.message && err.message.includes('holiday')) {
+        setError(err.message);
+        setIsHoliday(true);
+      } else {
+        setError(err.message || 'Failed to save attendance');
+      }
     } finally {
       setSaving(false);
     }
@@ -931,6 +1021,50 @@ const HRAttendanceLog: React.FC = () => {
 
   return (
     <div className="space-y-6">
+      {/* Holiday Warning Banner - Same style as Excel Upload notification */}
+      {isHoliday && holidayInfo && (
+        <div className="bg-yellow-50 border-2 border-yellow-400 p-6 rounded-lg mb-6">
+          <div className="flex items-center justify-center">
+            <div className="flex-shrink-0">
+              <svg className="h-6 w-6 text-yellow-600" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+              </svg>
+            </div>
+            <div className="ml-4">
+              <p className="text-lg font-semibold text-yellow-800">
+                {holidayInfo.name} - Attendance Disabled
+              </p>
+              <p className="text-sm text-yellow-700 mt-1">
+                {holidayInfo.description 
+                  ? holidayInfo.description 
+                  : `The attendance log is disabled for this ${(holidayInfo.type ?? 'OTHER').replace('_', ' ').toLowerCase()} holiday.`}
+              </p>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Excel Attendance Upload Notification - Disable entire interface */}
+      {!loading && hasExcelAttendance && (
+        <div className="bg-yellow-50 border-2 border-yellow-400 p-6 rounded-lg mb-6">
+          <div className="flex items-center justify-center">
+            <div className="flex-shrink-0">
+              <svg className="h-6 w-6 text-yellow-600" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+              </svg>
+            </div>
+            <div className="ml-4">
+              <p className="text-lg font-semibold text-yellow-800">
+                Attendance has already been uploaded for {new Date(selectedDate).toLocaleDateString('en-US', { month: 'long', year: 'numeric' })}
+              </p>
+              <p className="text-sm text-yellow-700 mt-1">
+                The attendance log is disabled for this month as attendance data was uploaded via Excel.
+              </p>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Header */}
       <div className="flex items-center justify-between">
         {loading ? (
@@ -973,21 +1107,24 @@ const HRAttendanceLog: React.FC = () => {
           ) : (
             <button
               onClick={saveAttendance}
-              disabled={saving || hasExcelAttendance}
-              className={`flex items-center gap-2 px-6 py-2 rounded-lg text-sm disabled:opacity-50 ${
-                hasExcelAttendance
+              disabled={saving || hasExcelAttendance || isHoliday}
+              className={`flex items-center gap-2 px-6 py-2 rounded-lg text-sm disabled:opacity-50 disabled:cursor-not-allowed ${
+                hasExcelAttendance || isHoliday
                   ? 'bg-gray-400 text-white cursor-not-allowed'
                   : Array.from(attendanceEntries.values()).some(entry => entry.status === 'unmarked')
                   ? 'bg-yellow-600 hover:bg-yellow-700 text-white'
                   : 'bg-teal-800 hover:bg-teal-900 text-white'
               }`}
+              title={isHoliday ? `Cannot mark attendance on holiday: ${holidayInfo?.name || 'Holiday'}` : ''}
             >
               {saving ? (
                 <Loader2 size={16} className="animate-spin" />
               ) : (
                 <Save size={16} />
               )}
-              {hasExcelAttendance 
+              {isHoliday
+                ? '🚫 Holiday - Disabled'
+                : hasExcelAttendance 
                 ? 'Disabled (Excel Uploaded)'
                 : saving ? 'Saving...' : 
                 Array.from(attendanceEntries.values()).some(entry => entry.status === 'unmarked')
@@ -1079,24 +1216,40 @@ const HRAttendanceLog: React.FC = () => {
             <>
               <button
                 onClick={markAllPresent}
-                disabled={!progressiveLoadingComplete || hasExcelAttendance}
-                className={`flex items-center gap-2 px-3 py-2 rounded-lg text-sm ${(progressiveLoadingComplete && !hasExcelAttendance)
+                disabled={!progressiveLoadingComplete || hasExcelAttendance || isHoliday}
+                className={`flex items-center gap-2 px-3 py-2 rounded-lg text-sm ${(progressiveLoadingComplete && !hasExcelAttendance && !isHoliday)
                     ? 'bg-teal-100 hover:bg-teal-200 text-teal-800'
                     : 'bg-gray-100 text-gray-400 cursor-not-allowed'
                   }`}
-                title={!progressiveLoadingComplete ? 'Please wait for loading to complete' : hasExcelAttendance ? 'Disabled: Excel attendance uploaded' : ''}
+                title={
+                  !progressiveLoadingComplete 
+                    ? 'Please wait for loading to complete' 
+                    : hasExcelAttendance 
+                    ? 'Disabled: Excel attendance uploaded' 
+                    : isHoliday 
+                    ? 'Disabled: Cannot mark attendance on holidays' 
+                    : ''
+                }
               >
                 <UserCheck size={16} />
                 Mark All Present
               </button>
               <button
                 onClick={markAllAbsent}
-                disabled={!progressiveLoadingComplete || hasExcelAttendance}
-                className={`flex items-center gap-2 px-3 py-2 rounded-lg text-sm ${(progressiveLoadingComplete && !hasExcelAttendance)
+                disabled={!progressiveLoadingComplete || hasExcelAttendance || isHoliday}
+                className={`flex items-center gap-2 px-3 py-2 rounded-lg text-sm ${(progressiveLoadingComplete && !hasExcelAttendance && !isHoliday)
                     ? 'bg-red-100 hover:bg-red-200 text-red-800'
                     : 'bg-gray-100 text-gray-400 cursor-not-allowed'
                   }`}
-                title={!progressiveLoadingComplete ? 'Please wait for loading to complete' : hasExcelAttendance ? 'Disabled: Excel attendance uploaded' : ''}
+                title={
+                  !progressiveLoadingComplete 
+                    ? 'Please wait for loading to complete' 
+                    : hasExcelAttendance 
+                    ? 'Disabled: Excel attendance uploaded' 
+                    : isHoliday 
+                    ? 'Disabled: Cannot mark attendance on holidays' 
+                    : ''
+                }
               >
                 <UserX size={16} />
                 Mark All Absent
@@ -1105,27 +1258,6 @@ const HRAttendanceLog: React.FC = () => {
           )}
         </div>
       </div>
-
-      {/* Excel Attendance Upload Notification - Disable entire interface */}
-      {!loading && hasExcelAttendance && (
-        <div className="bg-yellow-50 border-2 border-yellow-400 p-6 rounded-lg mb-6">
-          <div className="flex items-center justify-center">
-            <div className="flex-shrink-0">
-              <svg className="h-6 w-6 text-yellow-600" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
-              </svg>
-            </div>
-            <div className="ml-4">
-              <p className="text-lg font-semibold text-yellow-800">
-                Attendance has already been uploaded for {new Date(selectedDate).toLocaleDateString('en-US', { month: 'long', year: 'numeric' })}
-              </p>
-              <p className="text-sm text-yellow-700 mt-1">
-                The attendance log is disabled for this month as attendance data was uploaded via Excel.
-              </p>
-            </div>
-          </div>
-        </div>
-      )}
 
       {/* Progressive Loading Indicator */}
       {!loading && !progressiveLoadingComplete && eligibleEmployees.length > 0 && (
@@ -1148,6 +1280,11 @@ const HRAttendanceLog: React.FC = () => {
         <div className="bg-gray-100 rounded-lg border border-gray-300 p-8 text-center">
           <p className="text-gray-600 text-lg">Attendance interface is disabled for this month</p>
           <p className="text-gray-500 text-sm mt-2">Attendance data has been uploaded via Excel for {new Date(selectedDate).toLocaleDateString('en-US', { month: 'long', year: 'numeric' })}</p>
+        </div>
+      ) : isHoliday ? (
+        <div className="bg-gray-100 rounded-lg border border-gray-300 p-8 text-center">
+          <p className="text-gray-600 text-lg">Attendance interface is disabled for this holiday</p>
+          <p className="text-gray-500 text-sm mt-2">Cannot mark attendance on {holidayInfo?.name || 'holidays'}</p>
         </div>
       ) : (
         <div className="bg-white rounded-lg border border-gray-200">
@@ -1209,12 +1346,12 @@ const HRAttendanceLog: React.FC = () => {
                               </span>
                               <button
                                 onClick={() => updateAttendanceEntry(employee.employee_id, 'status', 'present')}
-                                disabled={hasExcelAttendance}
-                                className={`px-3 py-1 rounded text-sm font-medium ${hasExcelAttendance
+                                disabled={hasExcelAttendance || isHoliday}
+                                className={`px-3 py-1 rounded text-sm font-medium ${(hasExcelAttendance || isHoliday)
                                     ? 'bg-gray-200 text-gray-400 cursor-not-allowed'
                                     : 'bg-orange-100 text-orange-800 border border-orange-200 hover:bg-orange-200'
                                   }`}
-                                title="Mark as present for extra payment"
+                                title={isHoliday ? 'Cannot mark attendance on holidays' : hasExcelAttendance ? 'Disabled: Excel attendance uploaded' : 'Mark as present for extra payment'}
                               >
                                 Mark as Present (Extra Pay)
                               </button>
@@ -1231,8 +1368,8 @@ const HRAttendanceLog: React.FC = () => {
                                     const newStatus = entry.status === 'present' ? 'unmarked' : 'present';
                                     updateAttendanceEntry(employee.employee_id, 'status', newStatus);
                                   }}
-                                  disabled={hasExcelAttendance}
-                                  className={`px-3 py-1 rounded text-sm font-medium ${hasExcelAttendance
+                                  disabled={hasExcelAttendance || isHoliday}
+                                  className={`px-3 py-1 rounded text-sm font-medium ${(hasExcelAttendance || isHoliday)
                                       ? 'bg-gray-200 text-gray-400 cursor-not-allowed'
                                       : entry.status === 'present'
                                       ? entry.has_off_day
@@ -1254,13 +1391,14 @@ const HRAttendanceLog: React.FC = () => {
                                       updateAttendanceEntry(employee.employee_id, 'status', newStatus);
                                     }
                                   }}
-                                  disabled={hasExcelAttendance}
-                                  className={`px-3 py-1 rounded text-sm font-medium ${hasExcelAttendance
+                                  disabled={hasExcelAttendance || isHoliday}
+                                  className={`px-3 py-1 rounded text-sm font-medium ${(hasExcelAttendance || isHoliday)
                                       ? 'bg-gray-200 text-gray-400 cursor-not-allowed'
                                       : (entry.status === 'absent' || (entry.status as string) === 'off')
                                       ? 'bg-red-100 text-red-800 border border-red-200'
                                       : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
                                     }`}
+                                  title={isHoliday ? 'Cannot mark attendance on holidays' : hasExcelAttendance ? 'Disabled: Excel attendance uploaded' : ''}
                                 >
                                   {entry.has_off_day ? 'Back to Off Day' : 'Absent'}
                                 </button>
@@ -1275,13 +1413,14 @@ const HRAttendanceLog: React.FC = () => {
                             <input
                               type="time"
                               value={entry.clock_in}
-                              disabled={entry.status !== 'present' || hasExcelAttendance}
+                              disabled={entry.status !== 'present' || hasExcelAttendance || isHoliday}
                               onFocus={(e) => (e.currentTarget as HTMLInputElement).showPicker && (e.currentTarget as HTMLInputElement).showPicker()}
                               onChange={(e) => updateClockIn(employee, e.target.value)}
-                              className={`time-input-styled w-28 px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none transition-colors duration-200 ${(entry.status === 'present' && !hasExcelAttendance)
+                              className={`time-input-styled w-28 px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none transition-colors duration-200 ${(entry.status === 'present' && !hasExcelAttendance && !isHoliday)
                                   ? 'focus:border-teal-500 focus:ring-1 focus:ring-teal-500 bg-white text-gray-700 hover:border-gray-300'
                                   : 'bg-gray-50 text-gray-400 cursor-not-allowed'
                                 }`}
+                              title={isHoliday ? 'Cannot mark attendance on holidays' : ''}
                             />)}
                         </td>
                         <td className="px-4 py-3">
@@ -1291,13 +1430,14 @@ const HRAttendanceLog: React.FC = () => {
                             <input
                               type="time"
                               value={entry.clock_out}
-                              disabled={entry.status !== 'present' || hasExcelAttendance}
+                              disabled={entry.status !== 'present' || hasExcelAttendance || isHoliday}
                               onFocus={(e) => (e.currentTarget as HTMLInputElement).showPicker && (e.currentTarget as HTMLInputElement).showPicker()}
                               onChange={(e) => updateClockOut(employee, e.target.value)}
-                              className={`time-input-styled w-28 px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none transition-colors duration-200 ${(entry.status === 'present' && !hasExcelAttendance)
+                              className={`time-input-styled w-28 px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none transition-colors duration-200 ${(entry.status === 'present' && !hasExcelAttendance && !isHoliday)
                                   ? 'focus:border-teal-500 focus:ring-1 focus:ring-teal-500 bg-white text-gray-700 hover:border-gray-300'
                                   : 'bg-gray-50 text-gray-400 cursor-not-allowed'
                                 }`}
+                              title={isHoliday ? 'Cannot mark attendance on holidays' : ''}
                             />)}
                         </td>
                         <td className="px-4 py-3">

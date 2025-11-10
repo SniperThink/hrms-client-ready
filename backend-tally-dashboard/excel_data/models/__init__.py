@@ -15,6 +15,11 @@ from .leave import (
     Leave,
 )
 
+# Holiday Models
+from .holiday import (
+    Holiday,
+)
+
 # Auth Models
 from .auth import (
     UserPermissions,
@@ -86,6 +91,12 @@ __all__ = [
     
     # Employee Models
     'EmployeeProfile',
+    
+    # Leave Models
+    'Leave',
+    
+    # Holiday Models
+    'Holiday',
     
     # Attendance Models
     'Attendance',

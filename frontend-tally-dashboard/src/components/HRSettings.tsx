@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { apiGet, apiPatch } from '../services/api';
 import ChangePasswordModal from './ChangePasswordModal';
 import DeleteAccountModal from './DeleteAccountModal';
+import HRHolidayManagement from './HRHolidayManagement';
 import { logger } from '../utils/logger';
 
 const API_ENDPOINTS = {
@@ -49,6 +50,7 @@ const HRSettings: React.FC = () => {
   const [success, setSuccess] = useState<string | null>(null);
   const [showChangePasswordModal, setShowChangePasswordModal] = useState(false);
   const [showDeleteAccountModal, setShowDeleteAccountModal] = useState(false);
+  const [activeTab, setActiveTab] = useState<'profile' | 'holidays'>('profile');
 
   // Fetch current user info (in case localStorage is stale)
   useEffect(() => {
@@ -212,103 +214,138 @@ const HRSettings: React.FC = () => {
 
   return (
     <div className="space-y-6">
-      <div className="flex items-center justify-between">
-        <div></div>
-      </div>
-      <div className="bg-white rounded-lg p-8 shadow-sm max-w-lg mx-auto">
-        <form className="space-y-6">
-          <div>
-            <label className="block text-gray-700 mb-1">Email</label>
-            <input type="text" value={email} readOnly className="w-full px-4 py-3 border border-gray-200 rounded-lg bg-gray-100" />
-          </div>
-          <div>
-            <label className="block text-gray-700 mb-1">Username</label>
-            <input type="text" value={username} readOnly className="w-full px-4 py-3 border border-gray-200 rounded-lg bg-gray-100" />
-          </div>
-        </form>
-        <div className="flex flex-col gap-4 mt-8">
+      {/* Tabs */}
+      <div className="border-b border-gray-200">
+        <nav className="-mb-px flex space-x-8">
           <button
-            onClick={() => setShowChangePasswordModal(true)}
-            className="bg-teal-600 text-white px-6 py-2 rounded hover:bg-teal-700 transition-colors"
+            onClick={() => setActiveTab('profile')}
+            className={`py-4 px-1 border-b-2 font-medium text-sm ${
+              activeTab === 'profile'
+                ? 'border-teal-500 text-teal-600'
+                : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
+            }`}
           >
-            Change Password
+            Profile Settings
           </button>
-          {/* Only show delete button if user is admin (same logic as sidebar) */}
-          {isAdmin && (
-            <button
-              onClick={handleDeleteAccount}
-              className="bg-red-600 text-white px-6 py-2 rounded hover:bg-red-700 transition-colors"
-            >
-              Delete Account
-            </button>
-          )}
           <button
-            onClick={handleLogout}
-            className="bg-gray-600 text-white px-6 py-2 rounded hover:bg-gray-700 transition-colors"
+            onClick={() => setActiveTab('holidays')}
+            className={`py-4 px-1 border-b-2 font-medium text-sm ${
+              activeTab === 'holidays'
+                ? 'border-teal-500 text-teal-600'
+                : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
+            }`}
           >
-            Logout
+            Holiday Management
           </button>
-        </div>
+        </nav>
       </div>
-      {/* Superuser User Management Section */}
-      {currentUser?.is_superuser && (
-        <div className="bg-white rounded-lg p-8 shadow-sm max-w-3xl mx-auto mt-8">
-          <h2 className="text-xl font-bold mb-4">User Management</h2>
-          {success && <div className="text-teal-600 mb-2">{success}</div>}
-          {loading ? (
-            <div>Loading users...</div>
-          ) : (
-            <>
-              <table className="min-w-full border">
-                <thead>
-                  <tr>
-                    <th className="px-4 py-2 border">Email</th>
-                    <th className="px-4 py-2 border">Active</th>
-                    <th className="px-4 py-2 border">Staff</th>
-                    <th className="px-4 py-2 border">Superuser</th>
-                    <th className="px-4 py-2 border">Action</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {users.map(user => (
-                    <tr key={user.id}>
-                      <td className="px-4 py-2 border">{user.email}</td>
-                      <td className="px-4 py-2 border">
-                        <input
-                          type="checkbox"
-                          checked={user.is_active}
-                          disabled={user.id === currentUser?.id}
-                          onChange={e => handleTogglePermission(user.id, 'is_active', e.target.checked)}
-                        />
-                      </td>
-                      <td className="px-4 py-2 border">
-                        <input
-                          type="checkbox"
-                          checked={user.is_staff}
-                          disabled={user.id === currentUser?.id}
-                          onChange={e => handleTogglePermission(user.id, 'is_staff', e.target.checked)}
-                        />
-                      </td>
-                      <td className="px-4 py-2 border">
-                        <input
-                          type="checkbox"
-                          checked={user.is_superuser}
-                          disabled={user.id === currentUser?.id}
-                          onChange={e => handleTogglePermission(user.id, 'is_superuser', e.target.checked)}
-                        />
-                      </td>
-                      <td className="px-4 py-2 border">
-                        {user.id === currentUser?.id && (
-                          <span className="text-xs text-gray-500 ml-2">(You)</span>
-                        )}
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-              {error && <div className="text-red-500 mt-2">{error}</div>}
-            </>
+
+      {/* Profile Tab */}
+      {activeTab === 'profile' && (
+        <>
+          <div className="bg-white rounded-lg p-8 shadow-sm max-w-lg mx-auto">
+            <form className="space-y-6">
+              <div>
+                <label className="block text-gray-700 mb-1">Email</label>
+                <input type="text" value={email} readOnly className="w-full px-4 py-3 border border-gray-200 rounded-lg bg-gray-100" />
+              </div>
+              <div>
+                <label className="block text-gray-700 mb-1">Username</label>
+                <input type="text" value={username} readOnly className="w-full px-4 py-3 border border-gray-200 rounded-lg bg-gray-100" />
+              </div>
+            </form>
+            <div className="flex flex-col gap-4 mt-8">
+              <button
+                onClick={() => setShowChangePasswordModal(true)}
+                className="bg-teal-600 text-white px-6 py-2 rounded hover:bg-teal-700 transition-colors"
+              >
+                Change Password
+              </button>
+              {/* Only show delete button if user is admin (same logic as sidebar) */}
+              {isAdmin && (
+                <button
+                  onClick={handleDeleteAccount}
+                  className="bg-red-600 text-white px-6 py-2 rounded hover:bg-red-700 transition-colors"
+                >
+                  Delete Account
+                </button>
+              )}
+              <button
+                onClick={handleLogout}
+                className="bg-gray-600 text-white px-6 py-2 rounded hover:bg-gray-700 transition-colors"
+              >
+                Logout
+              </button>
+            </div>
+          </div>
+          {/* Superuser User Management Section */}
+          {currentUser?.is_superuser && (
+            <div className="bg-white rounded-lg p-8 shadow-sm max-w-3xl mx-auto mt-8">
+              <h2 className="text-xl font-bold mb-4">User Management</h2>
+              {success && <div className="text-teal-600 mb-2">{success}</div>}
+              {loading ? (
+                <div>Loading users...</div>
+              ) : (
+                <>
+                  <table className="min-w-full border">
+                    <thead>
+                      <tr>
+                        <th className="px-4 py-2 border">Email</th>
+                        <th className="px-4 py-2 border">Active</th>
+                        <th className="px-4 py-2 border">Staff</th>
+                        <th className="px-4 py-2 border">Superuser</th>
+                        <th className="px-4 py-2 border">Action</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {users.map(user => (
+                        <tr key={user.id}>
+                          <td className="px-4 py-2 border">{user.email}</td>
+                          <td className="px-4 py-2 border">
+                            <input
+                              type="checkbox"
+                              checked={user.is_active}
+                              disabled={user.id === currentUser?.id}
+                              onChange={e => handleTogglePermission(user.id, 'is_active', e.target.checked)}
+                            />
+                          </td>
+                          <td className="px-4 py-2 border">
+                            <input
+                              type="checkbox"
+                              checked={user.is_staff}
+                              disabled={user.id === currentUser?.id}
+                              onChange={e => handleTogglePermission(user.id, 'is_staff', e.target.checked)}
+                            />
+                          </td>
+                          <td className="px-4 py-2 border">
+                            <input
+                              type="checkbox"
+                              checked={user.is_superuser}
+                              disabled={user.id === currentUser?.id}
+                              onChange={e => handleTogglePermission(user.id, 'is_superuser', e.target.checked)}
+                            />
+                          </td>
+                          <td className="px-4 py-2 border">
+                            {user.id === currentUser?.id && (
+                              <span className="text-xs text-gray-500 ml-2">(You)</span>
+                            )}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                  {error && <div className="text-red-500 mt-2">{error}</div>}
+                </>
+              )}
+            </div>
           )}
+        </>
+      )}
+
+      {/* Holiday Management Tab */}
+      {activeTab === 'holidays' && (
+        <div className="bg-white rounded-lg p-6 shadow-sm">
+          <HRHolidayManagement />
         </div>
       )}
 

@@ -395,6 +395,52 @@ def bulk_update_attendance(request):
         if attendance_date > datetime.now().date():
             return Response({"error": "Cannot mark attendance for future dates"}, status=400)
         
+        # Check if date is a holiday
+        from ..models import Holiday
+        from ..utils.utils import get_current_tenant
+        
+        # Get tenant (use get_current_tenant if available, fallback to request.tenant)
+        tenant_for_holiday = get_current_tenant()
+        if not tenant_for_holiday:
+            tenant_for_holiday = tenant
+        
+        if tenant_for_holiday:
+            # Check if date is a holiday
+            holiday = Holiday.objects.filter(
+                tenant=tenant_for_holiday,
+                date=attendance_date,
+                is_active=True
+            ).first()
+            
+            if holiday:
+                # Check if holiday applies to any of the employees' departments
+                # Get unique departments from attendance records
+                departments_in_request = set()
+                for record in attendance_records:
+                    dept = record.get('department', '')
+                    if dept:
+                        departments_in_request.add(dept)
+                
+                # Check if holiday applies
+                applies = holiday.applies_to_all
+                if not applies and holiday.specific_departments:
+                    holiday_departments = [d.strip() for d in holiday.specific_departments.split(',')]
+                    applies = any(dept in holiday_departments for dept in departments_in_request)
+                
+                if applies:
+                    # Holiday applies - block attendance marking
+                    error_message = f"Cannot mark attendance on holiday: {holiday.name}"
+                    if holiday.description:
+                        error_message += f" - {holiday.description}"
+                    return Response({
+                        "error": error_message,
+                        "holiday": {
+                            "name": holiday.name,
+                            "description": holiday.description,
+                            "type": holiday.holiday_type
+                        }
+                    }, status=status.HTTP_400_BAD_REQUEST)
+        
         # Get day of week for off-day checks
         day_of_week = attendance_date.weekday()  # Monday = 0, Sunday = 6
         

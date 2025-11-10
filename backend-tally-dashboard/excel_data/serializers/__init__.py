@@ -25,6 +25,10 @@ from .attendance_serializers import (
     LeaveSerializer
 )
 
+from .holiday_serializers import (
+    HolidaySerializer, HolidayCreateSerializer
+)
+
 from .payment_serializers import (
     AdvanceLedgerSerializer, PaymentSerializer
 )
@@ -106,6 +110,10 @@ __all__ = [
     'AttendanceSerializer',
     'DailyAttendanceSerializer',
     'LeaveSerializer',
+    
+    # Holiday serializers
+    'HolidaySerializer',
+    'HolidayCreateSerializer',
     
     # Payment serializers
     'AdvanceLedgerSerializer',

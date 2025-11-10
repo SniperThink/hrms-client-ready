@@ -209,6 +209,13 @@ export const API_ENDPOINTS = {
   leaves: "/api/leaves/",
   leaveStats: "/api/leaves/stats/",
 
+  // Holiday Management
+  holidays: "/api/holidays/",
+  holidayById: (id: string) => `/api/holidays/${id}/`,
+  holidayCheckDate: "/api/holidays/check_date/",
+  holidayUpcoming: "/api/holidays/upcoming/",
+  holidayByMonth: "/api/holidays/by_month/",
+
   // Department Management
   departments: "/api/departments/",
   departmentStats: "/api/departments/stats/",

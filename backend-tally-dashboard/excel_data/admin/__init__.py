@@ -10,6 +10,7 @@ from .attendance_admin import AttendanceAdmin, DailyAttendanceAdmin
 from .salary_admin import SalaryDataAdmin
 from .ledger_admin import AdvanceLedgerAdmin, PaymentAdmin
 from .leave_admin import LeaveAdmin
+from .holiday_admin import HolidayAdmin
 
 __all__ = [
     'TenantAdmin',
@@ -22,4 +23,5 @@ __all__ = [
     'AdvanceLedgerAdmin',
     'PaymentAdmin',
     'LeaveAdmin',
+    'HolidayAdmin',
 ]
