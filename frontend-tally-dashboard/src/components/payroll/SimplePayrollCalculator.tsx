@@ -25,6 +25,7 @@ interface PayrollEntry {
   working_days: number;
   present_days: number;
   absent_days: number;
+  holiday_days?: number; // Add holidays support
   ot_hours: number;
   late_minutes: number;
   gross_salary: number;
@@ -480,6 +481,7 @@ const SimplePayrollCalculator: React.FC = () => {
                   <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Working Days</th>
                   <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Present</th>
                   <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Absent</th>
+                  <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Holidays</th>
                   <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">OT Hours</th>
                   <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">OT Charges</th>
                   <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Late (Min)</th>
@@ -506,6 +508,7 @@ const SimplePayrollCalculator: React.FC = () => {
                     <td className="px-4 py-4 whitespace-nowrap text-sm text-gray-900">{entry.working_days}</td>
                     <td className="px-4 py-4 whitespace-nowrap text-sm text-gray-900">{entry.present_days}</td>
                     <td className="px-4 py-4 whitespace-nowrap text-sm text-gray-900">{entry.absent_days}</td>
+                    <td className="px-4 py-4 whitespace-nowrap text-sm text-teal-600 font-medium">{entry.holiday_days || 0}</td>
                     <td className="px-4 py-4 whitespace-nowrap text-sm text-gray-900">{entry.ot_hours}</td>
                     <td className="px-4 py-4 whitespace-nowrap text-sm text-gray-900">₹{(entry.ot_charges || 0).toLocaleString()}</td>
                     <td className="px-4 py-4 whitespace-nowrap text-sm text-gray-900">{entry.late_minutes || 0}</td>

@@ -17,6 +17,7 @@ class Attendance(TenantAwareModel):
     total_working_days = models.IntegerField(default=0, help_text="Total working days excluding holidays and weekends")
     present_days = models.IntegerField(default=0)
     absent_days = models.IntegerField(default=0)
+    holiday_days = models.IntegerField(default=0, help_text="Number of paid holidays in this period")
     ot_hours = models.DecimalField(max_digits=10, decimal_places=2, default=0.00)
     late_minutes = models.IntegerField(default=0)
 
@@ -116,6 +117,7 @@ class MonthlyAttendanceSummary(TenantAwareModel):
 
     # Aggregated metrics
     present_days = models.DecimalField(max_digits=5, decimal_places=1, default=0)
+    holiday_days = models.IntegerField(default=0, help_text="Number of paid holidays in this period")
     ot_hours = models.DecimalField(max_digits=10, decimal_places=2, default=0)
     late_minutes = models.IntegerField(default=0)
 

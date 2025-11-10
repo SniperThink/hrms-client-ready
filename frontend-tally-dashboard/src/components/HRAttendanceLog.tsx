@@ -1180,6 +1180,12 @@ const HRAttendanceLog: React.FC = () => {
                     ).length}
                   </span>
                 </div>
+                {isHoliday && holidayInfo && (
+                  <div className="text-sm">
+                    <span className="font-medium text-purple-900">Holiday:</span>
+                    <span className="ml-2 text-purple-700">{holidayInfo.name}</span>
+                  </div>
+                )}
               </div>
             </div>
           </div>

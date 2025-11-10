@@ -1,5 +1,4 @@
-"""
-Autonomous Salary Calculator Service
+"""Autonomous Salary Calculator Service
 
 This service handles salary calculations for both uploaded data and frontend-tracked data,
 providing a unified calculation engine with admin controls for advance deductions.
@@ -11,7 +10,7 @@ from django.db import transaction
 from django.db.models import Sum, Q
 from ..models import (
     EmployeeProfile, Attendance, SalaryData, AdvanceLedger, PayrollPeriod, CalculatedSalary, SalaryAdjustment, DataSource,
-    MonthlyAttendanceSummary, DailyAttendance,
+    MonthlyAttendanceSummary, DailyAttendance, Holiday,
 )
 import logging
 
@@ -21,6 +20,100 @@ class SalaryCalculationService:
     """
     Service class for autonomous salary calculations
     """
+    
+    @staticmethod
+    def _get_paid_holidays_count(tenant, year: int, month: str, department: str = None) -> int:
+        """
+        Get count of paid holidays for a specific month/year
+        
+        Args:
+            tenant: Tenant instance
+            year: Year (e.g., 2025)
+            month: Month name (e.g., "JUNE" or "JUN")
+            department: Optional department name to check department-specific holidays
+            
+        Returns:
+            int: Count of holidays that apply (all active holidays are treated as paid)
+        """
+        import calendar
+        
+        month_num = SalaryCalculationService._get_month_number(month)
+        total_days = calendar.monthrange(year, month_num)[1]
+        month_start = date(year, month_num, 1)
+        month_end = date(year, month_num, total_days)
+        
+        # Get all active holidays in this month
+        holidays = Holiday.objects.filter(
+            tenant=tenant,
+            date__gte=month_start,
+            date__lte=month_end,
+            is_active=True
+        )
+        
+        # Filter by department if specified
+        if department:
+            # Count holidays that apply to this department
+            count = 0
+            for holiday in holidays:
+                if holiday.applies_to_all:
+                    count += 1
+                elif holiday.specific_departments:
+                    departments = [d.strip() for d in holiday.specific_departments.split(',')]
+                    if department in departments:
+                        count += 1
+            return count
+        else:
+            # Return count of holidays that apply to all
+            return holidays.filter(applies_to_all=True).count()
+    
+    @staticmethod
+    def _get_employee_holidays_in_period(tenant, employee, year: int, month: str, start_date=None, end_date=None) -> list:
+        """
+        Get list of holiday dates that apply to a specific employee in a period
+        
+        Args:
+            tenant: Tenant instance
+            employee: Employee instance or dict with department info
+            year: Year
+            month: Month name
+            start_date: Optional start date (for partial month calculations)
+            end_date: Optional end date (for partial month calculations)
+            
+        Returns:
+            list: List of date objects representing holidays
+        """
+        import calendar
+        
+        month_num = SalaryCalculationService._get_month_number(month)
+        
+        if not start_date:
+            start_date = date(year, month_num, 1)
+        if not end_date:
+            total_days = calendar.monthrange(year, month_num)[1]
+            end_date = date(year, month_num, total_days)
+        
+        # Get employee department
+        department = SalaryCalculationService._get_value(employee, 'department')
+        
+        # Get all active holidays in this period
+        holidays = Holiday.objects.filter(
+            tenant=tenant,
+            date__gte=start_date,
+            date__lte=end_date,
+            is_active=True
+        )
+        
+        # Filter holidays that apply to this employee
+        applicable_dates = []
+        for holiday in holidays:
+            if holiday.applies_to_all:
+                applicable_dates.append(holiday.date)
+            elif holiday.specific_departments and department:
+                departments = [d.strip() for d in holiday.specific_departments.split(',')]
+                if department in departments:
+                    applicable_dates.append(holiday.date)
+        
+        return applicable_dates
     
     @staticmethod
     def get_or_create_payroll_period(tenant, year: int, month: str, data_source: str = DataSource.FRONTEND):
@@ -79,14 +172,16 @@ class SalaryCalculationService:
                 return None
 
     @staticmethod
-    def _calculate_employee_working_days(employee: 'EmployeeProfile', year: int, month: str) -> int:
+    def _calculate_employee_working_days(employee: 'EmployeeProfile', year: int, month: str, tenant=None) -> int:
         """
         Calculate working days for a specific employee for the full month
         
-        DOJ-aware and weekly-off-aware:
+        DOJ-aware, weekly-off-aware, and HOLIDAY-aware:
+        - Excludes employee's weekly off days
+        - Excludes paid holidays that apply to the employee
         - If DOJ is after this month: 0
-        - If DOJ is within this month: count from DOJ to month end, excluding weekly offs
-        - If DOJ is before this month: count full month, excluding weekly offs
+        - If DOJ is within this month: count from DOJ to month end, excluding weekly offs and holidays
+        - If DOJ is before this month: count full month, excluding weekly offs and holidays
         Supports both model instances and plain dicts.
         """
         import calendar
@@ -124,10 +219,23 @@ class SalaryCalculationService:
                 return 0
             start_date = doj if (doj.year == year and doj.month == month_num and doj > month_start) else month_start
         
+        # Get tenant - try from employee object or passed parameter
+        if not tenant:
+            tenant = SalaryCalculationService._get_value(employee, 'tenant')
+        
+        # Get paid holidays that apply to this employee in this period
+        holiday_dates = set()
+        if tenant:
+            holiday_dates = set(SalaryCalculationService._get_employee_holidays_in_period(
+                tenant, employee, year, month, start_date, month_end
+            ))
+        
+        # Count working days excluding off days AND holidays
         working_days = 0
         current_date = start_date
         while current_date <= month_end:
-            if current_date.weekday() not in off_days:
+            # Skip if it's a weekly off day OR a holiday
+            if current_date.weekday() not in off_days and current_date not in holiday_dates:
                 working_days += 1
             current_date += timedelta(days=1)
         
@@ -330,6 +438,18 @@ class SalaryCalculationService:
         if uploaded_salary and payroll_period.data_source == DataSource.UPLOADED:
             # Skip calculation entirely for uploaded data - use Excel values directly
             # Set _skip_auto_calc flag to prevent any calculation in CalculatedSalary.save()
+            
+            # Get paid holidays count even for uploaded data
+            import calendar
+            month_num_calc = SalaryCalculationService._get_month_number(payroll_period.month)
+            total_days = calendar.monthrange(payroll_period.year, month_num_calc)[1]
+            month_start = date(payroll_period.year, month_num_calc, 1)
+            month_end = date(payroll_period.year, month_num_calc, total_days)
+            holiday_dates = SalaryCalculationService._get_employee_holidays_in_period(
+                employee.tenant, employee, payroll_period.year, payroll_period.month, month_start, month_end
+            )
+            holiday_count = len(holiday_dates)
+            
             salary_data = {
                 'payroll_period': payroll_period,
                 'employee_id': employee.employee_id,
@@ -343,6 +463,7 @@ class SalaryCalculationService:
                 'total_working_days': int((uploaded_salary.days or 0) + (uploaded_salary.absent or 0)),
                 'present_days': Decimal(str(uploaded_salary.days or 0)),
                 'absent_days': Decimal(str(uploaded_salary.absent or 0)),
+                'holiday_days': holiday_count,  # Include holiday count
                 'ot_hours': uploaded_salary.ot or Decimal('0'),
                 'late_minutes': int(uploaded_salary.late or 0),
                 'salary_for_present_days': uploaded_salary.sl_wo_ot or Decimal('0'),
@@ -375,7 +496,7 @@ class SalaryCalculationService:
             basic_salary = employee.basic_salary or Decimal('0')
             # Use employee-specific working days instead of period working days
             working_days = SalaryCalculationService._calculate_employee_working_days(
-                employee, payroll_period.year, payroll_period.month
+                employee, payroll_period.year, payroll_period.month, employee.tenant
             )
             
             # Calculate shift hours from shift_start_time and shift_end_time
@@ -468,12 +589,24 @@ class SalaryCalculationService:
         
         if salary_record and not force_calculate_partial:
             # Use uploaded data for full month calculation
+            # Get paid holidays count even for uploaded data
+            import calendar
+            month_num_calc = SalaryCalculationService._get_month_number(month)
+            total_days = calendar.monthrange(year, month_num_calc)[1]
+            month_start = date(year, month_num_calc, 1)
+            month_end = date(year, month_num_calc, total_days)
+            holiday_dates = SalaryCalculationService._get_employee_holidays_in_period(
+                employee.tenant, employee, year, month, month_start, month_end
+            )
+            holiday_count = len(holiday_dates)
+            
             return {
                 'total_working_days': salary_record.days + salary_record.absent,
                 'present_days': Decimal(str(salary_record.days)),
                 'absent_days': Decimal(str(salary_record.absent)),
                 'ot_hours': salary_record.ot,
                 'late_minutes': salary_record.late,
+                'holiday_days': holiday_count,  # Track holiday count separately
             }
         
         # Next try the pre-aggregated MonthlyAttendanceSummary (fast path)
@@ -486,7 +619,7 @@ class SalaryCalculationService:
 
         if summary and not force_calculate_partial:
             employee_working_days = SalaryCalculationService._calculate_employee_working_days(
-                employee, year, month
+                employee, year, month, employee.tenant
             )
 
             # Only count explicitly logged absences, not assumed ones based on missing attendance
@@ -501,13 +634,25 @@ class SalaryCalculationService:
                 date__month=SalaryCalculationService._get_month_number(month),
                 attendance_status='ABSENT'
             ).count()
+            
+            # Get paid holidays count for this employee
+            import calendar
+            month_num = SalaryCalculationService._get_month_number(month)
+            total_days = calendar.monthrange(year, month_num)[1]
+            month_start = date(year, month_num, 1)
+            month_end = date(year, month_num, total_days)
+            holiday_dates = SalaryCalculationService._get_employee_holidays_in_period(
+                employee.tenant, employee, year, month, month_start, month_end
+            )
+            holiday_count = len(holiday_dates)
 
             return {
                 'total_working_days': employee_working_days,
-                'present_days': Decimal(str(summary.present_days)),
+                'present_days': Decimal(str(summary.present_days)) + Decimal(str(holiday_count)),  # Add holidays as present
                 'absent_days': Decimal(str(explicit_absent_count)),  # Only explicit absences
                 'ot_hours': summary.ot_hours,
                 'late_minutes': summary.late_minutes,
+                'holiday_days': holiday_count,  # Track holiday count separately
             }
         
         # If MonthlyAttendanceSummary doesn't have data, try the Attendance model (monthly summary format)
@@ -525,15 +670,27 @@ class SalaryCalculationService:
             else:
                 # Fallback to calculation if no uploaded value
                 employee_working_days = SalaryCalculationService._calculate_employee_working_days(
-                    employee, year, month
+                    employee, year, month, employee.tenant
                 )
+            
+            # Get paid holidays count for this employee
+            import calendar
+            month_num = SalaryCalculationService._get_month_number(month)
+            total_days = calendar.monthrange(year, month_num)[1]
+            month_start = date(year, month_num, 1)
+            month_end = date(year, month_num, total_days)
+            holiday_dates = SalaryCalculationService._get_employee_holidays_in_period(
+                employee.tenant, employee, year, month, month_start, month_end
+            )
+            holiday_count = len(holiday_dates)
 
             return {
                 'total_working_days': employee_working_days,
-                'present_days': Decimal(str(attendance_record.present_days)),
+                'present_days': Decimal(str(attendance_record.present_days)) + Decimal(str(holiday_count)),  # Add holidays
                 'absent_days': Decimal(str(attendance_record.absent_days)),
                 'ot_hours': attendance_record.ot_hours,
                 'late_minutes': attendance_record.late_minutes,
+                'holiday_days': holiday_count,  # Track holiday count separately
             }
         
         # Otherwise, fall back to on-the-fly aggregation of DailyAttendance
@@ -556,7 +713,9 @@ class SalaryCalculationService:
                 employee, start_date, end_date
             )
         else:
-            employee_working_days = SalaryCalculationService._calculate_employee_working_days(employee, year, month)
+            employee_working_days = SalaryCalculationService._calculate_employee_working_days(
+                employee, year, month, employee.tenant
+            )
 
         daily_qs = DailyAttendance.objects.filter(
             tenant=employee.tenant,
@@ -579,23 +738,53 @@ class SalaryCalculationService:
             explicit_absent += half_count * 0.5
 
             aggregates = daily_qs.aggregate(total_ot=Sum("ot_hours"), total_late=Sum("late_minutes"))
+            
+            # Get paid holidays count for this employee
+            import calendar
+            month_num_calc = SalaryCalculationService._get_month_number(month)
+            total_days = calendar.monthrange(year, month_num_calc)[1]
+            month_start = date(year, month_num_calc, 1)
+            month_end = date(year, month_num_calc, total_days)
+            
+            if force_calculate_partial:
+                month_start = start_date
+                month_end = end_date
+            
+            holiday_dates = SalaryCalculationService._get_employee_holidays_in_period(
+                employee.tenant, employee, year, month, month_start, month_end
+            )
+            holiday_count = len(holiday_dates)
 
             return {
                 'total_working_days': employee_working_days,
-                'present_days': Decimal(str(total_present)),
+                'present_days': Decimal(str(total_present)) + Decimal(str(holiday_count)),  # Add holidays as present
                 'absent_days': Decimal(str(explicit_absent)),  # Only explicit absences
                 'ot_hours': aggregates["total_ot"] or Decimal('0'),
                 'late_minutes': aggregates["total_late"] or 0,
+                'holiday_days': holiday_count,  # Track holiday count separately
             }
         
         # Default values if no data found - assume no attendance logged
-        # For new employees with no records: present=0, absent=0 (not assumed absent)
+        # For new employees with no records: present=0 + holidays, absent=0 (not assumed absent)
+        # Get paid holidays count even if no attendance logged
+        import calendar
+        month_num_calc = SalaryCalculationService._get_month_number(month)
+        total_days = calendar.monthrange(year, month_num_calc)[1]
+        month_start = date(year, month_num_calc, 1)
+        month_end = date(year, month_num_calc, total_days)
+        
+        holiday_dates = SalaryCalculationService._get_employee_holidays_in_period(
+            employee.tenant, employee, year, month, month_start, month_end
+        )
+        holiday_count = len(holiday_dates)
+        
         return {
             'total_working_days': employee_working_days,
-            'present_days': Decimal('0'),  # No default attendance - must be explicitly logged
+            'present_days': Decimal(str(holiday_count)),  # Only holidays count as present by default
             'absent_days': Decimal('0'),  # No default absent - only count explicitly logged absences
             'ot_hours': Decimal('0'),
             'late_minutes': 0,
+            'holiday_days': holiday_count,  # Track holiday count separately
         }
     
     @staticmethod

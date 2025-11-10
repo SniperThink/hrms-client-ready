@@ -4985,7 +4985,7 @@ class DailyAttendanceViewSet(viewsets.ModelViewSet):
         # Aggregate attendance
         # --------------------------------------------------
         step_start = time.time()
-        aggregated = defaultdict(lambda: {'present_days': 0.0, 'absent_days': 0.0, 'ot_hours': 0.0, 'late_minutes': 0, 'data_sources': []})
+        aggregated = defaultdict(lambda: {'present_days': 0.0, 'absent_days': 0.0, 'ot_hours': 0.0, 'late_minutes': 0, 'holiday_days': 0, 'data_sources': []})
         total_working_days = 0  # Used later for absent calculation
 
         if use_daily_data:
@@ -5100,11 +5100,11 @@ class DailyAttendanceViewSet(viewsets.ModelViewSet):
             timing_breakdown['daily_month_tracking_ms'] = round((time.time() - excel_query_start) * 1000, 2)
             timing_breakdown['months_with_daily_count'] = len(months_with_daily)
             
-            # Query Attendance model for the date range (include total_working_days for Excel working days)
+            # Query Attendance model for the date range (include total_working_days for Excel working days and holiday_days)
             attendance_qs = Attendance.objects.filter(
                 tenant=tenant,
                 date__range=[start_date_obj, end_date_obj]
-            ).values('employee_id', 'date', 'present_days', 'absent_days', 'ot_hours', 'late_minutes', 'total_working_days')
+            ).values('employee_id', 'date', 'present_days', 'absent_days', 'ot_hours', 'late_minutes', 'total_working_days', 'holiday_days')
             
             # Track Excel working days by (employee_id, year, month) for custom range
             excel_working_days_by_emp_month = {}
@@ -5128,6 +5128,7 @@ class DailyAttendanceViewSet(viewsets.ModelViewSet):
                     agg_data['absent_days'] += float(record.get('absent_days') or 0)
                     agg_data['ot_hours'] += float(record['ot_hours'])
                     agg_data['late_minutes'] += record['late_minutes']
+                    agg_data['holiday_days'] += int(record.get('holiday_days') or 0)
                     # Track that this employee has Excel data
                     if 'excel_upload' not in agg_data['data_sources']:
                         agg_data['data_sources'].append('excel_upload')
@@ -5303,7 +5304,7 @@ class DailyAttendanceViewSet(viewsets.ModelViewSet):
 
             attendance_qs = Attendance.objects.filter(
                 tenant=tenant
-            ).filter(month_filter).values('employee_id', 'date', 'present_days', 'absent_days', 'ot_hours', 'late_minutes', 'total_working_days')
+            ).filter(month_filter).values('employee_id', 'date', 'present_days', 'absent_days', 'ot_hours', 'late_minutes', 'total_working_days', 'holiday_days')
             timing_breakdown['attendance_query_ms'] = round((time.time() - attendance_query_start) * 1000, 2)
 
             process_start = time.time()
@@ -5325,6 +5326,7 @@ class DailyAttendanceViewSet(viewsets.ModelViewSet):
                     agg_data['absent_days'] += float(record.get('absent_days') or 0)
                     agg_data['ot_hours'] += float(record['ot_hours'])
                     agg_data['late_minutes'] += record['late_minutes']
+                    agg_data['holiday_days'] += int(record.get('holiday_days') or 0)
                     # Track that this employee has Excel attendance data
                     if 'excel_upload' not in agg_data['data_sources']:
                         agg_data['data_sources'].append('excel_upload')
@@ -5432,7 +5434,7 @@ class DailyAttendanceViewSet(viewsets.ModelViewSet):
         attendance_records = []
         
         # OPTIMIZATION: Pre-calculate common values to avoid repeated operations
-        default_data = {'present_days': 0.0, 'absent_days': 0.0, 'ot_hours': 0.0, 'late_minutes': 0, 'data_sources': []}
+        default_data = {'present_days': 0.0, 'absent_days': 0.0, 'ot_hours': 0.0, 'late_minutes': 0, 'holiday_days': 0, 'data_sources': []}
         
         # Preload Excel Attendance working days for selected months for all employees (fast path)
         attendance_working_days_by_emp_month = {}
@@ -5497,7 +5499,92 @@ class DailyAttendanceViewSet(viewsets.ModelViewSet):
         
         # Check if this is a single day request for response construction
         is_single_day_response = use_daily_data and start_date_obj == end_date_obj
+
+        # ---------------------------------------------------------------------
+        # PRECOMPUTE HOLIDAY COUNTS (bulk) to avoid per-employee DB work in loop
+        # Strategy:
+        # - For custom ranges (use_daily_data): fetch holidays in date range once
+        #   and count company-wide and department-specific holidays.
+        # - For monthly aggregation: fetch holidays for all selected months once
+        #   and build counts keyed by (year, month) and department.
+        # Result: O(#holidays + #employees * #months) CPU, ZERO per-employee DB queries.
+        # ---------------------------------------------------------------------
+        holiday_counts_range_all = 0
+        holiday_counts_range_dept = {}
+        holiday_counts_by_month_all = {}
+        holiday_counts_by_month_dept = {}
+        try:
+            from ..models import Holiday
+            import calendar as _calendar
+            from datetime import date as _date
+            from collections import defaultdict
+
+            if use_daily_data:
+                # Get all holidays within the requested date range
+                holidays_qs = Holiday.objects.filter(
+                    tenant=tenant,
+                    is_active=True,
+                    date__range=[start_date_obj, end_date_obj]
+                ).values('date', 'applies_to_all', 'specific_departments')
+
+                dept_counter = defaultdict(int)
+                company_count = 0
+                for h in holidays_qs:
+                    if h.get('applies_to_all'):
+                        company_count += 1
+                    else:
+                        s = h.get('specific_departments') or ''
+                        for dept in [d.strip() for d in s.split(',') if d.strip()]:
+                            dept_counter[dept] += 1
+
+                holiday_counts_range_all = company_count
+                holiday_counts_range_dept = dict(dept_counter)
+            else:
+                # Monthly mode: compute counts per (year, month) and department
+                if selected_months:
+                    # Determine overall date window covering all selected months
+                    # selected_months is ordered newest-first, so [0] is newest, [-1] is oldest
+                    newest_year, newest_month = selected_months[0]
+                    oldest_year, oldest_month = selected_months[-1]
+                    # Build actual date bounds (oldest to newest)
+                    range_start = _date(oldest_year, oldest_month, 1)
+                    # last day of newest_month
+                    last_day = _calendar.monthrange(newest_year, newest_month)[1]
+                    range_end = _date(newest_year, newest_month, last_day)
+
+                    holidays_qs = Holiday.objects.filter(
+                        tenant=tenant,
+                        is_active=True,
+                        date__range=[range_start, range_end]
+                    ).values('date', 'applies_to_all', 'specific_departments')
+
+                    month_all = defaultdict(int)
+                    month_dept = defaultdict(int)
+                    for h in holidays_qs:
+                        d = h.get('date')
+                        y, m = d.year, d.month
+                        key_all = (y, m)
+                        if h.get('applies_to_all'):
+                            month_all[key_all] += 1
+                        else:
+                            s = h.get('specific_departments') or ''
+                            for dept in [dp.strip() for dp in s.split(',') if dp.strip()]:
+                                month_dept[(y, m, dept)] += 1
+
+                    holiday_counts_by_month_all = dict(month_all)
+                    holiday_counts_by_month_dept = dict(month_dept)
+        except Exception as e:
+            # If anything goes wrong, fall back to zero counts; don't block main response
+            logger.warning(f"Holiday precomputation failed: {str(e)}")
+            holiday_counts_range_all = 0
+            holiday_counts_range_dept = {}
+            holiday_counts_by_month_all = {}
+            holiday_counts_by_month_dept = {}
         
+        timing_breakdown['holiday_precomputation_ms'] = round((time.time() - step_start) * 1000, 2)
+        logger.info(f"Holiday precomputation: {timing_breakdown['holiday_precomputation_ms']}ms")
+        
+        step_start = time.time()
         for emp_id, emp_info in employees_dict.items():
             data = aggregated.get(emp_id, default_data)
 
@@ -5637,6 +5724,25 @@ class DailyAttendanceViewSet(viewsets.ModelViewSet):
             if data['present_days'] == 0 and data_source == 'no_data':
                 continue
             
+            # Calculate holiday_days using precomputed holiday maps (fast, bulk lookup)
+            try:
+                dept = emp_info.get('department') or ''
+                if use_daily_data:
+                    # For custom ranges: company-wide holidays + department-specific holidays
+                    holiday_count = int(holiday_counts_range_all or 0) + int(holiday_counts_range_dept.get(dept, 0) or 0)
+                else:
+                    # For monthly aggregation: sum counts for each selected month
+                    holiday_count = 0
+                    for year, month in selected_months:
+                        holiday_count += int(holiday_counts_by_month_all.get((year, month), 0) or 0)
+                        holiday_count += int(holiday_counts_by_month_dept.get((year, month, dept), 0) or 0)
+            except Exception:
+                holiday_count = 0
+            
+            # IMPORTANT: Calculate net working days (total working days - holidays)
+            # This ensures consistent behavior regardless of data source
+            net_working_days = max(0, employee_working_days - holiday_count)
+            
             attendance_records.append({
                 'id': record_id,
                 'employee_id': emp_id,
@@ -5651,7 +5757,8 @@ class DailyAttendanceViewSet(viewsets.ModelViewSet):
                 'date': record_date.isoformat() if record_date else None,  # Include specific date for single day requests
                 'present_days': round(data['present_days'], 1),
                 'absent_days': round(absent_days, 1),
-                'total_working_days': employee_working_days,
+                'total_working_days': net_working_days,  # Net working days (after holidays)
+                'holiday_days': holiday_count,
                 'attendance_percentage': round(attendance_percentage, 1),
                 'total_ot_hours': round(data['ot_hours'], 2),
                 'total_late_minutes': data['late_minutes'],
@@ -5661,6 +5768,7 @@ class DailyAttendanceViewSet(viewsets.ModelViewSet):
             })
         timing_breakdown['response_building_ms'] = round((time.time() - step_start) * 1000, 2)
         timing_breakdown['total_records_created'] = len(attendance_records)
+        logger.info(f"Response building: {timing_breakdown['response_building_ms']}ms for {len(attendance_records)} records")
 
         # --------------------------------------------------
         # Performance + context
