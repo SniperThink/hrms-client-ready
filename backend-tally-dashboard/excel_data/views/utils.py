@@ -259,8 +259,9 @@ def get_dropdown_options(request):
 @permission_classes([IsAuthenticated])
 def calculate_ot_rate(request):
     """
-    Calculate OT rate based on shift times, working days, and basic salary
-    Formula: OT Rate = basic_salary / (shift_hours × working_days)
+    Calculate OT rate based on shift times and basic salary using STATIC formula
+    Formula: OT Rate = basic_salary / (shift_hours × 30.4)
+    Using fixed 30.4 days (average days per month) for consistent OT rates
     """
     try:
         from datetime import datetime, timedelta
@@ -268,7 +269,6 @@ def calculate_ot_rate(request):
         
         shift_start_time_str = request.data.get('shift_start_time', '09:00')
         shift_end_time_str = request.data.get('shift_end_time', '18:00')
-        working_days = int(request.data.get('working_days', 30))
         basic_salary = Decimal(str(request.data.get('basic_salary', 0)))
         
         if basic_salary <= 0:
@@ -289,18 +289,19 @@ def calculate_ot_rate(request):
             end_dt += timedelta(days=1)
         shift_hours = Decimal(str((end_dt - start_dt).total_seconds() / 3600))
         
-        if shift_hours <= 0 or working_days <= 0:
-            return Response({'error': 'Shift hours and working days must be greater than 0'}, status=400)
+        if shift_hours <= 0:
+            return Response({'error': 'Shift hours must be greater than 0'}, status=400)
         
-        # Calculate OT rate: basic_salary / (shift_hours × working_days)
-        ot_rate = basic_salary / (shift_hours * Decimal(str(working_days)))
-        calculation = f"{basic_salary} / ({shift_hours:.2f} hours × {working_days} days) = {round(ot_rate, 2)}"
+        # Calculate OT rate using STATIC formula: basic_salary / (shift_hours × 30.4)
+        static_days = Decimal('30.4')  # Static average days per month
+        ot_rate = basic_salary / (shift_hours * static_days)
+        calculation = f"{basic_salary} / ({shift_hours:.2f} hours × 30.4 days) = {round(ot_rate, 2)}"
         
         return Response({
             'ot_rate': round(float(ot_rate), 2),
             'calculation': calculation,
             'shift_hours_per_day': round(float(shift_hours), 2),
-            'working_days': working_days,
+            'static_days': 30.4,
             'basic_salary': float(basic_salary)
         })
     except (ValueError, TypeError) as e:

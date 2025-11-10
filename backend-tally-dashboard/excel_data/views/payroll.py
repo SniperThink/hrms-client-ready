@@ -2150,9 +2150,8 @@ def calculate_simple_payroll(request):
             else:
                 salary_for_present_days = 0
             
-            # Calculate OT rate dynamically based on this month's working days
-            # OT rate changes monthly because working days change monthly
-            # Formula: OT Charge per Hour = basic_salary / (shift_hours × working_days)
+            # Calculate OT rate using STATIC formula
+            # Formula: OT Charge per Hour = basic_salary / (shift_hours × 30.4)
             from datetime import datetime, timedelta
             shift_hours_per_day = 0
             if employee.shift_start_time and employee.shift_end_time:
@@ -2166,9 +2165,10 @@ def calculate_simple_payroll(request):
                 # Fallback to 8 hours if shift times not set
                 shift_hours_per_day = 8
             
-            # Calculate OT rate dynamically for this month
-            if shift_hours_per_day > 0 and employee_working_days > 0 and base_salary > 0:
-                ot_rate = base_salary / (shift_hours_per_day * employee_working_days)
+            # Calculate OT rate using STATIC 30.4 days
+            static_days = 30.4  # Average days per month
+            if shift_hours_per_day > 0 and base_salary > 0:
+                ot_rate = base_salary / (shift_hours_per_day * static_days)
             else:
                 ot_rate = 0
             
@@ -2493,9 +2493,9 @@ def calculate_simple_payroll_ultra_fast(request):
                     ELSE 8.0  -- Fallback to 8 hours if shift times not set
                 END as shift_hours_per_day,
                 
-                -- Calculate OT rate dynamically for this month
-                -- Formula: OT Charge per Hour = basic_salary / (shift_hours × working_days)
-                -- Use uploaded_working_days if available, otherwise use fallback working_days parameter
+                -- Calculate OT rate using STATIC formula
+                -- Formula: OT Charge per Hour = basic_salary / (shift_hours × 30.4)
+                -- Using fixed 30.4 days (average days per month)
                 CASE 
                     WHEN COALESCE(att.uploaded_working_days, 0) > 0 THEN
                         -- Use uploaded working days from attendance data
@@ -3061,9 +3061,8 @@ def calculate_simple_payroll_ultra_fast(request):
                     # No employee profile found - use standard 30 days
                     employee_working_days = 30
 
-            # Calculate OT rate dynamically based on this month's working days
-            # OT rate changes monthly because working days change monthly
-            # Formula: OT Charge per Hour = basic_salary / (shift_hours × working_days)
+            # Calculate OT rate using STATIC formula
+            # Formula: OT Charge per Hour = basic_salary / (shift_hours × 30.4)
             base_salary = float(data.get('base_salary', 0) or 0)
             employee = employees_map.get(employee_id)
             
@@ -3081,10 +3080,11 @@ def calculate_simple_payroll_ultra_fast(request):
                 # Fallback to 8 hours if shift times not set
                 shift_hours_per_day = 8
             
-            # Calculate OT rate dynamically for this month
+            # Calculate OT rate using STATIC 30.4 days
             ot_rate = 0
-            if shift_hours_per_day > 0 and employee_working_days > 0 and base_salary > 0:
-                ot_rate = base_salary / (shift_hours_per_day * employee_working_days)
+            static_days = 30.4  # Average days per month
+            if shift_hours_per_day > 0 and base_salary > 0:
+                ot_rate = base_salary / (shift_hours_per_day * static_days)
             
             # Recalculate OT charges and late deduction with dynamic OT rate
             ot_hours = float(data['ot_hours'] or 0)

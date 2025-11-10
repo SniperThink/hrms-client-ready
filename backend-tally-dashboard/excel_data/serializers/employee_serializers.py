@@ -132,7 +132,7 @@ class EmployeeFormSerializer(serializers.ModelSerializer):
         ]
         
     def get_ot_calculation(self, obj):
-        """Show OT calculation formula: basic_salary / (shift_hours × working_days)"""
+        """Show OT calculation formula: basic_salary / (shift_hours × 30.4)"""
         from datetime import datetime, timedelta
         from decimal import Decimal
         
@@ -144,38 +144,15 @@ class EmployeeFormSerializer(serializers.ModelSerializer):
                 end_dt += timedelta(days=1)
             shift_hours = (end_dt - start_dt).total_seconds() / 3600
             
-            # Calculate working days for current month
-            from calendar import monthrange
-            from datetime import date
-            now = date.today()
-            total_days = monthrange(now.year, now.month)[1]
-            month_start = date(now.year, now.month, 1)
-            month_end = date(now.year, now.month, total_days)
+            # Use static 30.4 days (average days per month)
+            static_days = Decimal('30.4')
             
-            # Build off-day set
-            off_days = set()
-            if obj.off_monday: off_days.add(0)
-            if obj.off_tuesday: off_days.add(1)
-            if obj.off_wednesday: off_days.add(2)
-            if obj.off_thursday: off_days.add(3)
-            if obj.off_friday: off_days.add(4)
-            if obj.off_saturday: off_days.add(5)
-            if obj.off_sunday: off_days.add(6)
-            
-            # Calculate working days
-            working_days = 0
-            current_date = month_start
-            while current_date <= month_end:
-                if current_date.weekday() not in off_days:
-                    working_days += 1
-                current_date += timedelta(days=1)
-            
-            if shift_hours > 0 and working_days > 0 and obj.basic_salary:
+            if shift_hours > 0 and obj.basic_salary:
                 basic_salary = Decimal(str(obj.basic_salary))
-                ot_rate = basic_salary / (Decimal(str(shift_hours)) * Decimal(str(working_days)))
-                return f"{basic_salary} / ({shift_hours:.2f} hrs × {working_days} days) = {round(ot_rate, 2)}"
+                ot_rate = basic_salary / (Decimal(str(shift_hours)) * static_days)
+                return f"{basic_salary} / ({shift_hours:.2f} hrs × 30.4 days) = {round(ot_rate, 2)}"
             else:
-                return "Invalid shift times, working days, or basic salary"
+                return "Invalid shift times or basic salary"
         return "Enter shift times and basic salary to calculate"
         
     def validate(self, data):

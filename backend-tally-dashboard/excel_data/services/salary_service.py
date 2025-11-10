@@ -399,11 +399,12 @@ class SalaryCalculationService:
             basic_salary_per_hour = basic_salary / (working_days * shift_hours_per_day) if working_days > 0 and shift_hours_per_day > 0 else Decimal('0')
             basic_salary_per_minute = basic_salary / (working_days * minutes_per_day) if working_days > 0 and minutes_per_day > 0 else Decimal('0')
             
-            # ALWAYS calculate OT rate dynamically based on this month's working days
-            # OT rate changes monthly because working days change monthly
-            # Formula: OT Charge per Hour = basic_salary / ((shift_end_time - shift_start_time) × working_days)
-            if shift_hours_per_day > 0 and working_days > 0 and basic_salary > 0:
-                ot_rate_per_hour = basic_salary / (shift_hours_per_day * Decimal(str(working_days)))
+            # STATIC OT rate calculation: basic_salary / (shift_hours × 30.4)
+            # Using fixed 30.4 days (average days per month) for consistent OT rates across all months
+            # Formula: OT Charge per Hour = basic_salary / ((shift_end_time - shift_start_time) × 30.4)
+            if shift_hours_per_day > 0 and basic_salary > 0:
+                static_days = Decimal('30.4')  # Static average days per month
+                ot_rate_per_hour = basic_salary / (shift_hours_per_day * static_days)
             else:
                 ot_rate_per_hour = Decimal('0')
             

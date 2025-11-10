@@ -357,7 +357,7 @@ const HRAddEmployee: React.FC = () => {
     return workingDays;
   };
 
-  // Helper function to calculate OT rate using formula: basic_salary / (shift_hours × working_days)
+  // Helper function to calculate OT rate using STATIC formula: basic_salary / (shift_hours × 30.4)
   const calculateOTRate = (
     basicSalary: string,
     shiftStartTime: string,
@@ -382,20 +382,16 @@ const HRAddEmployee: React.FC = () => {
       return '';
     }
     
-    // Calculate working days
-    const workingDays = calculateWorkingDays(offDays);
-    if (workingDays <= 0) {
-      return '';
-    }
-    
     // Parse basic salary (remove commas if any)
     const basicSalaryNum = parseFloat(basicSalary.replace(/,/g, ''));
     if (isNaN(basicSalaryNum) || basicSalaryNum <= 0) {
       return '';
     }
     
-    // OT Charge per Hour = basic_salary / (shift_hours × working_days)
-    const otRate = basicSalaryNum / (shiftHours * workingDays);
+    // OT Charge per Hour = basic_salary / (shift_hours × 30.4)
+    // Using static 30.4 days (average days per month) for consistent OT rates
+    const staticDays = 30.4;
+    const otRate = basicSalaryNum / (shiftHours * staticDays);
     
     return otRate.toFixed(2);
   };
@@ -831,7 +827,7 @@ const HRAddEmployee: React.FC = () => {
               <li><strong>Gender:</strong> Male, Female, Other</li>
               <li><strong>Shift Times:</strong> Use HH:MM:SS format (e.g., 09:00:00)</li>
               <li><strong>Basic Salary:</strong> Enter as number only (e.g., 50000)</li>
-              <li><strong>OT Rate (per hour):</strong> Overtime hourly rate. Auto-calculated as Basic Salary / (Shift Hours × Working Days)</li>
+              <li><strong>OT Rate (per hour):</strong> Overtime hourly rate. Auto-calculated as Basic Salary / (Shift Hours × 30.4)</li>
               <li><strong>Dates:</strong> Use YYYY-MM-DD format (e.g., 2024-01-01)</li>
               <li><strong>TDS:</strong> Enter as percentage number (e.g., 10 for 10%)</li>
               <li><strong>OFF DAY:</strong> Monday, Tuesday, etc. (comma-separated for multiple days)</li>
@@ -1210,21 +1206,13 @@ const HRAddEmployee: React.FC = () => {
               />
               {!isOTChargeManuallyEdited && (
                 <div className="mt-1 text-xs text-gray-500">
-                  <p className="mb-1">💡 <strong>Formula:</strong> Basic Salary / (Shift Hours × Working Days)</p>
-                  <p>This will be calculated automatically if not provided. The OT rate changes monthly based on each month's working days.</p>
+                  <p className="mb-1">💡 <strong>Formula:</strong> Basic Salary / (Shift Hours × 30.4)</p>
+                  <p>This will be calculated automatically if not provided. Using static 30.4 days (average days per month) for consistent OT rates.</p>
                 </div>
               )}
               {!isOTChargeManuallyEdited && formData.ot_charge && formData.shift_start_time && formData.shift_end_time && formData.basic_salary && (
                 <div className="mt-2 text-xs text-gray-600 bg-teal-50 p-2 rounded border border-teal-200">
-                  <strong>Current Calculation:</strong> {formData.basic_salary.replace(/,/g, '')} / ({calculateShiftHours(formData.shift_start_time, formData.shift_end_time).toFixed(2)} hours × {calculateWorkingDays({
-                    off_monday: formData.off_monday,
-                    off_tuesday: formData.off_tuesday,
-                    off_wednesday: formData.off_wednesday,
-                    off_thursday: formData.off_thursday,
-                    off_friday: formData.off_friday,
-                    off_saturday: formData.off_saturday,
-                    off_sunday: formData.off_sunday,
-                  })} days) = {formData.ot_charge}
+                  <strong>Current Calculation:</strong> {formData.basic_salary.replace(/,/g, '')} / ({calculateShiftHours(formData.shift_start_time, formData.shift_end_time).toFixed(2)} hours × 30.4 days) = ₹{formData.ot_charge}
                 </div>
               )}
             </div>
