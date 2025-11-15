@@ -4580,9 +4580,148 @@ class AttendanceViewSet(viewsets.ReadOnlyModelViewSet):
         
         return Response({'dates': dates})
 
+    @action(detail=False, methods=['get'], url_path='weekly')
+    def get_weekly_attendance(self, request):
+        """
+        API endpoint to fetch weekly attendance for a selected date.
+        Cached per date for performance.
+        """
+        from datetime import datetime, timedelta
+        from rest_framework.response import Response
+        from django.core.cache import cache
+        
+        # Get tenant from request
+        tenant = getattr(request, 'tenant', None)
+        if not tenant:
+            return Response({"error": "Tenant not found"}, status=400)
+        
+        selected_date = request.query_params.get('date')
+
+        if not selected_date:
+            return Response({"error": "date parameter is required"}, status=400)
+
+        try:
+            selected_date = datetime.strptime(selected_date, '%Y-%m-%d').date()
+        except ValueError:
+            return Response({"error": "Invalid date format. Use YYYY-MM-DD."}, status=400)
+
+        # Generate cache key based on tenant and selected date (cached per day)
+        cache_key = f"weekly_attendance_{tenant.id}_{selected_date.isoformat()}"
+        
+        # Check cache first
+        cached_data = cache.get(cache_key)
+        if cached_data is not None:
+            return Response(cached_data)
+
+        start_of_week = selected_date - timedelta(days=selected_date.weekday())  # Monday
+        end_of_week = start_of_week + timedelta(days=6)  # Sunday
+
+        # Get active employee IDs for the tenant
+        active_employee_ids = list(EmployeeProfile.objects.filter(
+            tenant=tenant,
+            is_active=True
+        ).values_list('employee_id', flat=True))
+
+        # Fetch attendance data for the week with tenant and active employee filtering
+        attendance_data = DailyAttendance.objects.filter(
+            tenant=tenant,
+            employee_id__in=active_employee_ids,
+            date__range=[start_of_week, end_of_week]
+        )
+
+        # Map day names to unique abbreviations
+        day_abbrev_map = {
+            'Monday': 'M',
+            'Tuesday': 'Tu',
+            'Wednesday': 'W',
+            'Thursday': 'Th',
+            'Friday': 'F',
+            'Saturday': 'Sa',
+            'Sunday': 'Su'
+        }
+        
+        # OPTIMIZATION: Bulk fetch all employee names in ONE query instead of N queries
+        employees_dict = {}
+        if active_employee_ids:
+            employees_qs = EmployeeProfile.objects.filter(
+                tenant=tenant,
+                employee_id__in=active_employee_ids,
+                is_active=True
+            ).only('employee_id', 'first_name', 'last_name')
+            employees_dict = {emp.employee_id: emp for emp in employees_qs}
+        
+        # Initialize weekly_attendance for all active employees with all 7 days
+        weekly_attendance = {}
+        for employee_id in active_employee_ids:
+            # Get employee name from bulk-fetched dictionary
+            emp = employees_dict.get(employee_id)
+            if emp:
+                name = getattr(emp, 'name', None) or (getattr(emp, 'first_name', '') + ' ' + getattr(emp, 'last_name', '')).strip()
+                name = name or str(employee_id)
+            else:
+                name = str(employee_id)
+            
+            weekly_attendance[employee_id] = {
+                'name': name,
+                'weeklyAttendance': {
+                    'M': False,
+                    'Tu': False,
+                    'W': False,
+                    'Th': False,
+                    'F': False,
+                    'Sa': False,
+                    'Su': False
+                }
+            }
+        
+        # Update with actual attendance data
+        for record in attendance_data:
+            employee_id = record.employee_id
+            if employee_id not in weekly_attendance:
+                # Try to get employee name safely
+                name = getattr(record, 'employee_name', None)
+                if not name and hasattr(record, 'employee') and hasattr(record.employee, 'name'):
+                    name = record.employee.name
+                # Also check bulk-fetched dictionary
+                if not name:
+                    emp = employees_dict.get(employee_id)
+                    if emp:
+                        name = getattr(emp, 'name', None) or (getattr(emp, 'first_name', '') + ' ' + getattr(emp, 'last_name', '')).strip()
+                weekly_attendance[employee_id] = {
+                    'name': name or str(employee_id),
+                    'weeklyAttendance': {
+                        'M': False,
+                        'Tu': False,
+                        'W': False,
+                        'Th': False,
+                        'F': False,
+                        'Sa': False,
+                        'Su': False
+                    }
+                }
+
+            day_name = record.date.strftime('%A')  # Full day name (Monday, Tuesday, etc.)
+            day_abbrev = day_abbrev_map.get(day_name, day_name[:2])  # Use unique abbreviation
+            status = getattr(record, 'attendance_status', None) or getattr(record, 'status', None)
+            
+            # Set to True if present, paid_leave, or half_day
+            if status and status.lower() in ['present', 'paid_leave', 'half_day']:
+                weekly_attendance[employee_id]['weeklyAttendance'][day_abbrev] = True
+
+        # Cache the result for 1 hour (cache per day)
+        # Cache will be invalidated when attendance is updated for this date
+        try:
+            cache.set(cache_key, weekly_attendance, 3600)  # 1 hour cache
+        except Exception as e:
+            logger.warning(f"Failed to cache weekly attendance: {e}")
+
+        return Response(weekly_attendance)
+
 
 class DailyAttendanceViewSet(viewsets.ModelViewSet):
 
+    queryset = DailyAttendance.objects.all()
+    
     serializer_class = DailyAttendanceSerializer
 
     permission_classes = [IsAuthenticated]
@@ -4593,6 +4732,142 @@ class DailyAttendanceViewSet(viewsets.ModelViewSet):
 
     ordering_fields = ['date', 'employee_name', 'check_in', 'check_out']
 
+    @action(detail=False, methods=['get'], url_path='weekly-attendance')
+    def get_weekly_attendance(self, request):
+        """
+        API endpoint to fetch weekly attendance for a selected date.
+        Cached per date for performance.
+        """
+        from datetime import datetime, timedelta
+        from rest_framework.response import Response
+        from django.core.cache import cache
+        
+        # Get tenant from request
+        tenant = getattr(request, 'tenant', None)
+        if not tenant:
+            return Response({"error": "Tenant not found"}, status=400)
+        
+        selected_date = request.query_params.get('date')
+
+        if not selected_date:
+            return Response({"error": "date parameter is required"}, status=400)
+
+        try:
+            selected_date = datetime.strptime(selected_date, '%Y-%m-%d').date()
+        except ValueError:
+            return Response({"error": "Invalid date format. Use YYYY-MM-DD."}, status=400)
+
+        # Generate cache key based on tenant and selected date (cached per day)
+        cache_key = f"weekly_attendance_{tenant.id}_{selected_date.isoformat()}"
+        
+        # Check cache first
+        cached_data = cache.get(cache_key)
+        if cached_data is not None:
+            return Response(cached_data)
+
+        start_of_week = selected_date - timedelta(days=selected_date.weekday())  # Monday
+        end_of_week = start_of_week + timedelta(days=6)  # Sunday
+
+        # Get active employee IDs for the tenant
+        active_employee_ids = list(EmployeeProfile.objects.filter(
+            tenant=tenant,
+            is_active=True
+        ).values_list('employee_id', flat=True))
+
+        # Fetch attendance data for the week with tenant and active employee filtering
+        attendance_data = DailyAttendance.objects.filter(
+            tenant=tenant,
+            employee_id__in=active_employee_ids,
+            date__range=[start_of_week, end_of_week]
+        )
+
+        # Map day names to unique abbreviations
+        day_abbrev_map = {
+            'Monday': 'M',
+            'Tuesday': 'Tu',
+            'Wednesday': 'W',
+            'Thursday': 'Th',
+            'Friday': 'F',
+            'Saturday': 'Sa',
+            'Sunday': 'Su'
+        }
+        
+        # OPTIMIZATION: Bulk fetch all employee names in ONE query instead of N queries
+        employees_dict = {}
+        if active_employee_ids:
+            employees_qs = EmployeeProfile.objects.filter(
+                tenant=tenant,
+                employee_id__in=active_employee_ids,
+                is_active=True
+            ).only('employee_id', 'first_name', 'last_name')
+            employees_dict = {emp.employee_id: emp for emp in employees_qs}
+        
+        # Initialize weekly_attendance for all active employees with all 7 days
+        weekly_attendance = {}
+        for employee_id in active_employee_ids:
+            # Get employee name from bulk-fetched dictionary
+            emp = employees_dict.get(employee_id)
+            if emp:
+                name = getattr(emp, 'name', None) or (getattr(emp, 'first_name', '') + ' ' + getattr(emp, 'last_name', '')).strip()
+                name = name or str(employee_id)
+            else:
+                name = str(employee_id)
+            
+            weekly_attendance[employee_id] = {
+                'name': name,
+                'weeklyAttendance': {
+                    'M': False,
+                    'Tu': False,
+                    'W': False,
+                    'Th': False,
+                    'F': False,
+                    'Sa': False,
+                    'Su': False
+                }
+            }
+        
+        # Update with actual attendance data
+        for record in attendance_data:
+            employee_id = record.employee_id
+            if employee_id not in weekly_attendance:
+                # Try to get employee name safely
+                name = getattr(record, 'employee_name', None)
+                if not name and hasattr(record, 'employee') and hasattr(record.employee, 'name'):
+                    name = record.employee.name
+                # Also check bulk-fetched dictionary
+                if not name:
+                    emp = employees_dict.get(employee_id)
+                    if emp:
+                        name = getattr(emp, 'name', None) or (getattr(emp, 'first_name', '') + ' ' + getattr(emp, 'last_name', '')).strip()
+                weekly_attendance[employee_id] = {
+                    'name': name or str(employee_id),
+                    'weeklyAttendance': {
+                        'M': False,
+                        'Tu': False,
+                        'W': False,
+                        'Th': False,
+                        'F': False,
+                        'Sa': False,
+                        'Su': False
+                    }
+                }
+
+            day_name = record.date.strftime('%A')  # Full day name (Monday, Tuesday, etc.)
+            day_abbrev = day_abbrev_map.get(day_name, day_name[:2])  # Use unique abbreviation
+            status = getattr(record, 'attendance_status', None) or getattr(record, 'status', None)
+            
+            # Set to True if present, paid_leave, or half_day
+            if status and status.lower() in ['present', 'paid_leave', 'half_day']:
+                weekly_attendance[employee_id]['weeklyAttendance'][day_abbrev] = True
+
+        # Cache the result for 1 hour (cache per day)
+        # Cache will be invalidated when attendance is updated for this date
+        try:
+            cache.set(cache_key, weekly_attendance, 3600)  # 1 hour cache
+        except Exception as e:
+            logger.warning(f"Failed to cache weekly attendance: {e}")
+
+        return Response(weekly_attendance)
 
 
     def get_queryset(self):
@@ -5586,6 +5861,12 @@ class DailyAttendanceViewSet(viewsets.ModelViewSet):
         
         step_start = time.time()
         for emp_id, emp_info in employees_dict.items():
+            # Initialize calendar_days to a default value
+            calendar_days = 0
+
+            # Correct the assignment logic to avoid referencing before initialization
+            if 'effective_start' in locals() and 'end_date_obj' in locals():
+                calendar_days = (end_date_obj - effective_start).days + 1 if (end_date_obj - effective_start).days != 0 else 0
             data = aggregated.get(emp_id, default_data)
 
             # SMART CALCULATION: Employee-specific working days with DOJ awareness
@@ -5743,6 +6024,52 @@ class DailyAttendanceViewSet(viewsets.ModelViewSet):
             # This ensures consistent behavior regardless of data source
             net_working_days = max(0, employee_working_days - holiday_count)
             
+            # Calculate calendar days (total days in the period including weekends)
+            # CRITICAL: Calendar days should be calculated from DOJ if employee joined during the period
+            doj = emp_info.get('date_of_joining')
+            if use_daily_data:
+                if is_single_day_response:
+                    # For single day: check if employee has joined by this date
+                    if doj and doj > end_date_obj:
+                        calendar_days = 0  # Employee not yet joined
+                    else:
+                        calendar_days = 1
+                else:
+                    # For date range: calculate from DOJ if employee joined during the period
+                    effective_start = start_date_obj
+                    if doj and doj > start_date_obj:
+                        if doj > end_date_obj:
+                            calendar_days = 0  # Employee not yet joined
+                        else:
+                            effective_start = doj
+                    calendar_days = (end_date_obj - effective_start).days + 1 if calendar_days != 0 else 0
+            else:
+                # For monthly aggregation, calculate calendar days from DOJ
+                import calendar
+                from datetime import date as _date
+                
+                calendar_days = 0
+                for year, month in selected_months:
+                    month_start = _date(year, month, 1)
+                    month_end = _date(year, month, calendar.monthrange(year, month)[1])
+                    
+                    # Check if employee has joined by this month
+                    if doj and doj > month_end:
+                        continue  # Employee not yet joined in this month
+                    
+                    # Calculate calendar days from DOJ if employee joined during this month
+                    effective_month_start = month_start
+                    if doj and month_start <= doj <= month_end:
+                        effective_month_start = doj
+                    
+                    # Add days from effective start to end of month
+                    calendar_days += (month_end - effective_month_start).days + 1
+            
+            # Calculate off days (calendar days - total working days - holidays)
+            # Off days = weekends and other non-working days (excluding holidays)
+            # This is DOJ-aware since both calendar_days and employee_working_days are DOJ-aware
+            off_days = max(0, calendar_days - employee_working_days)
+            
             attendance_records.append({
                 'id': record_id,
                 'employee_id': emp_id,
@@ -5755,6 +6082,8 @@ class DailyAttendanceViewSet(viewsets.ModelViewSet):
                 'year': display_year,  # Added for frontend compatibility
                 'month': display_month,  # Added for frontend compatibility
                 'date': record_date.isoformat() if record_date else None,  # Include specific date for single day requests
+                'calendar_days': calendar_days,  # NEW: Total calendar days (e.g., 31 for January)
+                'off_days': off_days,  # NEW: Off days (weekends, etc.)
                 'present_days': round(data['present_days'], 1),
                 'absent_days': round(absent_days, 1),
                 'total_working_days': net_working_days,  # Net working days (after holidays)

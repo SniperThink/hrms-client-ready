@@ -702,7 +702,20 @@ def bulk_update_attendance(request):
             f"eligible_employees_progressive_{tenant_id}_{date_str}_remaining",
             f"directory_data_{tenant_id}",  # Critical for directory to show updated OT/late totals
             f"directory_data_full_{tenant_id}",  # Critical for directory full dataset cache
+            f"weekly_attendance_{tenant_id}_{date_str}",  # Clear weekly attendance cache for this date
         ]
+        
+        # Also clear weekly attendance cache for all days in the week (since weekly attendance shows a week's data)
+        from datetime import timedelta
+        try:
+            attendance_date_obj = datetime.strptime(date_str, '%Y-%m-%d').date()
+            start_of_week = attendance_date_obj - timedelta(days=attendance_date_obj.weekday())  # Monday
+            for day_offset in range(7):  # Clear cache for all 7 days of the week
+                week_date = start_of_week + timedelta(days=day_offset)
+                week_cache_key = f"weekly_attendance_{tenant_id}_{week_date.isoformat()}"
+                critical_cache_keys.append(week_cache_key)
+        except Exception as e:
+            logger.warning(f"Failed to calculate week dates for cache invalidation: {e}")
         
         for key in critical_cache_keys:
             deleted = cache.delete(key)

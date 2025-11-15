@@ -22,6 +22,7 @@ interface AttendanceRecord {
   department?: string;
   date: string;
   calendar_days: number;
+  off_days?: number;  // NEW: Off days from backend
   total_working_days: number;
   present_days: number;
   absent_days: number;
@@ -41,6 +42,7 @@ interface AggregatedRecord {
   month?: string;
   year?: number;
   calendar_days: number;
+  off_days?: number;  // NEW: Off days from backend
   total_working_days: number;
   present_days: number;
   absent_days: number;
@@ -533,6 +535,7 @@ const HRAttendanceTracker: React.FC = () => {
       department: record.department,
       date: record.date,
       calendar_days: record.calendar_days || 0,
+      off_days: record.off_days || 0,  // NEW: Use off_days from backend
       total_working_days: record.total_working_days || 30,
       present_days: record.present_days || 0,
       absent_days: record.absent_days || 0,
@@ -554,6 +557,7 @@ const HRAttendanceTracker: React.FC = () => {
       department: record.department,
       date: record.date,
       calendar_days: record.calendar_days,
+      off_days: record.off_days || 0,  // NEW: Use off_days from backend
       total_working_days: record.total_working_days,
       present_days: record.present_days,
       absent_days: record.absent_days,
@@ -831,10 +835,12 @@ const HRAttendanceTracker: React.FC = () => {
                     </>
                   ) : (
                     <>
+                      <th className="text-left text-sm font-medium text-gray-600 px-4 py-3">Total Days</th>
+                      <th className="text-left text-sm font-medium text-gray-600 px-4 py-3">Off Days</th>
+                      <th className="text-left text-sm font-medium text-gray-600 px-4 py-3">Holidays</th>
                       <th className="text-left text-sm font-medium text-gray-600 px-4 py-3">Total Working Days</th>
                       <th className="text-left text-sm font-medium text-gray-600 px-4 py-3">Present Days</th>
                       <th className="text-left text-sm font-medium text-gray-600 px-4 py-3">Absent Days</th>
-                      <th className="text-left text-sm font-medium text-gray-600 px-4 py-3">Holidays</th>
                       <th className="text-left text-sm font-medium text-gray-600 px-4 py-3">OT Hours</th>
                       <th className="text-left text-sm font-medium text-gray-600 px-4 py-3">Late Minutes</th>
                       <th className="text-left text-sm font-medium text-gray-600 px-4 py-3">Attendance %</th>
@@ -845,7 +851,7 @@ const HRAttendanceTracker: React.FC = () => {
               <tbody className="divide-y divide-gray-100">
                 {finalData.length === 0 ? (
                   <tr>
-                    <td colSpan={filterType === 'one_day' ? 6 : 10} className="px-4 py-6 text-center text-gray-500">
+                    <td colSpan={filterType === 'one_day' ? 6 : 12} className="px-4 py-6 text-center text-gray-500">
                       {filterType === 'one_day' 
                         ? 'No attendance records found for the selected date.' 
                         : attendanceStatus?.is_active 
@@ -858,9 +864,12 @@ const HRAttendanceTracker: React.FC = () => {
                   finalData.map((record, index) => {
                     // Use totals provided by the backend; avoid client-side recomputation where data exists
                     const totalWorkingDays = record.total_working_days ?? 0;
+                    const calendarDays = record.calendar_days ?? 0;
+                    const holidayDays = record.holiday_days ?? 0;
                     const absentDays = record.absent_days ?? Math.max(0, totalWorkingDays - (record.present_days ?? 0));
-                    const attendancePercentage = totalWorkingDays > 0 
-                      ? (record.present_days / totalWorkingDays * 100) 
+                    const offDays = record.off_days ?? 0;  // Use off_days from backend
+                    const attendancePercentage = calendarDays > 0 
+                      ? ((calendarDays - absentDays) / calendarDays) * 100 
                       : 0;
                     
                     return (
@@ -916,10 +925,12 @@ const HRAttendanceTracker: React.FC = () => {
                           </>
                         ) : (
                           <>
+                            <td className="px-4 py-3 text-sm">{calendarDays}</td>
+                            <td className="px-4 py-3 text-sm">{offDays}</td>
+                            <td className="px-4 py-3 text-sm">{holidayDays}</td>
                             <td className="px-4 py-3 text-sm">{totalWorkingDays.toFixed(0)}</td>
                             <td className="px-4 py-3 text-sm">{record.present_days.toFixed(1)}</td>
                             <td className="px-4 py-3 text-sm">{absentDays.toFixed(1)}</td>
-                            <td className="px-4 py-3 text-sm text-purple-600 font-medium">{record.holiday_days || 0}</td>
                             <td className="px-4 py-3 text-sm">{(typeof record.ot_hours === 'string' ? parseFloat(record.ot_hours) || 0 : record.ot_hours || 0).toFixed(1)}</td>
                             <td className="px-4 py-3 text-sm">{record.late_minutes.toFixed(0)}</td>
                             <td className="px-4 py-3 text-sm">
@@ -966,4 +977,4 @@ const HRAttendanceTracker: React.FC = () => {
   );
 };
 
-export default HRAttendanceTracker; 
+export default HRAttendanceTracker;

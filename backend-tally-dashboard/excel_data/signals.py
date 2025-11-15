@@ -146,7 +146,7 @@ def sync_attendance_from_daily(sender, instance, **kwargs):
         ]
         
         # Clear specific date/month caches
-        from datetime import date as _date
+        from datetime import date as _date, timedelta
         month_start = _date(year, month, 1)
         date_str = month_start.strftime('%Y-%m-%d')
         cache_keys_to_clear.extend([
@@ -155,6 +155,15 @@ def sync_attendance_from_daily(sender, instance, **kwargs):
             f"eligible_employees_progressive_{tenant_id}_{date_str}_remaining",
             f"total_eligible_count_{tenant_id}_{date_str}",
         ])
+        
+        # Clear weekly attendance cache for the specific date and all days in that week
+        # Weekly attendance shows a week's data, so we need to invalidate cache for all 7 days
+        attendance_date = instance.date
+        start_of_week = attendance_date - timedelta(days=attendance_date.weekday())  # Monday
+        for day_offset in range(7):  # Clear cache for all 7 days of the week
+            week_date = start_of_week + timedelta(days=day_offset)
+            week_cache_key = f"weekly_attendance_{tenant_id}_{week_date.isoformat()}"
+            cache_keys_to_clear.append(week_cache_key)
         
         # Clear caches
         cleared_count = 0

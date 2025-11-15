@@ -61,6 +61,7 @@ interface AttendanceEntry {
   ot_hours: number;
   late_minutes: number;
   has_off_day: boolean;
+  weeklyAttendance: { [day: string]: boolean }; // Example: { M: true, T: false, W: true, ... }
   _shiftStart?: string;
   _shiftEnd?: string;
   _prevClockIn?: string;
@@ -524,7 +525,7 @@ const HRAttendanceLog: React.FC = () => {
 
     } catch (error) {
       logger.error('❌ Background loading failed:', error);
-      // Don't show error for background loading failure - initial data is still available
+      // Don't show error to user since initial data is still available
       // Still mark as complete since initial batch is available
       setProgressiveLoadingComplete(true);
     }
@@ -621,6 +622,11 @@ const HRAttendanceLog: React.FC = () => {
       // Create new entry with determined status
       const entry = createAttendanceEntry(emp, status);
       
+      // Preserve weekly attendance data from existing entry if available
+      if (existingEntry?.weeklyAttendance) {
+        entry.weeklyAttendance = existingEntry.weeklyAttendance;
+      }
+      
       // If there's existing attendance data from backend, use the actual values
       if (emp.current_attendance && status !== 'unmarked') {
         entry.ot_hours = emp.current_attendance.ot_hours || 0;
@@ -670,6 +676,7 @@ const HRAttendanceLog: React.FC = () => {
       ot_hours: emp.ot_hours || 0,
       late_minutes: emp.late_minutes || 0,
       has_off_day: emp.has_off_day || false,
+      weeklyAttendance: {}, // Initialize as empty, will be populated by backend
       _shiftStart: emp.shift_start_time || '09:00',
       _shiftEnd: emp.shift_end_time || '18:00'
     };
@@ -1017,7 +1024,62 @@ const HRAttendanceLog: React.FC = () => {
     }
   };
 
-  // ...existing code...
+  // Add a function to fetch weekly attendance for the selected day
+  const fetchWeeklyAttendance = async (date: string) => {
+    try {
+      const response = await apiCall(`/api/attendance/weekly/?date=${date}`);
+      if (response.ok) {
+        const data = await response.json();
+        logger.info('Weekly attendance data received:', data);
+        // Update attendance entries with weekly attendance data
+        // Backend returns an object with employee_id as keys
+        setAttendanceEntries((prev) => {
+          const updatedEntries = new Map(prev);
+          Object.entries(data).forEach(([employeeId, employeeData]: [string, any]) => {
+            // Check if this employee exists in our current entries
+            if (updatedEntries.has(employeeId)) {
+              const existingEntry = updatedEntries.get(employeeId);
+              if (existingEntry) {
+                // Merge weekly attendance data
+                updatedEntries.set(employeeId, {
+                  ...existingEntry,
+                  weeklyAttendance: employeeData.weeklyAttendance || {},
+                });
+                logger.info(`Updated weekly attendance for ${employeeId}:`, employeeData.weeklyAttendance);
+              }
+            } else {
+              // If employee not in entries yet, create a basic entry with weekly attendance
+              // This ensures data is available when the employee is later added
+              updatedEntries.set(employeeId, {
+                employee_id: employeeId,
+                name: employeeData.name || employeeId,
+                department: '',
+                status: 'unmarked',
+                clock_in: '09:00',
+                clock_out: '18:00',
+                ot_hours: 0,
+                late_minutes: 0,
+                has_off_day: false,
+                weeklyAttendance: employeeData.weeklyAttendance || {},
+              });
+            }
+          });
+          return updatedEntries;
+        });
+      } else {
+        logger.error('Failed to fetch weekly attendance:', response.status);
+      }
+    } catch (error) {
+      logger.error('Error fetching weekly attendance:', error);
+    }
+  };
+
+  // Call fetchWeeklyAttendance when the selected date changes or when employees are loaded
+  useEffect(() => {
+    if (selectedDate && eligibleEmployees.length > 0) {
+      fetchWeeklyAttendance(selectedDate);
+    }
+  }, [selectedDate, eligibleEmployees.length]);
 
   return (
     <div className="space-y-6">
@@ -1306,12 +1368,13 @@ const HRAttendanceLog: React.FC = () => {
                   <th className="text-left text-sm font-medium text-gray-600 px-4 py-3">Clock Out</th>
                   <th className="text-left text-sm font-medium text-gray-600 px-4 py-3">OT Hours</th>
                   <th className="text-left text-sm font-medium text-gray-600 px-4 py-3">Late Minutes</th>
+                  <th className="text-left text-sm font-medium text-gray-600 px-4 py-3">Weekly Attendance</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-100">
                 {displayedEmployees.length === 0 ? (
                   <tr>
-                    <td colSpan={8} className="px-4 py-6 text-center text-gray-500">
+                    <td colSpan={9} className="px-4 py-6 text-center text-gray-500">
                       {searchQuery ? 'No employees found matching your search.' : 'No attendance data available for this date.'}
                     </td>
                   </tr>
@@ -1459,6 +1522,26 @@ const HRAttendanceLog: React.FC = () => {
                           ) : (
                             <span>{entry.late_minutes}</span>
                           )}
+                        </td>
+                        <td className="px-4 py-3 text-sm">
+                          <div className="flex gap-1">
+                            {['M', 'Tu', 'W', 'Th', 'F', 'Sa', 'Su'].map((day) => {
+                              const isPresent = entry?.weeklyAttendance?.[day] === true;
+                              return (
+                                <span
+                                  key={day}
+                                  className={`px-2 py-1 rounded text-xs font-medium border ${
+                                    isPresent
+                                      ? 'bg-teal-100 text-teal-800 border-teal-700'
+                                      : 'bg-gray-100 text-gray-600 border-gray-300'
+                                  }`}
+                                  title={isPresent ? 'Present' : 'Absent/Unmarked'}
+                                >
+                                  {day}
+                                </span>
+                              );
+                            })}
+                          </div>
                         </td>
                       </tr>
                     );
