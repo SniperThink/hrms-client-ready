@@ -214,17 +214,24 @@ const HRAttendanceLog: React.FC = () => {
       invalidateHolidayCache();
     };
 
+    const handleEmployeeStatusChange = () => {
+      logger.info( '🔄 Employee status change detected, invalidating cache');
+      invalidateCache();
+    };
+
     // Listen for custom events that indicate data changes
     window.addEventListener('dataUploaded', handleDataChange);
     window.addEventListener('employeeAdded', handleDataChange);
     window.addEventListener('attendanceUpdated', handleDataChange);
     window.addEventListener('holidayUpdated', handleHolidayChange);
+    window.addEventListener('employeeStatusChanged', handleEmployeeStatusChange);
 
     return () => {
       window.removeEventListener('dataUploaded', handleDataChange);
       window.removeEventListener('employeeAdded', handleDataChange);
       window.removeEventListener('attendanceUpdated', handleDataChange);
       window.removeEventListener('holidayUpdated', handleHolidayChange);
+      window.removeEventListener('employeeStatusChanged', handleEmployeeStatusChange);
     };
   }, []);
 
@@ -274,6 +281,8 @@ const HRAttendanceLog: React.FC = () => {
   // Handle date change with loading state
   const handleDateChange = async (newDate: string) => {
     setDateLoading(true);
+    // Invalidate cache for the old date to ensure fresh data for new date
+    invalidateCache();
     setSelectedDate(newDate);
     setHasExcelAttendance(false); // Reset Excel attendance flag when date changes
     setDisplayedCount(INITIAL_DISPLAY_COUNT); // Reset displayed count on date change
@@ -613,10 +622,15 @@ const HRAttendanceLog: React.FC = () => {
       
       logger.info( `🔍 Final status for ${emp.employee_id}: ${status}`);
       
-      // If we have an existing entry AND no saved backend data, preserve the entire entry
+      // If we have an existing entry AND no saved backend data, preserve the entry but update has_off_day
       if (existingEntry && !emp.current_attendance?.status) {
-        newEntries.set(emp.employee_id, existingEntry);
-        return; // Skip creating new entry, preserve user's changes
+        // Update has_off_day flag for the new date (important when date changes)
+        const updatedEntry = {
+          ...existingEntry,
+          has_off_day: emp.has_off_day || false, // Update from new employee data
+        };
+        newEntries.set(emp.employee_id, updatedEntry);
+        return; // Skip creating new entry, preserve user's changes but update off day flag
       }
       
       // Create new entry with determined status
@@ -687,7 +701,10 @@ const HRAttendanceLog: React.FC = () => {
     // But prevent changing from off-day to 'absent' (should use 'off' instead)
     if (field === 'status') {
       const entry = attendanceEntries.get(employeeId);
-      if (entry && entry.has_off_day && value === 'absent') {
+      // Check both entry and employee for has_off_day (employee is source of truth)
+      const employee = eligibleEmployees.find(emp => emp.employee_id === employeeId);
+      const hasOffDay = entry?.has_off_day !== undefined ? entry.has_off_day : (employee?.has_off_day || false);
+      if (entry && hasOffDay && value === 'absent') {
         // Employee has off day - can't mark as absent, use 'off' instead
         value = 'off';
       }
@@ -749,7 +766,16 @@ const HRAttendanceLog: React.FC = () => {
       setSaving(true);
 
       // Check for unmarked attendance entries
-      const unmarkedEntries = Array.from(attendanceEntries.values()).filter(entry => entry.status === 'unmarked');
+      const unmarkedEntries = Array.from(attendanceEntries.values()).filter(entry => {
+        // If off day → unmarked is allowed → do NOT count
+        const emp = eligibleEmployees.find(e => e.employee_id === entry.employee_id);
+        const isOffDay = entry.has_off_day || emp?.has_off_day;
+      
+        if (isOffDay) return false; // Skip off-day from unmarked validation
+      
+        return entry.status === 'unmarked';
+      });
+      
       
       if (unmarkedEntries.length > 0) {
         setSaving(false);
@@ -971,7 +997,9 @@ const HRAttendanceLog: React.FC = () => {
       // Skip employees with off days
       departmentFilteredEmployees.forEach(emp => {
         const entry = newMap.get(emp.employee_id);
-        if (entry && !entry.has_off_day && entry.status !== 'off') {
+        // Use employee.has_off_day as fallback if entry doesn't have it
+        const hasOffDay = entry?.has_off_day !== undefined ? entry.has_off_day : (emp.has_off_day || false);
+        if (entry && !hasOffDay && entry.status !== 'off') {
           newMap.set(emp.employee_id, { ...entry, status: 'present' });
         }
       });
@@ -989,7 +1017,9 @@ const HRAttendanceLog: React.FC = () => {
       // Skip employees with off days
       departmentFilteredEmployees.forEach(emp => {
         const entry = newMap.get(emp.employee_id);
-        if (entry && !entry.has_off_day && entry.status !== 'off') {
+        // Use employee.has_off_day as fallback if entry doesn't have it
+        const hasOffDay = entry?.has_off_day !== undefined ? entry.has_off_day : (emp.has_off_day || false);
+        if (entry && !hasOffDay && entry.status !== 'off') {
           newMap.set(emp.employee_id, { ...entry, status: 'absent' });
         }
       });
@@ -1173,7 +1203,12 @@ const HRAttendanceLog: React.FC = () => {
               className={`flex items-center gap-2 px-6 py-2 rounded-lg text-sm disabled:opacity-50 disabled:cursor-not-allowed ${
                 hasExcelAttendance || isHoliday
                   ? 'bg-gray-400 text-white cursor-not-allowed'
-                  : Array.from(attendanceEntries.values()).some(entry => entry.status === 'unmarked')
+                  : Array.from(attendanceEntries.values())
+                  .some(entry => {
+                    const emp = eligibleEmployees.find(e => e.employee_id === entry.employee_id);
+                    const isOffDay = entry.has_off_day || emp?.has_off_day;
+                    return !isOffDay && entry.status === 'unmarked';
+                  })
                   ? 'bg-yellow-600 hover:bg-yellow-700 text-white'
                   : 'bg-teal-800 hover:bg-teal-900 text-white'
               }`}
@@ -1383,6 +1418,9 @@ const HRAttendanceLog: React.FC = () => {
                     const entry = attendanceEntries.get(employee.employee_id);
                     if (!entry) return null;
 
+                    // Use employee.has_off_day as fallback if entry doesn't have it
+                    const hasOffDay = entry.has_off_day !== undefined ? entry.has_off_day : (employee.has_off_day || false);
+
                     return (
                       <tr key={employee.employee_id} className={`hover:bg-gray-50 ${entry.status === 'unmarked' ? 'bg-yellow-50 border-l-4 border-yellow-400' : ''}`}>
                         <td className="px-4 py-3 text-sm font-medium">{employee.employee_id}</td>
@@ -1408,7 +1446,7 @@ const HRAttendanceLog: React.FC = () => {
                         </td>
                         <td className="px-4 py-3 text-sm">{employee.department || 'General'}</td>
                         <td className="px-4 py-3">
-                          {(entry.has_off_day || entry.status === 'off') && entry.status !== 'present' ? (
+                          {(hasOffDay || entry.status === 'off') && entry.status !== 'present' ? (
                             <div className="flex gap-2 items-center">
                               <span className="px-3 py-1 rounded text-sm font-medium bg-teal-100 text-teal-800 border border-teal-200">
                                 OFF DAY
@@ -1427,7 +1465,7 @@ const HRAttendanceLog: React.FC = () => {
                             </div>
                           ) : (
                             <div className="flex flex-col gap-1">
-                              {entry.has_off_day && entry.status === 'present' && (
+                              {hasOffDay && entry.status === 'present' && (
                                 <span className="text-xs text-orange-600 font-medium mb-1">⚠️ Off Day - Extra Pay</span>
                               )}
                               <div className="flex gap-2">
@@ -1441,7 +1479,7 @@ const HRAttendanceLog: React.FC = () => {
                                   className={`px-3 py-1 rounded text-sm font-medium ${(hasExcelAttendance || isHoliday)
                                       ? 'bg-gray-200 text-gray-400 cursor-not-allowed'
                                       : entry.status === 'present'
-                                      ? entry.has_off_day
+                                      ? hasOffDay
                                         ? 'bg-orange-100 text-orange-800 border border-orange-300'
                                         : 'bg-teal-100 text-teal-800 border border-teal-200'
                                       : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
@@ -1452,7 +1490,7 @@ const HRAttendanceLog: React.FC = () => {
                                 <button
                                   onClick={() => {
                                     // Toggle: if already absent/off, unmark it; otherwise mark as absent/off
-                                    if (entry.has_off_day) {
+                                    if (hasOffDay) {
                                       const newStatus = entry.status === 'off' ? 'unmarked' : 'off';
                                       updateAttendanceEntry(employee.employee_id, 'status', newStatus);
                                     } else {
@@ -1469,14 +1507,14 @@ const HRAttendanceLog: React.FC = () => {
                                     }`}
                                   title={isHoliday ? 'Cannot mark attendance on holidays' : hasExcelAttendance ? 'Disabled: Excel attendance uploaded' : ''}
                                 >
-                                  {entry.has_off_day ? 'Back to Off Day' : 'Absent'}
+                                  {hasOffDay ? 'Back to Off Day' : 'Absent'}
                                 </button>
                               </div>
                             </div>
                           )}
                         </td>
                         <td className="px-4 py-3">
-                          {(entry.has_off_day && entry.status !== 'present') || (entry.status === 'off') ? (
+                          {(hasOffDay && entry.status !== 'present') || (entry.status === 'off') ? (
                             <span className="text-gray-400">-</span>
                           ) : (
                             <input
@@ -1510,14 +1548,14 @@ const HRAttendanceLog: React.FC = () => {
                             />)}
                         </td>
                         <td className="px-4 py-3">
-                          {(entry.has_off_day && entry.status !== 'present') || (entry.status === 'off') ? (
+                          {(hasOffDay && entry.status !== 'present') || (entry.status === 'off') ? (
                             <span className="text-gray-400">-</span>
                           ) : (
                             <span>{entry.ot_hours}</span>
                           )}
                         </td>
                         <td className="px-4 py-3">
-                          {(entry.has_off_day && entry.status !== 'present') || (entry.status === 'off') ? (
+                          {(hasOffDay && entry.status !== 'present') || (entry.status === 'off') ? (
                             <span className="text-gray-400">-</span>
                           ) : (
                             <span>{entry.late_minutes}</span>

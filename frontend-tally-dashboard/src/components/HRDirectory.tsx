@@ -609,6 +609,11 @@ const HRDirectory: React.FC = () => {
               : emp
           )
         );
+        
+        // Dispatch event to notify other components (e.g., attendance log) to invalidate cache
+        window.dispatchEvent(new CustomEvent('employeeStatusChanged', { 
+          detail: { employeeId, is_active: !currentStatus, timestamp: Date.now() } 
+        }));
       } else {
         // Handle toggle failure silently
       }

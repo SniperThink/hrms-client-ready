@@ -550,6 +550,19 @@ def invalidate_cache_on_employee_update(sender, instance, created, **kwargs):
             cache.delete(f"attendance_all_records_{tenant_id}")
             logger.debug(f"✅ SIGNAL: Cleared attendance_all_records cache variations (manual fallback) for tenant {tenant_id}")
         
+        # CRITICAL: Clear eligible_employees cache patterns (for attendance log)
+        # This ensures that when employee active/inactive status changes, attendance log shows correct employees
+        try:
+            cache.delete_pattern(f"eligible_employees_{tenant_id}_*")
+            cache.delete_pattern(f"eligible_employees_progressive_{tenant_id}_*")
+            cache.delete_pattern(f"total_eligible_count_{tenant_id}_*")
+            logger.debug(f"✅ SIGNAL: Cleared all eligible_employees cache patterns for tenant {tenant_id}")
+        except (AttributeError, NotImplementedError):
+            # Fallback: Clear base keys (less optimal but works)
+            cache.delete(f"eligible_employees_{tenant_id}")
+            cache.delete(f"total_eligible_count_{tenant_id}")
+            logger.debug(f"✅ SIGNAL: Cleared eligible_employees base cache (fallback) for tenant {tenant_id}")
+        
         # Clear frontend charts cache (pattern matching)
         try:
             cache.delete_pattern(f"frontend_charts_{tenant_id}_*")

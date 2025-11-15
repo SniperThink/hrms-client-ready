@@ -193,6 +193,11 @@ const EmployeeConfirmationModal: React.FC<EmployeeConfirmationModalProps> = ({
           )
         );
         logger.info(`✅ ${data.is_active ? 'Activated' : 'Deactivated'} employee ${employee.employee_id}`);
+        
+        // Dispatch event to notify other components (e.g., attendance log) to invalidate cache
+        window.dispatchEvent(new CustomEvent('employeeStatusChanged', { 
+          detail: { employeeId: employee.employee_id, is_active: data.is_active, timestamp: Date.now() } 
+        }));
       } else {
         const errorData = await response.json().catch(() => ({}));
         logger.error(`Failed to toggle employee status ${employee.employee_id}:`, errorData);
