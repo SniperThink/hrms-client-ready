@@ -283,6 +283,8 @@ const HRAttendanceLog: React.FC = () => {
     setDateLoading(true);
     // Invalidate cache for the old date to ensure fresh data for new date
     invalidateCache();
+    // Clear attendance entries to prevent old weekly data from showing
+    setAttendanceEntries(new Map());
     setSelectedDate(newDate);
     setHasExcelAttendance(false); // Reset Excel attendance flag when date changes
     setDisplayedCount(INITIAL_DISPLAY_COUNT); // Reset displayed count on date change
@@ -562,9 +564,9 @@ const HRAttendanceLog: React.FC = () => {
   };
 
   // Helper function to initialize attendance entries
-  const initializeAttendanceEntries = (employees: Employee[]) => {
-    // Preserve existing entries to maintain user changes (especially for off-day employees marked as present)
-    const existingEntries = new Map(attendanceEntries);
+  const initializeAttendanceEntries = (employees: Employee[], preserveWeeklyData: boolean = false) => {
+    // Only preserve weekly attendance data if explicitly requested (for same date updates)
+    const existingEntries = preserveWeeklyData ? new Map(attendanceEntries) : new Map();
     const newEntries = new Map<string, AttendanceEntry>();
     
     logger.info( '🔍 Initializing attendance entries for', employees.length, 'employees');
@@ -577,14 +579,14 @@ const HRAttendanceLog: React.FC = () => {
         has_off_day: emp.has_off_day
       });
       
-      // Check if we have an existing entry (preserve user changes)
-      const existingEntry = existingEntries.get(emp.employee_id);
+      // Get existing entry only if we want to preserve weekly data
+      const existingEntry = preserveWeeklyData ? existingEntries.get(emp.employee_id) : undefined;
       
       // Determine status with priority:
       // 1. Saved data from backend (current_attendance.status) - highest priority
-      // 2. Existing user changes (if no saved data)
-      // 3. Default status from backend
-      // 4. Default to 'off' for off-day employees (only if no saved data)
+      // 2. Default status from backend
+      // 3. Default to 'off' for off-day employees (only if no saved data)
+      // 4. Default to 'unmarked'
       let status: 'present' | 'absent' | 'off' | 'unmarked';
       
       // Priority 1: Check current_attendance.status first (saved data from backend)
@@ -598,12 +600,7 @@ const HRAttendanceLog: React.FC = () => {
           status = 'unmarked';
         }
       }
-      // Priority 2: Preserve existing user changes if no saved backend data
-      else if (existingEntry) {
-        status = existingEntry.status;
-        logger.info( `🔍 Preserving existing user change for ${emp.employee_id}: ${status}`);
-      }
-      // Priority 3: Use default_status from backend
+      // Priority 2: Use default_status from backend
       else if (emp.default_status === 'present') {
         status = 'present';
       } else if (emp.default_status === 'absent') {
@@ -611,33 +608,22 @@ const HRAttendanceLog: React.FC = () => {
       } else if (emp.default_status === 'off') {
         status = 'off';
       }
-      // Priority 4: If employee has off day and no existing data, default to 'off'
+      // Priority 3: If employee has off day and no existing data, default to 'off'
       else if (emp.has_off_day) {
         status = 'off';
       }
-      // Priority 5: No existing attendance data, leave unmarked
+      // Priority 4: No existing attendance data, leave unmarked
       else {
         status = 'unmarked';
       }
       
       logger.info( `🔍 Final status for ${emp.employee_id}: ${status}`);
       
-      // If we have an existing entry AND no saved backend data, preserve the entry but update has_off_day
-      if (existingEntry && !emp.current_attendance?.status) {
-        // Update has_off_day flag for the new date (important when date changes)
-        const updatedEntry = {
-          ...existingEntry,
-          has_off_day: emp.has_off_day || false, // Update from new employee data
-        };
-        newEntries.set(emp.employee_id, updatedEntry);
-        return; // Skip creating new entry, preserve user's changes but update off day flag
-      }
-      
       // Create new entry with determined status
       const entry = createAttendanceEntry(emp, status);
       
-      // Preserve weekly attendance data from existing entry if available
-      if (existingEntry?.weeklyAttendance) {
+      // Only preserve weekly attendance data if requested and available
+      if (preserveWeeklyData && existingEntry?.weeklyAttendance) {
         entry.weeklyAttendance = existingEntry.weeklyAttendance;
       }
       
@@ -1057,14 +1043,27 @@ const HRAttendanceLog: React.FC = () => {
   // Add a function to fetch weekly attendance for the selected day
   const fetchWeeklyAttendance = async (date: string) => {
     try {
+      logger.info(`📅 Fetching weekly attendance for date: ${date}`);
       const response = await apiCall(`/api/attendance/weekly/?date=${date}`);
       if (response.ok) {
         const data = await response.json();
-        logger.info('Weekly attendance data received:', data);
+        logger.info('📊 Weekly attendance data received:', data);
+        
+        // Log a sample of the data to verify structure
+        const sampleEmployeeIds = Object.keys(data).slice(0, 2);
+        if (sampleEmployeeIds.length > 0) {
+          logger.info('📋 Sample employee data:', {
+            employeeId: sampleEmployeeIds[0],
+            data: data[sampleEmployeeIds[0]]
+          });
+        }
+        
         // Update attendance entries with weekly attendance data
         // Backend returns an object with employee_id as keys
         setAttendanceEntries((prev) => {
           const updatedEntries = new Map(prev);
+          let updatedCount = 0;
+          
           Object.entries(data).forEach(([employeeId, employeeData]: [string, any]) => {
             // Check if this employee exists in our current entries
             if (updatedEntries.has(employeeId)) {
@@ -1075,7 +1074,7 @@ const HRAttendanceLog: React.FC = () => {
                   ...existingEntry,
                   weeklyAttendance: employeeData.weeklyAttendance || {},
                 });
-                logger.info(`Updated weekly attendance for ${employeeId}:`, employeeData.weeklyAttendance);
+                updatedCount++;
               }
             } else {
               // If employee not in entries yet, create a basic entry with weekly attendance
@@ -1094,22 +1093,25 @@ const HRAttendanceLog: React.FC = () => {
               });
             }
           });
+          
+          logger.info(`✅ Updated weekly attendance for ${updatedCount} employees`);
           return updatedEntries;
         });
       } else {
-        logger.error('Failed to fetch weekly attendance:', response.status);
+        logger.error('❌ Failed to fetch weekly attendance:', response.status);
       }
     } catch (error) {
-      logger.error('Error fetching weekly attendance:', error);
+      logger.error('❌ Error fetching weekly attendance:', error);
     }
   };
 
   // Call fetchWeeklyAttendance when the selected date changes or when employees are loaded
   useEffect(() => {
-    if (selectedDate && eligibleEmployees.length > 0) {
+    if (selectedDate && eligibleEmployees.length > 0 && attendanceEntries.size > 0) {
+      logger.info(`🔄 Fetching weekly attendance for date: ${selectedDate}, employees: ${eligibleEmployees.length}`);
       fetchWeeklyAttendance(selectedDate);
     }
-  }, [selectedDate, eligibleEmployees.length]);
+  }, [selectedDate, eligibleEmployees.length, attendanceEntries.size]);
 
   return (
     <div className="space-y-6">
@@ -1564,7 +1566,10 @@ const HRAttendanceLog: React.FC = () => {
                         <td className="px-4 py-3 text-sm">
                           <div className="flex gap-1">
                             {['M', 'Tu', 'W', 'Th', 'F', 'Sa', 'Su'].map((day) => {
-                              const isPresent = entry?.weeklyAttendance?.[day] === true;
+                              const weeklyData = entry?.weeklyAttendance || {};
+                              const dayValue = weeklyData[day];
+                              const isPresent = dayValue === true;
+                              
                               return (
                                 <span
                                   key={day}
