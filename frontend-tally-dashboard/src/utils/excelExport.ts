@@ -30,9 +30,11 @@ export interface PayrollData {
   employee_name: string;
   department: string;
   basic_salary: number;
+  total_days?: number; // Total days in the month
   working_days: number;
   present_days: number;
   absent_days: number;
+  off_days?: number; // Off days for the employee
   ot_hours: number;
   late_minutes: number;
   gross_salary: number;
@@ -131,9 +133,11 @@ export const exportPayrollToExcel = (data: PayrollData[], fileName: string = 'pa
     'Employee Name',
     'Department',
     'Basic Salary',
+    'Total Days',
     'Working Days',
     'Present Days',
     'Absent Days',
+    'Off Days',
     'OT Hours',
     'OT Charges',
     'Late Minutes',
@@ -159,9 +163,11 @@ export const exportPayrollToExcel = (data: PayrollData[], fileName: string = 'pa
       item.employee_name,
       item.department,
       item.basic_salary,
+      item.total_days || 30, // Total days in the month
       item.working_days,
       item.present_days,
       item.absent_days,
+      item.off_days || 0, // Off days
       item.ot_hours,
       item.ot_charges,
       item.late_minutes,
@@ -188,9 +194,11 @@ export const exportPayrollToExcel = (data: PayrollData[], fileName: string = 'pa
     { wch: 20 }, // Employee Name
     { wch: 15 }, // Department
     { wch: 12 }, // Basic Salary
+    { wch: 10 }, // Total Days
     { wch: 12 }, // Working Days
     { wch: 12 }, // Present Days
     { wch: 12 }, // Absent Days
+    { wch: 10 }, // Off Days
     { wch: 10 }, // OT Hours
     { wch: 12 }, // OT Charges
     { wch: 12 }, // Late Minutes

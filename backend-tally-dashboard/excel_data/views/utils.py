@@ -396,7 +396,7 @@ def bulk_update_attendance(request):
         if attendance_date > datetime.now().date():
             return Response({"error": "Cannot mark attendance for future dates"}, status=400)
         
-        # Check if date is a holiday
+        # Check if date is a holiday - optimize by doing this once upfront
         from ..models import Holiday
         from ..utils.utils import get_current_tenant
         
@@ -405,8 +405,11 @@ def bulk_update_attendance(request):
         if not tenant_for_holiday:
             tenant_for_holiday = tenant
         
+        holiday_applies = False
+        holiday_info = None
+        
         if tenant_for_holiday:
-            # Check if date is a holiday
+            # Check if date is a holiday (single query)
             holiday = Holiday.objects.filter(
                 tenant=tenant_for_holiday,
                 date=attendance_date,
@@ -414,8 +417,7 @@ def bulk_update_attendance(request):
             ).first()
             
             if holiday:
-                # Check if holiday applies to any of the employees' departments
-                # Get unique departments from attendance records
+                # Get unique departments from attendance records once
                 departments_in_request = set()
                 for record in attendance_records:
                     dept = record.get('department', '')
@@ -423,12 +425,12 @@ def bulk_update_attendance(request):
                         departments_in_request.add(dept)
                 
                 # Check if holiday applies
-                applies = holiday.applies_to_all
-                if not applies and holiday.specific_departments:
-                    holiday_departments = [d.strip() for d in holiday.specific_departments.split(',')]
-                    applies = any(dept in holiday_departments for dept in departments_in_request)
+                holiday_applies = holiday.applies_to_all
+                if not holiday_applies and holiday.specific_departments:
+                    holiday_departments = set(d.strip() for d in holiday.specific_departments.split(','))
+                    holiday_applies = bool(departments_in_request & holiday_departments)  # Set intersection
                 
-                if applies:
+                if holiday_applies:
                     # Holiday applies - block attendance marking
                     error_message = f"Cannot mark attendance on holiday: {holiday.name}"
                     if holiday.description:
@@ -452,11 +454,17 @@ def bulk_update_attendance(request):
             return Response({"error": "No valid employee IDs found"}, status=400)
         
         # Bulk fetch all employees in one query
+        # Only fetch the fields we actually need to reduce memory and DB overhead
         employees = EmployeeProfile.objects.filter(
             tenant=tenant,
             employee_id__in=employee_ids,
             is_active=True
-        ).select_related()  # Optimize related queries
+        ).only(
+            'employee_id', 'first_name', 'last_name', 'department', 
+            'designation', 'employment_type', 'date_of_joining',
+            'off_monday', 'off_tuesday', 'off_wednesday', 'off_thursday',
+            'off_friday', 'off_saturday', 'off_sunday'
+        )
         
         # Create employee lookup dictionary for fast access
         employee_lookup = {emp.employee_id: emp for emp in employees}
@@ -587,81 +595,40 @@ def bulk_update_attendance(request):
         processing_time = time.time() - processing_start_time
         logger.info(f"OPTIMIZED: Processed {len(attendance_records)} records in {processing_time:.3f}s")
         
-        # ULTRA OPTIMIZED: Perform bulk operations with raw SQL for maximum speed
+        # ULTRA OPTIMIZED: Perform bulk operations with Django ORM (faster and safer than raw SQL)
         db_start_time = time.time()
         
         with transaction.atomic():
-            # ULTRA FAST: Use raw SQL for bulk operations instead of ORM
-            from django.db import connection
+            # BATCH SIZE: Process in optimal batches for PostgreSQL
+            # PostgreSQL performs best with batches of 500-1000 records
+            BATCH_SIZE = 500
             
-            # OPTIMIZED: Bulk create with raw SQL (much faster than ORM)
+            # OPTIMIZED: Bulk create using Django ORM (faster than raw SQL for large batches)
             if records_to_create:
-                cursor = connection.cursor()
-                
-                # Prepare bulk insert query
-                insert_values = []
-                for record in records_to_create:
-                    # Escape single quotes properly for SQL
-                    safe_name = record.employee_name.replace("'", "''")
-                    safe_dept = record.department.replace("'", "''")
-                    safe_designation = record.designation.replace("'", "''")
-                    
-                    insert_values.append(
-                        f"('{record.tenant.id}', '{record.employee_id}', '{record.date}', "
-                        f"'{safe_name}', '{safe_dept}', "
-                        f"'{safe_designation}', '{record.employment_type}', '{record.attendance_status}', "
-                        f"{record.ot_hours}, {record.late_minutes}, NOW(), NOW())"
-                    )
-                
-                if insert_values:
-                    insert_query = f"""
-                        INSERT INTO excel_data_dailyattendance 
-                        (tenant_id, employee_id, date, employee_name, department, designation, 
-                         employment_type, attendance_status, ot_hours, late_minutes, created_at, updated_at)
-                        VALUES {', '.join(insert_values)}
-                    """
-                    cursor.execute(insert_query)
-                    logger.info(f"ULTRA FAST: Raw SQL bulk created {len(records_to_create)} records")
+                # Use bulk_create with batch_size for optimal performance
+                # ignore_conflicts=False ensures we catch unique constraint violations
+                DailyAttendance.objects.bulk_create(
+                    records_to_create,
+                    batch_size=BATCH_SIZE,
+                    ignore_conflicts=False
+                )
+                logger.info(f"✅ Django ORM bulk created {len(records_to_create)} records in batches of {BATCH_SIZE}")
             
-            # OPTIMIZED: Bulk update with raw SQL (much faster than ORM)
+            # OPTIMIZED: Bulk update using Django ORM (much faster than raw SQL CASE statements)
             if records_to_update:
-                cursor = connection.cursor()
+                # Update only the fields that changed - more efficient than updating all fields
+                fields_to_update = [
+                    'employee_name', 'department', 'designation', 'employment_type',
+                    'attendance_status', 'ot_hours', 'late_minutes', 'updated_at'
+                ]
                 
-                # Prepare bulk update queries (using CASE statements for efficiency)
-                employee_ids = [f"'{record.employee_id}'" for record in records_to_update]
-                
-                # Build CASE statements for each field
-                name_cases = []
-                dept_cases = []
-                status_cases = []
-                ot_cases = []
-                late_cases = []
-                
-                for record in records_to_update:
-                    eid = record.employee_id
-                    safe_name = record.employee_name.replace("'", "''")
-                    safe_dept = record.department.replace("'", "''")
-                    
-                    name_cases.append(f"WHEN employee_id = '{eid}' THEN '{safe_name}'")
-                    dept_cases.append(f"WHEN employee_id = '{eid}' THEN '{safe_dept}'")
-                    status_cases.append(f"WHEN employee_id = '{eid}' THEN '{record.attendance_status}'")
-                    ot_cases.append(f"WHEN employee_id = '{eid}' THEN {record.ot_hours}")
-                    late_cases.append(f"WHEN employee_id = '{eid}' THEN {record.late_minutes}")
-                
-                update_query = f"""
-                    UPDATE excel_data_dailyattendance SET
-                        employee_name = CASE {' '.join(name_cases)} END,
-                        department = CASE {' '.join(dept_cases)} END,
-                        attendance_status = CASE {' '.join(status_cases)} END,
-                        ot_hours = CASE {' '.join(ot_cases)} END,
-                        late_minutes = CASE {' '.join(late_cases)} END,
-                        updated_at = NOW()
-                    WHERE tenant_id = '{tenant.id}' 
-                    AND date = '{attendance_date}' 
-                    AND employee_id IN ({', '.join(employee_ids)})
-                """
-                cursor.execute(update_query)
-                logger.info(f"ULTRA FAST: Raw SQL bulk updated {len(records_to_update)} records")
+                # Django's bulk_update is highly optimized with proper query planning
+                DailyAttendance.objects.bulk_update(
+                    records_to_update,
+                    fields_to_update,
+                    batch_size=BATCH_SIZE
+                )
+                logger.info(f"✅ Django ORM bulk updated {len(records_to_update)} records in batches of {BATCH_SIZE}")
         
         db_operation_time = time.time() - db_start_time
         logger.info(f"OPTIMIZED: Core DB operations completed in {db_operation_time:.3f}s")
@@ -686,116 +653,70 @@ def bulk_update_attendance(request):
         summary_time = time.time() - summary_start_time
         logger.info(f"LIGHTNING OPTIMIZED: Summary processing completed in {summary_time:.3f}s")
         
-        # OPTIMIZED CACHE CLEARING: Clear critical caches immediately, comprehensive in background
+        # OPTIMIZED CACHE CLEARING: Clear only the most critical caches synchronously
+        # Defer comprehensive cache clearing to background thread for instant API response
         from django.core.cache import cache
         
         cache_start_time = time.time()
-        cache_keys_cleared = []
         tenant_id = tenant.id if tenant else 'default'
         
-        # Clear the most critical cache keys immediately for instant response
+        # Clear ONLY the most critical cache keys that affect immediate UI response
         critical_cache_keys = [
-            f"payroll_overview_{tenant_id}",
-            f"attendance_all_records_{tenant_id}",
-            f"eligible_employees_{tenant_id}_{date_str}",  # Critical for attendance log UI
+            f"eligible_employees_{tenant_id}_{date_str}",  # Critical for attendance log UI refresh
             f"eligible_employees_progressive_{tenant_id}_{date_str}_initial",
-            f"eligible_employees_progressive_{tenant_id}_{date_str}_remaining",
             f"directory_data_{tenant_id}",  # Critical for directory to show updated OT/late totals
-            f"directory_data_full_{tenant_id}",  # Critical for directory full dataset cache
-            f"weekly_attendance_{tenant_id}_{date_str}",  # Clear weekly attendance cache for this date
         ]
         
-        # Also clear weekly attendance cache for all days in the week (since weekly attendance shows a week's data)
-        from datetime import timedelta
+        # Use cache.delete_many for batch deletion (single operation instead of multiple)
+        cache.delete_many(critical_cache_keys)
+        
+        # Pattern-based deletion for attendance_all_records (most frequently accessed)
         try:
-            attendance_date_obj = datetime.strptime(date_str, '%Y-%m-%d').date()
-            start_of_week = attendance_date_obj - timedelta(days=attendance_date_obj.weekday())  # Monday
-            for day_offset in range(7):  # Clear cache for all 7 days of the week
-                week_date = start_of_week + timedelta(days=day_offset)
-                week_cache_key = f"weekly_attendance_{tenant_id}_{week_date.isoformat()}"
-                critical_cache_keys.append(week_cache_key)
-        except Exception as e:
-            logger.warning(f"Failed to calculate week dates for cache invalidation: {e}")
-        
-        for key in critical_cache_keys:
-            deleted = cache.delete(key)
-            if deleted:
-                cache_keys_cleared.append(key)
-                logger.debug(f"✅ Cleared critical cache key: {key}")
-        
-        logger.info(f"🗑️ Immediately cleared {len(cache_keys_cleared)} critical cache keys including directory cache")
-        
-        # CRITICAL: Clear all attendance_all_records cache variations (pattern-based)
-        # Cache keys follow pattern: attendance_all_records_{tenant_id}_{param_signature}
-        # param_signature format: {time_period}_{month}_{year}_{start_date}_{end_date}_rt_{prefer_realtime}
-        try:
-            # Try pattern-based deletion if available (works with Redis cache)
-            cache.delete_pattern(f"attendance_all_records_{tenant_id}_*")
-            logger.info(f"✅ Cleared all attendance_all_records cache variations for tenant {tenant_id} (pattern)")
+            # Try pattern-based deletion if available (Redis cache)
+            deleted_count = cache.delete_pattern(f"attendance_all_records_{tenant_id}_*")
+            logger.info(f"✅ Pattern-deleted attendance_all_records cache ({deleted_count} keys)")
         except (AttributeError, NotImplementedError):
-            # Fallback: Clear common variations manually (for database cache)
-            common_time_periods = ['last_6_months', 'last_12_months', 'last_5_years', 'this_month', 'custom', 'custom_month', 'custom_range', 'one_day']
-            cleared_count = 0
-            
-            for period in common_time_periods:
-                # Clear with different param combinations
-                variations = [
-                    f"attendance_all_records_{tenant_id}_{period}_None_None_None_None_rt_1",
-                    f"attendance_all_records_{tenant_id}_{period}_None_None_None_None_rt_0",
-                ]
-                
-                # For custom_month, also clear with actual month/year values for the uploaded date
-                if period == 'custom_month':
-                    month_num = attendance_date.month
-                    year_num = attendance_date.year
-                    variations.extend([
-                        f"attendance_all_records_{tenant_id}_custom_month_{month_num}_{year_num}_None_None_rt_1",
-                        f"attendance_all_records_{tenant_id}_custom_month_{month_num}_{year_num}_None_None_rt_0",
-                        # Also clear 'custom' alias (frontend compatibility)
-                        f"attendance_all_records_{tenant_id}_custom_{month_num}_{year_num}_None_None_rt_1",
-                        f"attendance_all_records_{tenant_id}_custom_{month_num}_{year_num}_None_None_rt_0",
-                    ])
-                
-                # For one_day and custom_range, also clear with date
-                if period in ['one_day', 'custom_range']:
-                    variations.append(f"attendance_all_records_{tenant_id}_{period}_None_None_{date_str}_{date_str}_rt_1")
-                    variations.append(f"attendance_all_records_{tenant_id}_{period}_None_None_{date_str}_{date_str}_rt_0")
-                
-                for var_key in variations:
-                    if cache.delete(var_key):
-                        cleared_count += 1
-            
-            logger.info(f"✅ Cleared {cleared_count} attendance_all_records cache variations for tenant {tenant_id} (manual fallback)")
+            # Fallback: Clear only the specific date/month variation
+            month_num = attendance_date.month
+            year_num = attendance_date.year
+            cache.delete_many([
+                f"attendance_all_records_{tenant_id}_custom_month_{month_num}_{year_num}_None_None_rt_1",
+                f"attendance_all_records_{tenant_id}_one_day_None_None_{date_str}_{date_str}_rt_1",
+            ])
         
         cache_clear_time = time.time() - cache_start_time
-        logger.info(f"LIGHTNING FAST: Cleared {len(critical_cache_keys)} critical cache keys in {cache_clear_time:.3f}s")
+        logger.info(f"⚡ Fast cache clear: {len(critical_cache_keys)} keys in {cache_clear_time:.3f}s")
         
-        # Prepare comprehensive cache keys for background clearing
+        
+        # Prepare comprehensive cache keys for background clearing (non-critical caches)
         comprehensive_cache_keys = [
             f"payroll_overview_{tenant_id}",
             f"months_with_attendance_{tenant_id}",
-            f"eligible_employees_{tenant_id}_{date_str}",
-            f"eligible_employees_opt_{tenant_id}_{date_str}_p1_s500",
-            f"eligible_employees_progressive_{tenant_id}_{date_str}_initial",
             f"eligible_employees_progressive_{tenant_id}_{date_str}_remaining",
             f"total_eligible_count_{tenant_id}_{date_str}",
-            f"directory_data_{tenant_id}",
             f"directory_data_full_{tenant_id}",
-            f"attendance_all_records_{tenant_id}",
             f"attendance_log_{tenant_id}",
             f"attendance_tracker_{tenant_id}",
             f"monthly_attendance_summary_{tenant_id}_{attendance_date.year}_{attendance_date.month}",
             f"dashboard_stats_{tenant_id}",
+            f"weekly_attendance_{tenant_id}_{date_str}",
         ]
         
-        # Also clear frontend charts cache (pattern matching in background)
-        comprehensive_cache_keys.append(f"frontend_charts_{tenant_id}_*")  # Mark for pattern deletion
-        # CRITICAL: Mark attendance_all_records for pattern deletion in background
-        comprehensive_cache_keys.append(f"attendance_all_records_{tenant_id}_*")  # Mark for pattern deletion
+        # Add weekly attendance cache for all days in the week
+        from datetime import timedelta
+        try:
+            start_of_week = attendance_date - timedelta(days=attendance_date.weekday())  # Monday
+            for day_offset in range(7):
+                week_date = start_of_week + timedelta(days=day_offset)
+                comprehensive_cache_keys.append(f"weekly_attendance_{tenant_id}_{week_date.isoformat()}")
+        except Exception as e:
+            logger.warning(f"Failed to add week dates for background cache clear: {e}")
         
-        # Add employee-specific cache keys
-        for employee_id in affected_employee_ids:
-            comprehensive_cache_keys.append(f"employee_attendance_{tenant.id}_{employee_id}")
+        # Mark patterns for background deletion
+        comprehensive_cache_keys.extend([
+            f"frontend_charts_{tenant_id}_*",
+            f"eligible_employees_opt_{tenant_id}_*",
+        ])
         
         # Store cache keys for background clearing
         cache_keys_for_background = comprehensive_cache_keys
@@ -872,76 +793,30 @@ def bulk_update_attendance(request):
                               f"Cache time: {perf.get('cache_clear_time', 'N/A')}")
                     
                     
-                    # Clear comprehensive caches in background
+                    # Clear comprehensive caches in background (simplified)
                     logger.info(f"🧵 BACKGROUND THREAD: Starting comprehensive cache clearing...")
                     cache_start_time = time.time()
                     
                     from django.core.cache import cache
-                    cache_keys_cleared_count = 0
                     
-                    # Clear all comprehensive cache keys
-                    for cache_key in cache_keys_for_background:
-                        # Handle pattern deletion for cache keys ending with _*
-                        if cache_key.endswith('_*'):
-                            try:
-                                # Try pattern-based deletion
-                                cache.delete_pattern(cache_key)
-                                cache_keys_cleared_count += 1
-                            except (AttributeError, NotImplementedError):
-                                # Fallback: Clear common variations manually
-                                base_pattern = cache_key.replace('_*', '')
-                                
-                                if 'frontend_charts' in cache_key:
-                                    # Frontend charts pattern
-                                    chart_keys = [
-                                        f"{base_pattern}_this_month_All_",
-                                        f"{base_pattern}_last_6_months_All_",
-                                        f"{base_pattern}_last_12_months_All_",
-                                        f"{base_pattern}_last_5_years_All_"
-                                    ]
-                                    for key in chart_keys:
-                                        cache.delete(key)
-                                        cache_keys_cleared_count += 1
-                                elif 'attendance_all_records' in cache_key:
-                                    # Attendance tracker pattern - clear common filter variations
-                                    common_time_periods = ['last_6_months', 'last_12_months', 'last_5_years', 'this_month', 'custom', 'custom_month', 'custom_range', 'one_day']
-                                    for period in common_time_periods:
-                                        variations = [
-                                            f"{base_pattern}_{period}_None_None_None_None_rt_1",
-                                            f"{base_pattern}_{period}_None_None_None_None_rt_0",
-                                        ]
-                                        
-                                        # For custom_month, also clear with actual month/year values
-                                        if period == 'custom_month':
-                                            # Use captured thread variables
-                                            month_num = attendance_month
-                                            year_num = attendance_year
-                                            variations.extend([
-                                                f"{base_pattern}_custom_month_{month_num}_{year_num}_None_None_rt_1",
-                                                f"{base_pattern}_custom_month_{month_num}_{year_num}_None_None_rt_0",
-                                                # Also clear 'custom' alias (frontend compatibility)
-                                                f"{base_pattern}_custom_{month_num}_{year_num}_None_None_rt_1",
-                                                f"{base_pattern}_custom_{month_num}_{year_num}_None_None_rt_0",
-                                            ])
-                                        
-                                        # For one_day and custom_range, also clear with date
-                                        if period in ['one_day', 'custom_range']:
-                                            variations.append(f"{base_pattern}_{period}_None_None_{attendance_date_str}_{attendance_date_str}_rt_1")
-                                            variations.append(f"{base_pattern}_{period}_None_None_{attendance_date_str}_{attendance_date_str}_rt_0")
-                                        
-                                        for var_key in variations:
-                                            if cache.delete(var_key):
-                                                cache_keys_cleared_count += 1
-                                else:
-                                    # Generic pattern - just delete the base key
-                                    cache.delete(base_pattern)
-                                    cache_keys_cleared_count += 1
-                        else:
-                            cache.delete(cache_key)
-                            cache_keys_cleared_count += 1
+                    # Try pattern-based deletion first (most efficient)
+                    patterns_cleared = 0
+                    try:
+                        patterns_to_clear = [
+                            f"frontend_charts_{tenant_id}_*",
+                            f"eligible_employees_opt_{tenant_id}_*",
+                        ]
+                        for pattern in patterns_to_clear:
+                            patterns_cleared += cache.delete_pattern(pattern)
+                        logger.info(f"✅ Pattern-deleted {patterns_cleared} cache keys")
+                    except (AttributeError, NotImplementedError):
+                        logger.info("ℹ️ Pattern deletion not supported, using delete_many")
+                    
+                    # Delete specific keys in batch (much faster than individual deletes)
+                    cache.delete_many([k for k in cache_keys_for_background if not k.endswith('_*')])
                     
                     cache_time = time.time() - cache_start_time
-                    logger.info(f"🧵 BACKGROUND THREAD: Cleared {cache_keys_cleared_count} cache keys in {cache_time:.3f}s")
+                    logger.info(f"🧵 BACKGROUND THREAD: Cleared caches in {cache_time:.3f}s")
                     
                     # Close database connections after thread completes
                     connections.close_all()

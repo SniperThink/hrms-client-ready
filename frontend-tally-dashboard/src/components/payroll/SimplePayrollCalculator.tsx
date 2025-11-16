@@ -22,9 +22,11 @@ interface PayrollEntry {
   employee_name: string;
   department: string;
   base_salary: number;
+  total_days?: number; // Total days in the month
   working_days: number;
   present_days: number;
   absent_days: number;
+  off_days?: number; // Off days for the employee
   holiday_days?: number; // Add holidays support
   ot_hours: number;
   late_minutes: number;
@@ -43,6 +45,7 @@ interface PayrollEntry {
 
 interface PayrollSummary {
   total_employees: number;
+  total_days?: number; // Total days in the month
   working_days: number;
   month_year: string;
   total_base_salary: number;
@@ -73,9 +76,11 @@ const SimplePayrollCalculator: React.FC = () => {
       employee_name: entry.employee_name,
       department: entry.department,
       basic_salary: entry.base_salary,
+      total_days: entry.total_days,
       working_days: entry.working_days,
       present_days: entry.present_days,
       absent_days: entry.absent_days,
+      off_days: entry.off_days,
       ot_hours: entry.ot_hours,
       late_minutes: entry.late_minutes,
       gross_salary: entry.gross_salary,
@@ -478,9 +483,11 @@ const SimplePayrollCalculator: React.FC = () => {
                   <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider sticky left-0 bg-gray-50 z-21 border-r border-gray-300">Employee</th>
                   <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Department</th>
                   <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Base Salary</th>
+                  <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Total Days</th>
                   <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Working Days</th>
                   <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Present</th>
                   <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Absent</th>
+                  <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Off Days</th>
                   <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Holidays</th>
                   <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">OT Hours</th>
                   <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">OT Charges</th>
@@ -505,10 +512,12 @@ const SimplePayrollCalculator: React.FC = () => {
                     </td>
                     <td className="px-4 py-4 whitespace-nowrap text-sm text-gray-900">{entry.department}</td>
                     <td className="px-4 py-4 whitespace-nowrap text-sm text-gray-900">₹{entry.base_salary.toLocaleString()}</td>
+                    <td className="px-4 py-4 whitespace-nowrap text-sm text-gray-900">{entry.total_days || summary?.total_days || 30}</td>
                     <td className="px-4 py-4 whitespace-nowrap text-sm text-gray-900">{entry.working_days}</td>
                     <td className="px-4 py-4 whitespace-nowrap text-sm text-gray-900">{entry.present_days}</td>
                     <td className="px-4 py-4 whitespace-nowrap text-sm text-gray-900">{entry.absent_days}</td>
-                    <td className="px-4 py-4 whitespace-nowrap text-sm text-teal-600 font-medium">{entry.holiday_days || 0}</td>
+                    <td className="px-4 py-4 whitespace-nowrap text-sm text-gray-900">{entry.off_days || 0}</td>
+                    <td className="px-4 py-4 whitespace-nowrap text-sm text-gray-900">{entry.holiday_days || 0}</td>
                     <td className="px-4 py-4 whitespace-nowrap text-sm text-gray-900">{entry.ot_hours}</td>
                     <td className="px-4 py-4 whitespace-nowrap text-sm text-gray-900">₹{(entry.ot_charges || 0).toLocaleString()}</td>
                     <td className="px-4 py-4 whitespace-nowrap text-sm text-gray-900">{entry.late_minutes || 0}</td>
