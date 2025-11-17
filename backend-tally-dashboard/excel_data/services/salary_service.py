@@ -80,7 +80,7 @@ class SalaryCalculationService:
             end_date: Optional end date (for partial month calculations)
             
         Returns:
-            list: List of date objects representing holidays
+            list: List of date objects representing holidays (only after employee's joining date)
         """
         import calendar
         
@@ -92,10 +92,19 @@ class SalaryCalculationService:
             total_days = calendar.monthrange(year, month_num)[1]
             end_date = date(year, month_num, total_days)
         
-        # Get employee department
+        # Get employee department and joining date
         department = SalaryCalculationService._get_value(employee, 'department')
+        date_of_joining = SalaryCalculationService._get_value(employee, 'date_of_joining')
         
-        # Get all active holidays in this period
+        # Adjust start_date if employee joined mid-month/mid-period
+        if date_of_joining and date_of_joining > start_date:
+            start_date = date_of_joining
+        
+        # If joining date is after the period end, no holidays apply
+        if date_of_joining and date_of_joining > end_date:
+            return []
+        
+        # Get all active holidays in this period (after joining date)
         holidays = Holiday.objects.filter(
             tenant=tenant,
             date__gte=start_date,
@@ -602,7 +611,7 @@ class SalaryCalculationService:
             
             return {
                 'total_working_days': salary_record.days + salary_record.absent,
-                'present_days': Decimal(str(salary_record.days)),
+                'present_days': Decimal(str(salary_record.days)) + Decimal(str(holiday_count)),  # Add holidays
                 'absent_days': Decimal(str(salary_record.absent)),
                 'ot_hours': salary_record.ot,
                 'late_minutes': salary_record.late,

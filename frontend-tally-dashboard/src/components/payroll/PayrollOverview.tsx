@@ -35,7 +35,10 @@ interface PayrollDetailEntry {
   department: string;
   basic_salary: number;
   working_days: number;
-  present_days: number;
+  raw_present_days?: number;  // Present days without holidays
+  paid_days?: number;  // Present days + holidays
+  present_days: number;  // Total paid days (includes holidays)
+  holiday_days?: number;  // Number of paid holidays
   absent_days: number;
   ot_hours: number;
   late_minutes: number;
@@ -186,7 +189,7 @@ const PayrollOverview: React.FC = () => {
       setDeleting(true);
       const response = await apiRequest(`/api/payroll-periods/${periodId}/`, {
         method: 'DELETE'
-      });
+      }) as DeleteResponse;
       
       // Check if response has success property (backend returns JSON with success: true)
       if (response && response.success) {
@@ -506,6 +509,8 @@ const PayrollOverview: React.FC = () => {
                     <th className="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Base Salary</th>
                     <th className="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Working Days</th>
                     <th className="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Present</th>
+                    <th className="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Holidays</th>
+                    <th className="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider bg-blue-50">Paid Days</th>
                     <th className="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Absent</th>
                     <th className="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">OT Hours</th>
                     <th className="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">OT Charges</th>
@@ -543,7 +548,13 @@ const PayrollOverview: React.FC = () => {
                       <td className="px-3 py-4 whitespace-nowrap text-sm text-gray-900">₹{(entry.basic_salary || 0).toLocaleString()}</td>
                       <td className="px-3 py-4 whitespace-nowrap text-sm text-gray-900">{entry.working_days || 0}</td>
                       <td className="px-3 py-4 whitespace-nowrap text-sm text-gray-900">
-                        {entry.present_days || 0}
+                        {entry.raw_present_days || entry.present_days - (entry.holiday_days || 0)}
+                      </td>
+                      <td className="px-3 py-4 whitespace-nowrap text-sm text-gray-600">
+                        {entry.holiday_days || 0}
+                      </td>
+                      <td className="px-3 py-4 whitespace-nowrap text-sm font-semibold text-blue-900 bg-blue-50">
+                        {entry.paid_days || entry.present_days || 0}
                       </td>
                       <td className="px-3 py-4 whitespace-nowrap text-sm text-gray-900">
                         {entry.absent_days || 0}

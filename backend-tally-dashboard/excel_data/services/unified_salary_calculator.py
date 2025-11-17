@@ -4,7 +4,15 @@ Unified Salary Calculator Service
 This service provides a centralized, standardized approach to salary calculations
 across the entire HRMS system, ensuring consistency and maintainability.
 
-Formula: Gross Salary = (Base Salary ÷ Working Days × Present Days) + OT Charges - Late Deduction
+Formula: 
+    Paid Days = PRESENT + PAID_HOLIDAYS (OFF days are already marked as PRESENT)
+    Daily Rate = Base Salary ÷ 30.4
+    Base Pay = Daily Rate × Paid Days
+    Hourly Rate = Base Salary ÷ (Shift Hours × 30.4)
+    OT Pay = Hourly Rate × OT Hours
+    Per-Minute Rate = Hourly Rate ÷ 60
+    Late Deduction = Per-Minute Rate × Late Minutes
+    Gross Salary = Base Pay + OT Pay - Late Deduction
 """
 
 from decimal import Decimal
@@ -31,12 +39,20 @@ class UnifiedSalaryCalculator:
     ) -> Dict[str, Decimal]:
         """
         Calculate gross salary using the standardized formula:
-        Gross Salary = (Base Salary ÷ Working Days × Present Days) + OT Charges - Late Deduction
+        
+        Note: present_days should already include PRESENT + PAID_HOLIDAYS
+        (OFF days are marked as PRESENT in attendance)
+        
+        Daily Rate = Base Salary ÷ 30.4
+        Base Pay = Daily Rate × Present Days (includes holidays)
+        OT Pay = OT Hours × OT Rate per Hour
+        Late Deduction = (OT Rate ÷ 60) × Late Minutes
+        Gross Salary = Base Pay + OT Pay - Late Deduction
         
         Args:
             base_salary: Employee's basic salary
             working_days: Total working days in the period
-            present_days: Number of days employee was present
+            present_days: Days employee was present (includes paid holidays)
             ot_hours: Overtime hours worked
             ot_rate_per_hour: Overtime rate per hour
             late_minutes: Total late minutes
@@ -46,12 +62,9 @@ class UnifiedSalaryCalculator:
             Dict containing all calculated salary components
         """
         
-        # 1. Calculate salary for present days
-        if working_days > 0:
-            daily_rate = base_salary / Decimal(str(working_days))
-            salary_for_present_days = daily_rate * present_days
-        else:
-            salary_for_present_days = Decimal('0')
+        # 1. Calculate salary for present days using 30.4 (average days per month)
+        daily_rate = base_salary / Decimal('30.4')
+        salary_for_present_days = daily_rate * present_days
         
         # 2. Calculate overtime charges
         ot_charges = ot_hours * ot_rate_per_hour
@@ -73,7 +86,7 @@ class UnifiedSalaryCalculator:
             'gross_salary': gross_salary,
             'incentive': incentive,
             'taxable_amount': taxable_amount,
-            'daily_rate': daily_rate if working_days > 0 else Decimal('0'),
+            'daily_rate': daily_rate,
             'late_deduction_per_minute': late_deduction_per_minute
         }
     

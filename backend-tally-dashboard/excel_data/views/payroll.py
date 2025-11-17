@@ -2505,21 +2505,9 @@ def calculate_simple_payroll_ultra_fast(request):
         
         logger.info(f"Loaded {len(employees)} employees in {time.time() - calc_start:.2f}s")
         
-        # Get all holidays for the month (single query)
-        holidays_start = time.time()
-        holidays = list(Holiday.objects.filter(
-            tenant=tenant,
-            date__year=year,
-            date__month=month_num
-        ).values_list('date', flat=True))
-        
-        holiday_dates_set = set(holidays)
-        logger.info(f"Loaded {len(holidays)} holidays in {time.time() - holidays_start:.2f}s")
-        
-        # Pre-calculate working days for each employee
+        # Pre-calculate working days and off days for each employee (holidays now handled in SQL)
         working_days_start = time.time()
         employee_working_days_map = {}
-        employee_holiday_count_map = {}
         employee_off_days_map = {}
         
         # Generate all dates in the month once
@@ -2541,9 +2529,8 @@ def calculate_simple_payroll_ultra_fast(request):
             employee_id = emp['employee_id']
             doj = emp.get('date_of_joining')
             
-            # Count working days, holidays, and off days for this employee
+            # Count working days and off days for this employee
             working_days = 0
-            holiday_count = 0
             off_days_count = 0
             
             for day_date in month_dates:
@@ -2560,13 +2547,8 @@ def calculate_simple_payroll_ultra_fast(request):
                     off_days_count += 1
                 else:
                     working_days += 1
-                    
-                    # Count as holiday if it's a working day AND in holiday list
-                    if day_date in holiday_dates_set:
-                        holiday_count += 1
             
             employee_working_days_map[employee_id] = working_days if working_days > 0 else 30
-            employee_holiday_count_map[employee_id] = holiday_count
             employee_off_days_map[employee_id] = off_days_count
         
         logger.info(f"Calculated working days for all employees in {time.time() - working_days_start:.2f}s")
@@ -2617,13 +2599,48 @@ def calculate_simple_payroll_ultra_fast(request):
                     SUM(COALESCE(absent_days, 0)) as absent_days,
                     SUM(COALESCE(ot_hours, 0)) as ot_hours,
                     SUM(COALESCE(late_minutes, 0)) as late_minutes,
-                    MAX(COALESCE(total_working_days, 0)) as uploaded_working_days
+                    MAX(COALESCE(total_working_days, 0)) as uploaded_working_days,
+                    MAX(COALESCE(holiday_days, 0)) as holiday_days
                 FROM excel_data_attendance 
                 WHERE tenant_id = %s 
                     AND EXTRACT(YEAR FROM date) = %s 
                     AND EXTRACT(MONTH FROM date) = %s
                 GROUP BY employee_id
                 HAVING SUM(COALESCE(present_days, 0)) > 0 OR SUM(COALESCE(absent_days, 0)) > 0
+            ),
+            -- Calculate holidays for each employee in this month (respecting DOJ and off days)
+            employee_holidays AS (
+                SELECT 
+                    e.employee_id,
+                    COUNT(DISTINCT h.date) as holiday_count
+                FROM excel_data_employeeprofile e
+                LEFT JOIN holidays h ON h.tenant_id = e.tenant_id
+                    AND h.is_active = true
+                    AND EXTRACT(YEAR FROM h.date) = %s
+                    AND EXTRACT(MONTH FROM h.date) = %s
+                    AND (
+                        e.date_of_joining IS NULL 
+                        OR h.date >= e.date_of_joining
+                    )
+                    AND (
+                        h.applies_to_all = true
+                        OR (
+                            h.specific_departments IS NOT NULL 
+                            AND e.department = ANY(string_to_array(h.specific_departments, ','))
+                        )
+                    )
+                    -- Exclude holidays that fall on employee's off days
+                    AND NOT (
+                        (EXTRACT(DOW FROM h.date) = 1 AND e.off_monday = true) OR
+                        (EXTRACT(DOW FROM h.date) = 2 AND e.off_tuesday = true) OR
+                        (EXTRACT(DOW FROM h.date) = 3 AND e.off_wednesday = true) OR
+                        (EXTRACT(DOW FROM h.date) = 4 AND e.off_thursday = true) OR
+                        (EXTRACT(DOW FROM h.date) = 5 AND e.off_friday = true) OR
+                        (EXTRACT(DOW FROM h.date) = 6 AND e.off_saturday = true) OR
+                        (EXTRACT(DOW FROM h.date) = 0 AND e.off_sunday = true)
+                    )
+                WHERE e.tenant_id = %s AND e.is_active = true
+                GROUP BY e.employee_id
             ),
             -- Total advances (all pending)
             total_advances AS (
@@ -2646,8 +2663,10 @@ def calculate_simple_payroll_ultra_fast(request):
                 es.shift_hours as shift_hours_per_day,
                 otr.ot_rate_per_hour as ot_rate,
                 
-                -- Attendance
-                att.present_days,
+                -- Attendance (with holidays added to present days)
+                att.present_days as raw_present_days,
+                att.present_days + COALESCE(eh.holiday_count, 0) as present_days,
+                COALESCE(eh.holiday_count, 0) as holiday_days,
                 att.absent_days,
                 att.ot_hours,
                 att.late_minutes,
@@ -2664,6 +2683,7 @@ def calculate_simple_payroll_ultra_fast(request):
             INNER JOIN employee_shifts es ON e.employee_id = es.employee_id
             INNER JOIN ot_rates otr ON e.employee_id = otr.employee_id
             INNER JOIN attendance_summary att ON e.employee_id = att.employee_id
+            LEFT JOIN employee_holidays eh ON e.employee_id = eh.employee_id
             LEFT JOIN total_advances ta ON e.employee_id = ta.employee_id
             
             WHERE e.tenant_id = %s 
@@ -2675,6 +2695,7 @@ def calculate_simple_payroll_ultra_fast(request):
                 tenant.id,  # employee_shifts
                 tenant.id,  # ot_rates
                 tenant.id, year, month_num,  # attendance_summary
+                year, month_num, tenant.id,  # employee_holidays
                 tenant.id,  # total_advances
                 tenant.id   # main WHERE
             ]
@@ -2698,7 +2719,8 @@ def calculate_simple_payroll_ultra_fast(request):
             
             # Get pre-calculated values
             base_salary = float(data['base_salary'] or 0)
-            present_days = float(data['present_days'] or 0)
+            raw_present_days = float(data['raw_present_days'] or 0)
+            present_days = float(data['present_days'] or 0)  # Includes holidays
             ot_charges = float(data['ot_charges'] or 0)
             late_deduction = float(data['late_deduction'] or 0)
             ot_rate = float(data['ot_rate'] or 0)
@@ -2710,19 +2732,20 @@ def calculate_simple_payroll_ultra_fast(request):
             else:
                 employee_working_days = employee_working_days_map.get(employee_id, 30)
             
-            # Get pre-calculated holiday count and off days count (NO DATABASE CALL!)
-            holiday_count = employee_holiday_count_map.get(employee_id, 0)
+            # Get holiday count from SQL and off days count from Python calculation
+            holiday_count = int(data['holiday_days'] or 0)
             off_days_count = employee_off_days_map.get(employee_id, 0)
             
-            # Calculate gross salary
-            if employee_working_days > 0:
-                gross_salary = (
-                    (base_salary / employee_working_days * present_days) + 
-                    ot_charges - 
-                    late_deduction
-                )
-            else:
-                gross_salary = 0.0
+            # Calculate paid_days using SQL-calculated holiday count (respects DOJ, dept, and off days)
+            paid_days = raw_present_days + holiday_count
+            
+            # Calculate gross salary using 30.4 (average days per month)
+            daily_rate = base_salary / 30.4
+            gross_salary = (
+                (daily_rate * paid_days) + 
+                ot_charges - 
+                late_deduction
+            )
             
             # TDS
             tds_percentage = float(data['tds_percentage'] or 0)
@@ -2743,7 +2766,9 @@ def calculate_simple_payroll_ultra_fast(request):
                 'base_salary': round(base_salary, 2),
                 'total_days': total_days_in_month,  # Total days in the month
                 'working_days': employee_working_days,
-                'present_days': int(present_days),
+                'raw_present_days': int(raw_present_days),  # Present without holidays
+                'paid_days': int(paid_days),  # Present + holidays (respects DOJ)
+                'present_days': int(paid_days),  # For backward compatibility (now same as paid_days)
                 'absent_days': int(data['absent_days'] or 0),
                 'off_days': off_days_count,  # Add off days count
                 'holiday_days': holiday_count,

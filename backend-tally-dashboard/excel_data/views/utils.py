@@ -551,13 +551,16 @@ def bulk_update_attendance(request):
                     late_minutes = 0
                 
                 # OPTIMIZED: Fast status determination
-                # Handle 'present', 'absent', and 'off' statuses
+                # Handle 'present', 'absent', 'off', and 'unmarked' statuses
                 if status == 'present':
                     attendance_status = 'PRESENT'
+                elif status == 'absent':
+                    attendance_status = 'ABSENT'
                 elif status == 'off':
                     attendance_status = 'OFF'
                 else:
-                    attendance_status = 'ABSENT'
+                    # Default to 'UNMARKED' for anything else (including explicit 'unmarked')
+                    attendance_status = 'UNMARKED'
                 
                 # OPTIMIZED: Prepare record data with minimal overhead
                 record_data = {
@@ -1537,6 +1540,10 @@ class UploadAttendanceDataAPIView(APIView):
                         absent_days = float(row.get('Absent Days', 0)) if pd.notna(row.get('Absent Days')) else 0
                         ot_hours = float(row.get('OT Hours', 0)) if pd.notna(row.get('OT Hours')) else 0
                         late_minutes = int(row.get('Late Minutes', 0)) if pd.notna(row.get('Late Minutes')) else 0
+                        
+                        # IMPORTANT: absent_days from Excel is preserved as-is
+                        # The model's save() method only auto-calculates when absent_days=0
+                        # This ensures Excel values are respected during bulk upload
                         
                         # OPTIMIZED: Use standard 30 days for bulk performance (DOJ calc in background if needed)
                         if has_working_days and pd.notna(row.get('Working Days')):

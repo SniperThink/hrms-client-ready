@@ -101,9 +101,18 @@ class CalculatedSalary(TenantAwareModel):
     
     def calculate_salary(self):
         """Autonomous salary calculation logic using standardized formula:
-        Gross Salary = (Base Salary ÷ Working Days × Present Days) + OT Charges - Late Deduction
+        
+        Note: present_days should already include PRESENT + PAID_HOLIDAYS
+        (OFF days are marked as PRESENT in attendance)
+        
+        Daily Rate = Base Salary ÷ Working Days
+        Base Pay = Daily Rate × Present Days (includes holidays)
+        OT Pay = OT Hours × OT Rate per Hour  
+        Late Deduction = (OT Rate ÷ 60) × Late Minutes
+        Gross Salary = Base Pay + OT Pay - Late Deduction
         """
         # 1. Calculate salary for present days using standardized formula
+        # Note: self.present_days already includes paid holidays added in _get_attendance_data
         if self.total_working_days > 0:
             daily_salary = self.basic_salary / self.total_working_days
             self.salary_for_present_days = daily_salary * self.present_days

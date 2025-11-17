@@ -17,6 +17,7 @@ class Attendance(TenantAwareModel):
     total_working_days = models.IntegerField(default=0, help_text="Total working days excluding holidays and weekends")
     present_days = models.IntegerField(default=0)
     absent_days = models.IntegerField(default=0)
+    unmarked_days = models.IntegerField(default=0, help_text="Number of days with unmarked attendance status")
     holiday_days = models.IntegerField(default=0, help_text="Number of paid holidays in this period")
     ot_hours = models.DecimalField(max_digits=10, decimal_places=2, default=0.00)
     late_minutes = models.IntegerField(default=0)
@@ -31,10 +32,16 @@ class Attendance(TenantAwareModel):
         return f"{self.name} - {self.date}"
         
     def save(self, *args, **kwargs):
-        # Ensure absent_days is calculated correctly
-        # Use calendar_days as fallback if total_working_days is 0
-        working_days = self.total_working_days if self.total_working_days > 0 else self.calendar_days
-        self.absent_days = working_days - self.present_days
+        # DISABLED: Auto-calculation of absent_days
+        # absent_days should only be counted from explicitly marked ABSENT days
+        # Unmarked days should NOT be counted as absent
+        # If Excel upload provides absent_days, it will be preserved
+        # If manual entry, absent_days should be explicitly set based on actual ABSENT status
+        # 
+        # Previous logic (now disabled):
+        # if self.absent_days == 0 and self.present_days > 0:
+        #     working_days = self.total_working_days if self.total_working_days > 0 else self.calendar_days
+        #     self.absent_days = max(0, working_days - self.present_days)
         super().save(*args, **kwargs)
 
 
@@ -45,6 +52,7 @@ class DailyAttendance(TenantAwareModel):
     ATTENDANCE_STATUS_CHOICES = [
         ('PRESENT', 'Present'),
         ('ABSENT', 'Absent'),
+        ('UNMARKED', 'Unmarked'),
         ('HALF_DAY', 'Half Day'),
         ('PAID_LEAVE', 'Paid Leave'),
         ('OFF', 'Off Day'),

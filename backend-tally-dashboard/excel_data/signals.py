@@ -107,7 +107,9 @@ def sync_attendance_from_daily(sender, instance, **kwargs):
             total_working_days = days_in_month
             logger.debug(f'Could not calculate working days for employee {employee_id} in signal: {str(e)}')
         
-        absent_days = max(0, total_working_days - present_days)
+        # ✅ FIX: Only count EXPLICIT "ABSENT" status - don't count unmarked days
+        explicit_absent_count = daily_records.filter(attendance_status='ABSENT').count()
+        absent_days = float(explicit_absent_count)
 
         # Create or update monthly Attendance record
         attendance_date = date(year, month, 1)  # First day of the month

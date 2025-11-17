@@ -24,6 +24,8 @@ interface PayrollEntry {
   base_salary: number;
   total_days?: number; // Total days in the month
   working_days: number;
+  raw_present_days?: number;  // Present days without holidays
+  paid_days?: number;  // Present days + holidays
   present_days: number;
   absent_days: number;
   off_days?: number; // Off days for the employee
@@ -152,7 +154,7 @@ const SimplePayrollCalculator: React.FC = () => {
       if (data.success) {
         logger.info( 'Payroll calculation data received:', data.payroll_data);
         logger.info( 'Sample employee data:', data.payroll_data?.[0]);
-        logger.info( 'Working vs Present days sample:', data.payroll_data?.slice(0, 3).map(emp => ({
+        logger.info('Working vs Present days sample:', data.payroll_data?.slice(0, 3).map((emp: PayrollEntry) => ({
           name: emp.employee_name,
           working_days: emp.working_days,
           present_days: emp.present_days,
@@ -484,11 +486,12 @@ const SimplePayrollCalculator: React.FC = () => {
                   <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Department</th>
                   <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Base Salary</th>
                   <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Total Days</th>
-                  <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Working Days</th>
+                  <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Holidays</th>
+                  <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Off Days</th>
+                  {/* <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Working Days</th> */}
                   <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Present</th>
                   <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Absent</th>
-                  <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Off Days</th>
-                  <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Holidays</th>
+                  <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Paid Days</th>
                   <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">OT Hours</th>
                   <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">OT Charges</th>
                   <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Late (Min)</th>
@@ -513,11 +516,19 @@ const SimplePayrollCalculator: React.FC = () => {
                     <td className="px-4 py-4 whitespace-nowrap text-sm text-gray-900">{entry.department}</td>
                     <td className="px-4 py-4 whitespace-nowrap text-sm text-gray-900">₹{entry.base_salary.toLocaleString()}</td>
                     <td className="px-4 py-4 whitespace-nowrap text-sm text-gray-900">{entry.total_days || summary?.total_days || 30}</td>
-                    <td className="px-4 py-4 whitespace-nowrap text-sm text-gray-900">{entry.working_days}</td>
-                    <td className="px-4 py-4 whitespace-nowrap text-sm text-gray-900">{entry.present_days}</td>
-                    <td className="px-4 py-4 whitespace-nowrap text-sm text-gray-900">{entry.absent_days}</td>
+                    {/* <td className="px-4 py-4 whitespace-nowrap text-sm text-gray-900">{entry.working_days}</td> */}
+                    <td className="px-4 py-4 whitespace-nowrap text-sm text-gray-600">
+                      {entry.holiday_days || 0}
+                    </td>
                     <td className="px-4 py-4 whitespace-nowrap text-sm text-gray-900">{entry.off_days || 0}</td>
-                    <td className="px-4 py-4 whitespace-nowrap text-sm text-gray-900">{entry.holiday_days || 0}</td>
+                    <td className="px-4 py-4 whitespace-nowrap text-sm text-gray-900">
+                      {entry.raw_present_days || entry.present_days - (entry.holiday_days || 0)}
+                    </td>
+                    <td className="px-4 py-4 whitespace-nowrap text-sm text-gray-900">{entry.absent_days}</td>
+                    <td className="px-4 py-4 whitespace-nowrap text-sm text-gray-900">
+                      {entry.paid_days || entry.present_days}
+                    </td>
+                    
                     <td className="px-4 py-4 whitespace-nowrap text-sm text-gray-900">{entry.ot_hours}</td>
                     <td className="px-4 py-4 whitespace-nowrap text-sm text-gray-900">₹{(entry.ot_charges || 0).toLocaleString()}</td>
                     <td className="px-4 py-4 whitespace-nowrap text-sm text-gray-900">{entry.late_minutes || 0}</td>
@@ -590,7 +601,10 @@ const SimplePayrollCalculator: React.FC = () => {
             <div className="px-6 py-4 bg-gray-50 border-t border-gray-200">
               <h5 className="text-sm font-medium text-gray-900 mb-2">Calculation Formula:</h5>
               <div className="text-xs text-gray-600 space-y-1">
-                <p><span className="font-medium">Gross Salary</span> = (Base Salary ÷ Working Days × Present Days) + OT Charges - Late Deduction</p>
+                <p><span className="font-medium">Paid Days</span> = Present Days + Paid Holidays (Off days are marked as Present)</p>
+                <p><span className="font-medium">Daily Rate</span> = Base Salary ÷ 30.4</p>
+                <p><span className="font-medium">Base Pay</span> = Daily Rate × Paid Days</p>
+                <p><span className="font-medium">Gross Salary</span> = Base Pay + OT Charges - Late Deduction</p>
                 <p><span className="font-medium">Advance Deduction</span> = Min(50% of Salary After TDS, Total Advance Balance)</p>
                 <p><span className="font-medium">Net Salary</span> = Gross Salary - TDS Amount - Advance Deduction</p>
                 <p><span className="font-medium">OT Charges</span> = OT Hours × OT Rate per Hour</p>

@@ -4314,7 +4314,9 @@ class AttendanceViewSet(viewsets.ReadOnlyModelViewSet):
                 total_working_days = 30
             
             present_days = float(summary.present_days)
-            absent_days = max(0, total_working_days - present_days)
+            # CHANGED: Do NOT auto-calculate absent_days from unmarked days
+            # Only use explicit absent days from DailyAttendance where status='ABSENT'
+            absent_days = 0  # Will be populated from actual ABSENT status days only
             
             # Create date for the first day of the month (for ordering)
             attendance_date = datetime(year, month, 1).date()
@@ -4453,7 +4455,9 @@ class AttendanceViewSet(viewsets.ReadOnlyModelViewSet):
                 total_working_days = 30
             
             present_days = float(emp_data['present_days'] or 0)
-            absent_days = max(0, total_working_days - present_days)
+            # CHANGED: Do NOT auto-calculate absent_days from unmarked days
+            # Only use explicit absent days from DailyAttendance where status='ABSENT'
+            absent_days = float(emp_data.get('absent_days', 0) or 0)
             
             # Get calendar days for the month
             _, days_in_month = calendar.monthrange(current_year, current_month)
@@ -4516,7 +4520,9 @@ class AttendanceViewSet(viewsets.ReadOnlyModelViewSet):
             total_working_days = 30
             
             present_days = float(emp_data['present_days'] or 0)
-            absent_days = max(0, total_working_days - present_days)
+            # CHANGED: Do NOT auto-calculate absent_days from unmarked days
+            # Only use explicit absent days from DailyAttendance where status='ABSENT'
+            absent_days = float(emp_data.get('absent_days', 0) or 0)
             
             # Create a dictionary that mimics Attendance model fields
             attendance_record = {
@@ -5260,7 +5266,7 @@ class DailyAttendanceViewSet(viewsets.ModelViewSet):
         # Aggregate attendance
         # --------------------------------------------------
         step_start = time.time()
-        aggregated = defaultdict(lambda: {'present_days': 0.0, 'absent_days': 0.0, 'ot_hours': 0.0, 'late_minutes': 0, 'holiday_days': 0, 'data_sources': []})
+        aggregated = defaultdict(lambda: {'present_days': 0.0, 'absent_days': 0.0, 'unmarked_days': 0.0, 'ot_hours': 0.0, 'late_minutes': 0, 'holiday_days': 0, 'data_sources': []})
         total_working_days = 0  # Used later for absent calculation
 
         if use_daily_data:
@@ -5310,6 +5316,13 @@ class DailyAttendanceViewSet(viewsets.ModelViewSet):
                             output_field=FloatField()
                         )
                     ),
+                    unmarked_days=Sum(
+                        Case(
+                            When(attendance_status='UNMARKED', then=Value(1.0)),
+                            default=Value(0.0),
+                            output_field=FloatField()
+                        )
+                    ),
                     ot_hours=Sum('ot_hours'),
                     late_minutes=Sum('late_minutes')
                 )
@@ -5323,7 +5336,7 @@ class DailyAttendanceViewSet(viewsets.ModelViewSet):
                 
                 if is_single_day:
                     # For single day: use raw attendance_status to calculate present/absent
-                    attendance_status = row.get('attendance_status', 'ABSENT')
+                    attendance_status = row.get('attendance_status', 'UNMARKED')
                     if attendance_status in ['PRESENT', 'PAID_LEAVE']:
                         agg_data['present_days'] += 1.0
                     elif attendance_status == 'HALF_DAY':
@@ -5331,8 +5344,12 @@ class DailyAttendanceViewSet(viewsets.ModelViewSet):
                         agg_data['absent_days'] += 0.5
                     elif attendance_status == 'ABSENT':
                         agg_data['absent_days'] += 1.0
+                    elif attendance_status == 'UNMARKED':
+                        # Track unmarked days separately - don't count as absent
+                        agg_data['unmarked_days'] += 1.0
                     else:
-                        agg_data['absent_days'] += 1.0  # Default to absent for unknown statuses
+                        # Unknown statuses are left unmarked (not counted)
+                        pass
                     
                     # Store the actual status for the frontend
                     agg_data['attendance_status'] = attendance_status
@@ -5341,6 +5358,7 @@ class DailyAttendanceViewSet(viewsets.ModelViewSet):
                     # For multi-day: use aggregated values
                     agg_data['present_days'] += float(row['present_days'] or 0)
                     agg_data['absent_days'] += float(row.get('absent_days') or 0)
+                    agg_data['unmarked_days'] += float(row.get('unmarked_days') or 0)
                 
                 agg_data['ot_hours'] += float(row['ot_hours'] or 0)
                 agg_data['late_minutes'] += int(row['late_minutes'] or 0)
@@ -5709,7 +5727,7 @@ class DailyAttendanceViewSet(viewsets.ModelViewSet):
         attendance_records = []
         
         # OPTIMIZATION: Pre-calculate common values to avoid repeated operations
-        default_data = {'present_days': 0.0, 'absent_days': 0.0, 'ot_hours': 0.0, 'late_minutes': 0, 'holiday_days': 0, 'data_sources': []}
+        default_data = {'present_days': 0.0, 'absent_days': 0.0, 'unmarked_days': 0.0, 'ot_hours': 0.0, 'late_minutes': 0, 'holiday_days': 0, 'data_sources': []}
         
         # Preload Excel Attendance working days for selected months for all employees (fast path)
         attendance_working_days_by_emp_month = {}
@@ -6086,6 +6104,7 @@ class DailyAttendanceViewSet(viewsets.ModelViewSet):
                 'off_days': off_days,  # NEW: Off days (weekends, etc.)
                 'present_days': round(data['present_days'], 1),
                 'absent_days': round(absent_days, 1),
+                'unmarked_days': round(data.get('unmarked_days', 0), 1),
                 'total_working_days': net_working_days,  # Net working days (after holidays)
                 'holiday_days': holiday_count,
                 'attendance_percentage': round(attendance_percentage, 1),
