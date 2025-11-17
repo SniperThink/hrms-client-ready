@@ -34,11 +34,13 @@ interface PayrollDetailEntry {
   employee_name: string;
   department: string;
   basic_salary: number;
+  total_days?: number;  // Total days in the month
   working_days: number;
   raw_present_days?: number;  // Present days without holidays
   paid_days?: number;  // Present days + holidays
   present_days: number;  // Total paid days (includes holidays)
   holiday_days?: number;  // Number of paid holidays
+  off_days?: number;  // Off days for the employee
   absent_days: number;
   ot_hours: number;
   late_minutes: number;
@@ -504,26 +506,28 @@ const PayrollOverview: React.FC = () => {
               <table className="min-w-full divide-y divide-gray-200">
                 <thead className="bg-gray-50 sticky top-0 z-20">
                   <tr>
-                    <th className="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider sticky left-0 bg-gray-50 z-21 border-r border-gray-300">Employee</th>
-                    <th className="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Department</th>
-                    <th className="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Base Salary</th>
-                    <th className="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Working Days</th>
-                    <th className="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Present</th>
-                    <th className="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Holidays</th>
-                    <th className="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider bg-blue-50">Paid Days</th>
-                    <th className="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Absent</th>
-                    <th className="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">OT Hours</th>
-                    <th className="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">OT Charges</th>
-                    <th className="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Late (Min)</th>
-                    <th className="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Late Deduction</th>
-                    <th className="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Gross Salary</th>
-                    <th className="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">TDS %</th>
-                    <th className="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">TDS Amount</th>
-                    <th className="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Advance Balance</th>
-                    <th className="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Advance Deduction</th>
-                    <th className="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Net Salary</th>
-                    <th className="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Status</th>
-                    <th className="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Actions</th>
+                    <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider sticky left-0 bg-gray-50 z-21 border-r border-gray-300">Employee</th>
+                    <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Department</th>
+                    <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Base Salary</th>
+                    <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Total Days</th>
+                    <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Holidays</th>
+                    <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Off Days</th>
+                    {/* <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Working Days</th> */}
+                    <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Present</th>
+                    <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Absent</th>
+                    <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Paid Days</th>
+                    <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">OT Hours</th>
+                    <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">OT Charges</th>
+                    <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Late (Min)</th>
+                    <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Late Deduction</th>
+                    <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Gross Salary</th>
+                    <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">TDS %</th>
+                    <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">TDS Amount</th>
+                    <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Advance Balance</th>
+                    <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Advance Deduction</th>
+                    <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Net Salary</th>
+                    <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Status</th>
+                    <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Actions</th>
                   </tr>
                 </thead>
                 <tbody className="bg-white divide-y divide-gray-200">
@@ -544,33 +548,35 @@ const PayrollOverview: React.FC = () => {
                           )}
                         </div>
                       </td>
-                      <td className="px-3 py-4 whitespace-nowrap text-sm text-gray-900">{entry.department}</td>
-                      <td className="px-3 py-4 whitespace-nowrap text-sm text-gray-900">₹{(entry.basic_salary || 0).toLocaleString()}</td>
-                      <td className="px-3 py-4 whitespace-nowrap text-sm text-gray-900">{entry.working_days || 0}</td>
-                      <td className="px-3 py-4 whitespace-nowrap text-sm text-gray-900">
-                        {entry.raw_present_days || entry.present_days - (entry.holiday_days || 0)}
-                      </td>
-                      <td className="px-3 py-4 whitespace-nowrap text-sm text-gray-600">
+                      <td className="px-4 py-4 whitespace-nowrap text-sm text-gray-900">{entry.department}</td>
+                      <td className="px-4 py-4 whitespace-nowrap text-sm text-gray-900">₹{(entry.basic_salary || 0).toLocaleString()}</td>
+                      <td className="px-4 py-4 whitespace-nowrap text-sm text-gray-900">{entry.total_days || 30}</td>
+                      {/* <td className="px-4 py-4 whitespace-nowrap text-sm text-gray-900">{entry.working_days || 0}</td> */}
+                      <td className="px-4 py-4 whitespace-nowrap text-sm text-gray-600">
                         {entry.holiday_days || 0}
                       </td>
-                      <td className="px-3 py-4 whitespace-nowrap text-sm font-semibold text-blue-900 bg-blue-50">
-                        {entry.paid_days || entry.present_days || 0}
+                      <td className="px-4 py-4 whitespace-nowrap text-sm text-gray-900">{entry.off_days || 0}</td>
+                      <td className="px-4 py-4 whitespace-nowrap text-sm text-gray-900">
+                        {entry.raw_present_days || entry.present_days - (entry.holiday_days || 0)}
                       </td>
-                      <td className="px-3 py-4 whitespace-nowrap text-sm text-gray-900">
+                      <td className="px-4 py-4 whitespace-nowrap text-sm text-gray-900">
                         {entry.absent_days || 0}
                       </td>
-                      <td className="px-3 py-4 whitespace-nowrap text-sm text-gray-900">{entry.ot_hours || 0}</td>
-                      <td className="px-3 py-4 whitespace-nowrap text-sm text-gray-900">₹{(entry.ot_charges || 0).toLocaleString()}</td>
-                      <td className="px-3 py-4 whitespace-nowrap text-sm text-gray-900">{entry.late_minutes || 0}</td>
-                      <td className="px-3 py-4 whitespace-nowrap text-sm text-gray-900">₹{(entry.late_deduction || 0).toLocaleString()}</td>
-                      <td className="px-3 py-4 whitespace-nowrap text-sm text-gray-900">₹{(entry.gross_salary || 0).toLocaleString()}</td>
-                      <td className="px-3 py-4 whitespace-nowrap text-sm text-gray-900">{entry.tds_percentage || 0}%</td>
-                      <td className="px-3 py-4 whitespace-nowrap text-sm text-gray-900">₹{(entry.tds_amount || 0).toLocaleString()}</td>
-                      <td className="px-3 py-4 whitespace-nowrap">
+                      <td className="px-4 py-4 whitespace-nowrap text-sm text-gray-900">
+                        {entry.paid_days || entry.present_days || 0}
+                      </td>
+                      <td className="px-4 py-4 whitespace-nowrap text-sm text-gray-900">{entry.ot_hours || 0}</td>
+                      <td className="px-4 py-4 whitespace-nowrap text-sm text-gray-900">₹{(entry.ot_charges || 0).toLocaleString()}</td>
+                      <td className="px-4 py-4 whitespace-nowrap text-sm text-gray-900">{entry.late_minutes || 0}</td>
+                      <td className="px-4 py-4 whitespace-nowrap text-sm text-gray-900">₹{(entry.late_deduction || 0).toLocaleString()}</td>
+                      <td className="px-4 py-4 whitespace-nowrap text-sm text-gray-900">₹{(entry.gross_salary || 0).toLocaleString()}</td>
+                      <td className="px-4 py-4 whitespace-nowrap text-sm text-gray-900">{entry.tds_percentage || 0}%</td>
+                      <td className="px-4 py-4 whitespace-nowrap text-sm text-gray-900">₹{(entry.tds_amount || 0).toLocaleString()}</td>
+                      <td className="px-4 py-4 whitespace-nowrap">
                         <div className="text-sm text-gray-900">₹{(entry.total_advance_balance || 0).toLocaleString()}</div>
                         <div className="text-xs text-gray-500">Remaining: ₹{(entry.remaining_advance_balance || 0).toLocaleString()}</div>
                       </td>
-                      <td className="px-3 py-4 whitespace-nowrap">
+                      <td className="px-4 py-4 whitespace-nowrap">
                         {editingEntry === entry.employee_id && entry.advance_deduction_editable ? (
                           <input
                             type="number"
@@ -591,10 +597,10 @@ const PayrollOverview: React.FC = () => {
                           </div>
                         )}
                       </td>
-                      <td className="px-3 py-4 whitespace-nowrap">
+                      <td className="px-4 py-4 whitespace-nowrap">
                         <span className="text-sm font-medium text-teal-600">₹{(entry.net_payable || 0).toLocaleString()}</span>
                       </td>
-                      <td className="px-3 py-4 whitespace-nowrap">
+                      <td className="px-4 py-4 whitespace-nowrap">
                         <span className={`px-2 py-1 rounded-full text-xs font-medium ${
                           effectiveStatus 
                             ? 'bg-teal-100 text-teal-800' 
@@ -603,7 +609,7 @@ const PayrollOverview: React.FC = () => {
                           {effectiveStatus ? 'Paid' : 'Pending'}
                         </span>
                       </td>
-                      <td className="px-3 py-4 whitespace-nowrap text-sm font-medium">
+                      <td className="px-4 py-4 whitespace-nowrap text-sm font-medium">
                         <div className="flex items-center gap-2">
                           {editingEntry === entry.employee_id ? (
                             <>

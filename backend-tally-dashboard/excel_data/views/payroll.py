@@ -1134,16 +1134,49 @@ def payroll_period_detail(request, period_id):
             
             if calculated_salaries.exists():
                 # Use CalculatedSalary records (they have is_paid status)
+                import calendar
+                
                 for calc in calculated_salaries.order_by('employee_name'):
+                    # Get employee to calculate off_days
+                    try:
+                        from ..models import EmployeeProfile
+                        employee = EmployeeProfile.objects.get(tenant=tenant, employee_id=calc.employee_id)
+                        # Calculate off days for the month
+                        month_num = {'JANUARY': 1, 'FEBRUARY': 2, 'MARCH': 3, 'APRIL': 4, 'MAY': 5, 'JUNE': 6,
+                                    'JULY': 7, 'AUGUST': 8, 'SEPTEMBER': 9, 'OCTOBER': 10, 'NOVEMBER': 11, 'DECEMBER': 12}.get(period.month.upper(), 1)
+                        total_days = calendar.monthrange(period.year, month_num)[1]
+                        off_days_count = sum([
+                            1 for day in range(1, total_days + 1)
+                            if (
+                                (calendar.weekday(period.year, month_num, day) == 0 and employee.off_monday) or
+                                (calendar.weekday(period.year, month_num, day) == 1 and employee.off_tuesday) or
+                                (calendar.weekday(period.year, month_num, day) == 2 and employee.off_wednesday) or
+                                (calendar.weekday(period.year, month_num, day) == 3 and employee.off_thursday) or
+                                (calendar.weekday(period.year, month_num, day) == 4 and employee.off_friday) or
+                                (calendar.weekday(period.year, month_num, day) == 5 and employee.off_saturday) or
+                                (calendar.weekday(period.year, month_num, day) == 6 and employee.off_sunday)
+                            )
+                        ])
+                        total_days_in_month = total_days
+                    except:
+                        off_days_count = 0
+                        month_num = 11  # Default
+                        total_days_in_month = calendar.monthrange(period.year, month_num)[1]
+                    
                     employees_data.append({
                         'id': calc.id,
                         'employee_id': calc.employee_id,
                         'employee_name': calc.employee_name,
                         'department': calc.department or '',
                         'basic_salary': float(calc.basic_salary),
+                        'total_days': total_days_in_month,
                         'working_days': int(calc.total_working_days),
                         'absent_days': float(calc.absent_days),
+                        'holiday_days': int(calc.holiday_days),
+                        'off_days': off_days_count,
+                        'raw_present_days': int(float(calc.present_days) - float(calc.holiday_days)),
                         'present_days': float(calc.present_days),
+                        'paid_days': int(calc.present_days),
                         'ot_hours': float(calc.ot_hours),
                         'hour_rate': float(calc.basic_salary_per_hour),
                         'ot_charges': float(calc.ot_charges),
@@ -1167,6 +1200,7 @@ def payroll_period_detail(request, period_id):
                     })
             else:
                 # Fallback: Use SalaryData if CalculatedSalary doesn't exist yet
+                import calendar
                 from ..models import SalaryData
                 uploaded_salaries = SalaryData.objects.filter(
                     tenant=tenant,
@@ -1174,26 +1208,38 @@ def payroll_period_detail(request, period_id):
                     month=period.month
                 ).order_by('name')
                 
+                # Get month number for total days calculation
+                month_num = {'JANUARY': 1, 'FEBRUARY': 2, 'MARCH': 3, 'APRIL': 4, 'MAY': 5, 'JUNE': 6,
+                            'JULY': 7, 'AUGUST': 8, 'SEPTEMBER': 9, 'OCTOBER': 10, 'NOVEMBER': 11, 'DECEMBER': 12}.get(period.month.upper(), 11)
+                total_days_in_month = calendar.monthrange(period.year, month_num)[1]
+                
                 for salary in uploaded_salaries:
-                    # Calculate present_days correctly: working_days - absent_days
+                    # PRESERVE EXACT VALUES FROM EXCEL - Do not recalculate
                     working_days = int(salary.days)
                     absent_days = float(salary.absent)
-                    present_days = max(0, working_days - absent_days)  # Ensure non-negative
+                    present_days = max(0, working_days - absent_days)  # Calculate: working_days - absent_days
                     
                     # Log any potential data issues for debugging
                     if len(employees_data) < 3:  # Log first 3 employees for debugging
                         logger.info(f"Uploaded Payroll - {salary.name}: working_days={working_days}, absent_days={absent_days}, calculated_present_days={present_days}")
                     
+                    # For Excel uploads: We don't have detailed day-by-day data, so use defaults
+                    # The Excel template doesn't include these fields
                     employees_data.append({
                         'id': salary.id,
                         'employee_id': salary.employee_id,
                         'employee_name': salary.name,
                         'department': salary.department or '',
-                        # Excel Template Fields - Calculate present_days correctly
+                        # Excel Template Fields - PRESERVE EXACT VALUES
                         'basic_salary': float(salary.salary),  # SALARY
+                        'total_days': total_days_in_month,  # Total days in month (not in Excel)
                         'working_days': working_days,  # DAYS
                         'absent_days': absent_days,  # ABSENT
+                        'holiday_days': 0,  # Not in Excel template
+                        'off_days': 0,  # Not in Excel template
+                        'raw_present_days': int(present_days),  # Same as present_days for Excel
                         'present_days': present_days,  # Calculate: working_days - absent_days
+                        'paid_days': int(present_days),  # Same as present_days for Excel
                         'ot_hours': float(salary.ot),  # OT
                         'hour_rate': float(salary.hour_rs),  # HOUR RS
                         'ot_charges': float(salary.charges),  # CHARGES
@@ -1218,6 +1264,7 @@ def payroll_period_detail(request, period_id):
                     })
         else:
             # Get calculated salaries for frontend-tracked data
+            import calendar
             calculated_salaries = CalculatedSalary.objects.filter(
                 tenant=tenant,
                 payroll_period=period
@@ -1228,15 +1275,46 @@ def payroll_period_detail(request, period_id):
                 if len(employees_data) < 3:
                     logger.info(f"Payroll Detail - Employee {calc.employee_name}: gross_salary={calc.gross_salary}, ot_charges={calc.ot_charges}, late_deduction={calc.late_deduction}, basic_salary={calc.basic_salary}, present_days={calc.present_days}, working_days={calc.total_working_days}")
                 
+                # Get employee to calculate off_days
+                try:
+                    from ..models import EmployeeProfile
+                    employee = EmployeeProfile.objects.get(tenant=tenant, employee_id=calc.employee_id)
+                    # Calculate off days for the month
+                    month_num = {'JANUARY': 1, 'FEBRUARY': 2, 'MARCH': 3, 'APRIL': 4, 'MAY': 5, 'JUNE': 6,
+                                'JULY': 7, 'AUGUST': 8, 'SEPTEMBER': 9, 'OCTOBER': 10, 'NOVEMBER': 11, 'DECEMBER': 12}.get(period.month.upper(), 1)
+                    total_days = calendar.monthrange(period.year, month_num)[1]
+                    off_days_count = sum([
+                        1 for day in range(1, total_days + 1)
+                        if (
+                            (calendar.weekday(period.year, month_num, day) == 0 and employee.off_monday) or
+                            (calendar.weekday(period.year, month_num, day) == 1 and employee.off_tuesday) or
+                            (calendar.weekday(period.year, month_num, day) == 2 and employee.off_wednesday) or
+                            (calendar.weekday(period.year, month_num, day) == 3 and employee.off_thursday) or
+                            (calendar.weekday(period.year, month_num, day) == 4 and employee.off_friday) or
+                            (calendar.weekday(period.year, month_num, day) == 5 and employee.off_saturday) or
+                            (calendar.weekday(period.year, month_num, day) == 6 and employee.off_sunday)
+                        )
+                    ])
+                    total_days_in_month = total_days
+                except:
+                    off_days_count = 0
+                    month_num = 11  # Default
+                    total_days_in_month = calendar.monthrange(period.year, month_num)[1]
+                
                 employees_data.append({
                     'id': calc.id,
                     'employee_id': calc.employee_id,
                     'employee_name': calc.employee_name,
                     'department': calc.department,
                     'basic_salary': float(calc.basic_salary),
+                    'total_days': total_days_in_month,
                     'working_days': int(calc.total_working_days),
                     'present_days': float(calc.present_days),
                     'absent_days': float(calc.absent_days),
+                    'holiday_days': int(calc.holiday_days),
+                    'off_days': off_days_count,
+                    'raw_present_days': int(float(calc.present_days) - float(calc.holiday_days)),
+                    'paid_days': int(calc.present_days),
                     'ot_hours': float(calc.ot_hours),
                     'ot_charges': float(calc.ot_charges),
                     'late_minutes': calc.late_minutes,
