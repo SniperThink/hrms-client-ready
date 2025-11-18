@@ -8,13 +8,15 @@ from ..models import Attendance, DailyAttendance, Leave
 
 class AttendanceSerializer(serializers.ModelSerializer):
     attendance_percentage = serializers.SerializerMethodField()
+    off_days = serializers.SerializerMethodField()
     
     class Meta:
         model = Attendance
         fields = [
             'id', 'employee_id', 'name', 'department', 'date', 
             'calendar_days', 'total_working_days', 'present_days', 
-            'absent_days', 'ot_hours', 'late_minutes', 'attendance_percentage',
+            'absent_days', 'unmarked_days', 'holiday_days', 'off_days',
+            'ot_hours', 'late_minutes', 'attendance_percentage',
             'created_at', 'updated_at'
         ]
         read_only_fields = ['created_at', 'updated_at']
@@ -25,6 +27,12 @@ class AttendanceSerializer(serializers.ModelSerializer):
         if working_days > 0:
             return round((obj.present_days / working_days) * 100, 1)
         return 0
+    
+    def get_off_days(self, obj):
+        """Calculate off days based on calendar_days - total_working_days - holiday_days"""
+        holiday_days = obj.holiday_days if obj.holiday_days else 0
+        off_days = obj.calendar_days - obj.total_working_days - holiday_days
+        return max(0, off_days)  # Ensure non-negative
 
 class DailyAttendanceSerializer(serializers.ModelSerializer):
     

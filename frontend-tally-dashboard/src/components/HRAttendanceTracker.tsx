@@ -825,31 +825,31 @@ const HRAttendanceTracker: React.FC = () => {
         </div>
       ) : (
         <div className="bg-white rounded-lg border border-gray-200">
-          <div className="overflow-x-auto">
+          <div className="overflow-x-auto max-h-[600px] overflow-y-auto scrollbar-hide">
             <table className="w-full">
-              <thead className="bg-gray-50 border-b border-gray-200">
+              <thead className="bg-gray-50 border-b border-gray-200 sticky top-0 z-10">
                 <tr>
-                  <th className="text-left text-sm font-medium text-gray-600 px-4 py-3">Employee ID</th>
-                  <th className="text-left text-sm font-medium text-gray-600 px-4 py-3">Name</th>
-                  <th className="text-left text-sm font-medium text-gray-600 px-4 py-3">Department</th>
+                  <th className="text-left text-sm font-medium text-gray-600 px-4 py-3 bg-gray-50">Employee ID</th>
+                  <th className="text-left text-sm font-medium text-gray-600 px-4 py-3 bg-gray-50">Name</th>
+                  <th className="text-left text-sm font-medium text-gray-600 px-4 py-3 bg-gray-50">Department</th>
                   {filterType === 'one_day' ? (
                     <>
-                      <th className="text-left text-sm font-medium text-gray-600 px-4 py-3">Status</th>
-                      <th className="text-left text-sm font-medium text-gray-600 px-4 py-3">OT Hours</th>
-                      <th className="text-left text-sm font-medium text-gray-600 px-4 py-3">Late Minutes</th>
+                      <th className="text-left text-sm font-medium text-gray-600 px-4 py-3 bg-gray-50">Status</th>
+                      <th className="text-left text-sm font-medium text-gray-600 px-4 py-3 bg-gray-50">OT Hours</th>
+                      <th className="text-left text-sm font-medium text-gray-600 px-4 py-3 bg-gray-50">Late Minutes</th>
                     </>
                   ) : (
                     <>
-                      <th className="text-left text-sm font-medium text-gray-600 px-4 py-3">Total Days</th>
-                      <th className="text-left text-sm font-medium text-gray-600 px-4 py-3">Off Days</th>
-                      <th className="text-left text-sm font-medium text-gray-600 px-4 py-3">Holidays</th>
-                      <th className="text-left text-sm font-medium text-gray-600 px-4 py-3">Total Working Days</th>
-                      <th className="text-left text-sm font-medium text-gray-600 px-4 py-3">Present Days</th>
-                      <th className="text-left text-sm font-medium text-gray-600 px-4 py-3">Absent Days</th>
-                      {/* <th className="text-left text-sm font-medium text-gray-600 px-4 py-3">Unmarked Days</th> */}
-                      <th className="text-left text-sm font-medium text-gray-600 px-4 py-3">OT Hours</th>
-                      <th className="text-left text-sm font-medium text-gray-600 px-4 py-3">Late Minutes</th>
-                      <th className="text-left text-sm font-medium text-gray-600 px-4 py-3">Attendance %</th>
+                      <th className="text-left text-sm font-medium text-gray-600 px-4 py-3 bg-gray-50">Total Days</th>
+                      <th className="text-left text-sm font-medium text-gray-600 px-4 py-3 bg-gray-50">Off Days</th>
+                      <th className="text-left text-sm font-medium text-gray-600 px-4 py-3 bg-gray-50">Holidays</th>
+                      <th className="text-left text-sm font-medium text-gray-600 px-4 py-3 bg-gray-50">Total Working Days</th>
+                      <th className="text-left text-sm font-medium text-gray-600 px-4 py-3 bg-gray-50">Present Days</th>
+                      <th className="text-left text-sm font-medium text-gray-600 px-4 py-3 bg-gray-50">Absent Days</th>
+                      <th className="text-left text-sm font-medium text-gray-600 px-4 py-3 bg-gray-50">Unmarked Days</th>
+                      <th className="text-left text-sm font-medium text-gray-600 px-4 py-3 bg-gray-50">OT Hours</th>
+                      <th className="text-left text-sm font-medium text-gray-600 px-4 py-3 bg-gray-50">Late Minutes</th>
+                      <th className="text-left text-sm font-medium text-gray-600 px-4 py-3 bg-gray-50">Attendance %</th>
                     </>
                   )}
                 </tr>
@@ -857,7 +857,7 @@ const HRAttendanceTracker: React.FC = () => {
               <tbody className="divide-y divide-gray-100">
                 {finalData.length === 0 ? (
                   <tr>
-                    <td colSpan={filterType === 'one_day' ? 6 : 13} className="px-4 py-6 text-center text-gray-500">
+                    <td colSpan={filterType === 'one_day' ? 6 : 14} className="px-4 py-6 text-center text-gray-500">
                       {filterType === 'one_day' 
                         ? 'No attendance records found for the selected date.' 
                         : attendanceStatus?.is_active 
@@ -938,7 +938,7 @@ const HRAttendanceTracker: React.FC = () => {
                             <td className="px-4 py-3 text-sm">{totalWorkingDays.toFixed(0)}</td>
                             <td className="px-4 py-3 text-sm">{record.present_days.toFixed(1)}</td>
                             <td className="px-4 py-3 text-sm">{absentDays.toFixed(1)}</td>
-                            {/* <td className="px-4 py-3 text-sm">{unmarkedDays.toFixed(1)}</td> */}
+                            <td className="px-4 py-3 text-sm">{unmarkedDays}</td>
                             <td className="px-4 py-3 text-sm">{(typeof record.ot_hours === 'string' ? parseFloat(record.ot_hours) || 0 : record.ot_hours || 0).toFixed(1)}</td>
                             <td className="px-4 py-3 text-sm">{record.late_minutes.toFixed(0)}</td>
                             <td className="px-4 py-3 text-sm">

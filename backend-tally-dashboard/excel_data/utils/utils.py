@@ -302,6 +302,9 @@ def run_bulk_aggregation(tenant, attendance_date):
                     'department': record.department,
                     'present_days': 0.0,
                     'absent_days': 0.0,
+                    'half_days': 0,
+                    'off_days_marked': 0,
+                    'paid_leave_days': 0,
                     'ot_hours': 0.0,
                     'late_minutes': 0,
                     'records_count': 0
@@ -312,10 +315,19 @@ def run_bulk_aggregation(tenant, attendance_date):
                 aggregated_data[emp_id]['present_days'] += 1.0
             elif record.attendance_status == 'HALF_DAY':
                 aggregated_data[emp_id]['present_days'] += 0.5
+                aggregated_data[emp_id]['half_days'] += 1
             
             # ✅ FIX: Only count explicit ABSENT status - don't count unmarked days
             if record.attendance_status == 'ABSENT':
                 aggregated_data[emp_id]['absent_days'] += 1.0
+            
+            # Count OFF days (explicitly marked)
+            if record.attendance_status == 'OFF':
+                aggregated_data[emp_id]['off_days_marked'] += 1
+            
+            # Count PAID_LEAVE separately
+            if record.attendance_status == 'PAID_LEAVE':
+                aggregated_data[emp_id]['paid_leave_days'] += 1
             
             # Aggregate OT hours and late minutes
             aggregated_data[emp_id]['ot_hours'] += float(record.ot_hours or 0)
@@ -427,6 +439,18 @@ def run_bulk_aggregation(tenant, attendance_date):
                 # Don't calculate based on unmarked days
                 absent_days = data.get('absent_days', 0.0)
                 
+                # Calculate off_days (days that are employee's weekly offs)
+                # This is calendar_days - total_working_days (excluding holidays)
+                off_days_count = max(0, days_in_month - total_working_days)
+                
+                # Calculate unmarked days: days with no attendance record at all
+                # records_count tells us how many days have DailyAttendance records
+                # unmarked_days = days without any DailyAttendance record (excluding off days)
+                records_count = data.get('records_count', 0)
+                unmarked_days = max(0, days_in_month - records_count - off_days_count)
+                
+                logger.info(f"Employee {emp_id}: days_in_month={days_in_month}, records_count={records_count}, present={data.get('present_days', 0)}, absent={data.get('absent_days', 0)}, off={data.get('off_days_marked', 0)}, off_days_count={off_days_count}, unmarked={unmarked_days}")
+                
                 # Create monthly attendance record
                 attendance_records.append(Attendance(
                     tenant=tenant,
@@ -438,6 +462,7 @@ def run_bulk_aggregation(tenant, attendance_date):
                     total_working_days=total_working_days,
                     present_days=data['present_days'],
                     absent_days=absent_days,
+                    unmarked_days=unmarked_days,
                     ot_hours=data['ot_hours'],
                     late_minutes=data['late_minutes']
                 ))
@@ -477,6 +502,7 @@ def run_bulk_aggregation(tenant, attendance_date):
                         existing_record.total_working_days = record.total_working_days
                         existing_record.present_days = record.present_days
                         existing_record.absent_days = record.absent_days
+                        existing_record.unmarked_days = record.unmarked_days
                         existing_record.ot_hours = record.ot_hours
                         existing_record.late_minutes = record.late_minutes
                         records_to_update.append(existing_record)

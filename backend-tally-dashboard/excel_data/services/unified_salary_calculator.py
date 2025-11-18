@@ -5,7 +5,9 @@ This service provides a centralized, standardized approach to salary calculation
 across the entire HRMS system, ensuring consistency and maintainability.
 
 Formula: 
-    Paid Days = PRESENT + PAID_HOLIDAYS (OFF days are already marked as PRESENT)
+    Paid Days = PRESENT + PAID_HOLIDAYS + BASIC_OFF_DAYS
+    (OFF days are counted as paid to ensure employees with weekly off days get full salary)
+    Extra Paid Days = Days worked on configured off days (additional compensation)
     Daily Rate = Base Salary ÷ 30.4
     Base Pay = Daily Rate × Paid Days
     Hourly Rate = Base Salary ÷ (Shift Hours × 30.4)
@@ -40,11 +42,11 @@ class UnifiedSalaryCalculator:
         """
         Calculate gross salary using the standardized formula:
         
-        Note: present_days should already include PRESENT + PAID_HOLIDAYS
-        (OFF days are marked as PRESENT in attendance)
+        Note: present_days should include PRESENT + PAID_HOLIDAYS + BASIC_OFF_DAYS
+        This ensures employees with weekly off days (e.g., only work 1 day/week) get full salary.
         
         Daily Rate = Base Salary ÷ 30.4
-        Base Pay = Daily Rate × Present Days (includes holidays)
+        Base Pay = Daily Rate × Present Days (includes holidays + basic off days)
         OT Pay = OT Hours × OT Rate per Hour
         Late Deduction = (OT Rate ÷ 60) × Late Minutes
         Gross Salary = Base Pay + OT Pay - Late Deduction
@@ -52,7 +54,7 @@ class UnifiedSalaryCalculator:
         Args:
             base_salary: Employee's basic salary
             working_days: Total working days in the period
-            present_days: Days employee was present (includes paid holidays)
+            present_days: Days to be paid for (includes present + holidays + basic off days)
             ot_hours: Overtime hours worked
             ot_rate_per_hour: Overtime rate per hour
             late_minutes: Total late minutes

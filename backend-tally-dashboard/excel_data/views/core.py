@@ -5266,7 +5266,7 @@ class DailyAttendanceViewSet(viewsets.ModelViewSet):
         # Aggregate attendance
         # --------------------------------------------------
         step_start = time.time()
-        aggregated = defaultdict(lambda: {'present_days': 0.0, 'absent_days': 0.0, 'unmarked_days': 0.0, 'ot_hours': 0.0, 'late_minutes': 0, 'holiday_days': 0, 'data_sources': []})
+        aggregated = defaultdict(lambda: {'present_days': 0.0, 'absent_days': 0.0, 'unmarked_days': 0.0, 'ot_hours': 0.0, 'late_minutes': 0, 'holiday_days': 0, 'data_sources': [], 'records_count': 0})
         total_working_days = 0  # Used later for absent calculation
 
         if use_daily_data:
@@ -5324,7 +5324,8 @@ class DailyAttendanceViewSet(viewsets.ModelViewSet):
                         )
                     ),
                     ot_hours=Sum('ot_hours'),
-                    late_minutes=Sum('late_minutes')
+                    late_minutes=Sum('late_minutes'),
+                    records_count=Count('id')
                 )
             timing_breakdown['daily_attendance_query_ms'] = round((time.time() - query_start) * 1000, 2)
 
@@ -5335,6 +5336,9 @@ class DailyAttendanceViewSet(viewsets.ModelViewSet):
                 agg_data = aggregated[emp_id]
                 
                 if is_single_day:
+                    # For single day: track that we have 1 record
+                    agg_data['records_count'] += 1
+                    
                     # For single day: use raw attendance_status to calculate present/absent
                     attendance_status = row.get('attendance_status', 'UNMARKED')
                     if attendance_status in ['PRESENT', 'PAID_LEAVE']:
@@ -5355,10 +5359,11 @@ class DailyAttendanceViewSet(viewsets.ModelViewSet):
                     agg_data['attendance_status'] = attendance_status
                     agg_data['date'] = row.get('date')
                 else:
-                    # For multi-day: use aggregated values
+                    # For multi-day: use aggregated values and count from annotation
                     agg_data['present_days'] += float(row['present_days'] or 0)
                     agg_data['absent_days'] += float(row.get('absent_days') or 0)
                     agg_data['unmarked_days'] += float(row.get('unmarked_days') or 0)
+                    agg_data['records_count'] += int(row.get('records_count') or 0)
                 
                 agg_data['ot_hours'] += float(row['ot_hours'] or 0)
                 agg_data['late_minutes'] += int(row['late_minutes'] or 0)
@@ -5597,7 +5602,7 @@ class DailyAttendanceViewSet(viewsets.ModelViewSet):
 
             attendance_qs = Attendance.objects.filter(
                 tenant=tenant
-            ).filter(month_filter).values('employee_id', 'date', 'present_days', 'absent_days', 'ot_hours', 'late_minutes', 'total_working_days', 'holiday_days')
+            ).filter(month_filter).values('employee_id', 'date', 'present_days', 'absent_days', 'ot_hours', 'late_minutes', 'total_working_days', 'holiday_days', 'unmarked_days')
             timing_breakdown['attendance_query_ms'] = round((time.time() - attendance_query_start) * 1000, 2)
 
             process_start = time.time()
@@ -5617,6 +5622,7 @@ class DailyAttendanceViewSet(viewsets.ModelViewSet):
                     agg_data = aggregated[emp_id]
                     agg_data['present_days'] += float(record['present_days'])
                     agg_data['absent_days'] += float(record.get('absent_days') or 0)
+                    agg_data['unmarked_days'] += float(record.get('unmarked_days') or 0)
                     agg_data['ot_hours'] += float(record['ot_hours'])
                     agg_data['late_minutes'] += record['late_minutes']
                     agg_data['holiday_days'] += int(record.get('holiday_days') or 0)
@@ -5638,7 +5644,7 @@ class DailyAttendanceViewSet(viewsets.ModelViewSet):
                     tenant=tenant,
                     date__year=current_year,
                     date__month=current_month
-                ).values('employee_id', 'present_days', 'absent_days', 'ot_hours', 'late_minutes')
+                ).values('employee_id', 'present_days', 'absent_days', 'ot_hours', 'late_minutes', 'unmarked_days')
                 
                 # Track which employees have Attendance Excel for current month
                 employees_with_excel_current = set()
@@ -5652,6 +5658,7 @@ class DailyAttendanceViewSet(viewsets.ModelViewSet):
                         agg_data = aggregated[emp_id]
                         agg_data['present_days'] += float(record['present_days'] or 0)
                         agg_data['absent_days'] += float(record.get('absent_days') or 0)
+                        agg_data['unmarked_days'] += float(record.get('unmarked_days') or 0)
                         agg_data['ot_hours'] += float(record['ot_hours'] or 0)
                         agg_data['late_minutes'] += int(record['late_minutes'] or 0)
                         if 'excel_upload' not in agg_data['data_sources']:
@@ -5727,7 +5734,7 @@ class DailyAttendanceViewSet(viewsets.ModelViewSet):
         attendance_records = []
         
         # OPTIMIZATION: Pre-calculate common values to avoid repeated operations
-        default_data = {'present_days': 0.0, 'absent_days': 0.0, 'unmarked_days': 0.0, 'ot_hours': 0.0, 'late_minutes': 0, 'holiday_days': 0, 'data_sources': []}
+        default_data = {'present_days': 0.0, 'absent_days': 0.0, 'unmarked_days': 0.0, 'ot_hours': 0.0, 'late_minutes': 0, 'holiday_days': 0, 'data_sources': [], 'records_count': 0}
         
         # Preload Excel Attendance working days for selected months for all employees (fast path)
         attendance_working_days_by_emp_month = {}
@@ -5876,6 +5883,15 @@ class DailyAttendanceViewSet(viewsets.ModelViewSet):
         
         timing_breakdown['holiday_precomputation_ms'] = round((time.time() - step_start) * 1000, 2)
         logger.info(f"Holiday precomputation: {timing_breakdown['holiday_precomputation_ms']}ms")
+        
+        # OPTIMIZATION: Pre-calculate calendar days per month to avoid repeated calculations
+        # This is especially important for multi-year queries (e.g., last_5_years with 60 months)
+        calendar_days_per_month = {}
+        if not use_daily_data and selected_months:
+            import calendar
+            from datetime import date as _date
+            for year, month in selected_months:
+                calendar_days_per_month[(year, month)] = calendar.monthrange(year, month)[1]
         
         step_start = time.time()
         for emp_id, emp_info in employees_dict.items():
@@ -6063,30 +6079,44 @@ class DailyAttendanceViewSet(viewsets.ModelViewSet):
                     calendar_days = (end_date_obj - effective_start).days + 1 if calendar_days != 0 else 0
             else:
                 # For monthly aggregation, calculate calendar days from DOJ
-                import calendar
+                # OPTIMIZED: Use pre-calculated calendar days per month
                 from datetime import date as _date
                 
                 calendar_days = 0
                 for year, month in selected_months:
+                    month_days = calendar_days_per_month[(year, month)]
                     month_start = _date(year, month, 1)
-                    month_end = _date(year, month, calendar.monthrange(year, month)[1])
+                    month_end = _date(year, month, month_days)
                     
                     # Check if employee has joined by this month
                     if doj and doj > month_end:
                         continue  # Employee not yet joined in this month
                     
                     # Calculate calendar days from DOJ if employee joined during this month
-                    effective_month_start = month_start
                     if doj and month_start <= doj <= month_end:
-                        effective_month_start = doj
-                    
-                    # Add days from effective start to end of month
-                    calendar_days += (month_end - effective_month_start).days + 1
+                        # Employee joined during this month - count from DOJ to month end
+                        calendar_days += (month_end - doj).days + 1
+                    else:
+                        # Employee already joined before this month - count full month
+                        calendar_days += month_days
             
             # Calculate off days (calendar days - total working days - holidays)
             # Off days = weekends and other non-working days (excluding holidays)
             # This is DOJ-aware since both calendar_days and employee_working_days are DOJ-aware
             off_days = max(0, calendar_days - employee_working_days)
+            
+            # Calculate unmarked days based on data source
+            if data_source == 'daily_attendance':
+                # For daily attendance, use records_count (actual days with records)
+                unmarked_days_value = max(0, calendar_days - data.get('records_count', 0) - off_days)
+            else:
+                # For other sources, check if unmarked_days is already in aggregated data
+                # If not (old data), calculate it: working days - present - absent
+                if data.get('unmarked_days', 0) > 0:
+                    unmarked_days_value = data['unmarked_days']
+                else:
+                    # Calculate: working days that have no attendance record
+                    unmarked_days_value = max(0, net_working_days - data['present_days'] - data['absent_days'])
             
             attendance_records.append({
                 'id': record_id,
@@ -6104,7 +6134,7 @@ class DailyAttendanceViewSet(viewsets.ModelViewSet):
                 'off_days': off_days,  # NEW: Off days (weekends, etc.)
                 'present_days': round(data['present_days'], 1),
                 'absent_days': round(absent_days, 1),
-                'unmarked_days': round(data.get('unmarked_days', 0), 1),
+                'unmarked_days': round(unmarked_days_value, 1),
                 'total_working_days': net_working_days,  # Net working days (after holidays)
                 'holiday_days': holiday_count,
                 'attendance_percentage': round(attendance_percentage, 1),
