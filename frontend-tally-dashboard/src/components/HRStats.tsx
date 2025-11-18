@@ -349,7 +349,7 @@ const HRStats: React.FC<HRStatsProps> = ({ timePeriod, selectedDepartment = 'All
             <h3 className="text-2xl font-bold text-gray-900 mt-2">{stat.value}</h3>
 
             {/* Status */}
-            <div className="flex items-center gap-1 mt-2">
+            {/* <div className="flex items-center gap-1 mt-2">
               {stat.change > 0 && (
                 <img src="/img/trendup.png" alt="" className='w-5 h-5' />
               )}
@@ -376,7 +376,7 @@ const HRStats: React.FC<HRStatsProps> = ({ timePeriod, selectedDepartment = 'All
                     ? `No change ${comparisonLabel.toLowerCase()}`
                     : `${stat.change > 0 ? "+" : ""}${stat.change.toFixed(2)}% ${comparisonLabel}`}
               </span>
-            </div>
+            </div> */}
           </div>
         ))}
       </div>
