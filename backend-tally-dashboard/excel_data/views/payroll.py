@@ -1163,6 +1163,12 @@ def payroll_period_detail(request, period_id):
                         month_num = 11  # Default
                         total_days_in_month = calendar.monthrange(period.year, month_num)[1]
                     
+                    # Calculate raw_present_days and extra_paid_days
+                    raw_present_days = int(float(calc.present_days) - float(calc.holiday_days) - off_days_count)
+                    working_days = int(calc.total_working_days)
+                    expected_max_present = working_days - int(calc.holiday_days)
+                    extra_paid_days = max(0, raw_present_days - expected_max_present) if expected_max_present > 0 else 0
+                    
                     employees_data.append({
                         'id': calc.id,
                         'employee_id': calc.employee_id,
@@ -1170,11 +1176,12 @@ def payroll_period_detail(request, period_id):
                         'department': calc.department or '',
                         'basic_salary': float(calc.basic_salary),
                         'total_days': total_days_in_month,
-                        'working_days': int(calc.total_working_days),
+                        'working_days': working_days,
                         'absent_days': float(calc.absent_days),
                         'holiday_days': int(calc.holiday_days),
                         'off_days': off_days_count,
-                        'raw_present_days': int(float(calc.present_days) - float(calc.holiday_days)),
+                        'raw_present_days': raw_present_days,
+                        'extra_paid_days': extra_paid_days,
                         'present_days': float(calc.present_days),
                         'paid_days': int(calc.present_days),
                         'ot_hours': float(calc.ot_hours),
@@ -1238,6 +1245,7 @@ def payroll_period_detail(request, period_id):
                         'holiday_days': 0,  # Not in Excel template
                         'off_days': 0,  # Not in Excel template
                         'raw_present_days': int(present_days),  # Same as present_days for Excel
+                        'extra_paid_days': 0,  # Not tracked in Excel template
                         'present_days': present_days,  # Calculate: working_days - absent_days
                         'paid_days': int(present_days),  # Same as present_days for Excel
                         'ot_hours': float(salary.ot),  # OT
@@ -1301,6 +1309,12 @@ def payroll_period_detail(request, period_id):
                     month_num = 11  # Default
                     total_days_in_month = calendar.monthrange(period.year, month_num)[1]
                 
+                # Calculate raw_present_days and extra_paid_days
+                raw_present_days = int(float(calc.present_days) - float(calc.holiday_days) - off_days_count)
+                working_days = int(calc.total_working_days)
+                expected_max_present = working_days - int(calc.holiday_days)
+                extra_paid_days = max(0, raw_present_days - expected_max_present) if expected_max_present > 0 else 0
+                
                 employees_data.append({
                     'id': calc.id,
                     'employee_id': calc.employee_id,
@@ -1308,12 +1322,13 @@ def payroll_period_detail(request, period_id):
                     'department': calc.department,
                     'basic_salary': float(calc.basic_salary),
                     'total_days': total_days_in_month,
-                    'working_days': int(calc.total_working_days),
+                    'working_days': working_days,
                     'present_days': float(calc.present_days),
                     'absent_days': float(calc.absent_days),
                     'holiday_days': int(calc.holiday_days),
                     'off_days': off_days_count,
-                    'raw_present_days': int(float(calc.present_days) - float(calc.holiday_days)),
+                    'raw_present_days': raw_present_days,
+                    'extra_paid_days': extra_paid_days,
                     'paid_days': int(calc.present_days),
                     'ot_hours': float(calc.ot_hours),
                     'ot_charges': float(calc.ot_charges),
@@ -2303,6 +2318,49 @@ def calculate_simple_payroll(request):
                 if off_day_flags[day_of_week]:
                     off_days_count += 1
             
+            # Calculate extra_paid_days: Days marked PRESENT on configured off days
+            from ..models import DailyAttendance
+            extra_paid_days = 0
+            for day_num in range(1, total_days_in_month + 1):
+                day_date = datetime(year, month_num, day_num).date()
+                # Skip if before DOJ
+                if employee.date_of_joining and day_date < employee.date_of_joining:
+                    continue
+                day_of_week = day_date.weekday()
+                # Check if this day is configured as an off day for the employee
+                if off_day_flags[day_of_week]:
+                    # Check if employee was marked PRESENT on this off day
+                    attendance_record = DailyAttendance.objects.filter(
+                        tenant=tenant,
+                        employee_id=employee.employee_id,
+                        date=day_date,
+                        attendance_status__in=['PRESENT', 'PAID_LEAVE']
+                    ).first()
+                    if attendance_record:
+                        extra_paid_days += 1
+            
+            # Calculate raw_present_days (present excluding holidays and off days)
+            raw_present_days = present_days - holiday_count - off_days_count
+            
+            # Calculate paid_days (includes raw present + holidays + basic off days)
+            paid_days = raw_present_days + holiday_count + off_days_count
+            
+            # UPDATED: Recalculate gross salary using paid_days instead of present_days
+            # This ensures employees with many off days get full salary
+            daily_rate = base_salary / 30.4  # Use standardized 30.4 days per month
+            salary_for_present_days = daily_rate * paid_days
+            gross_salary = salary_for_present_days + ot_charges - late_deduction
+            
+            # Recalculate TDS and net salary with updated gross
+            tds_amount = (gross_salary * tds_percentage) / 100
+            salary_after_tds = gross_salary - tds_amount
+            net_salary = salary_after_tds - advance_deductions
+            
+            # Round values again after recalculation
+            gross_salary_rounded = round(gross_salary, 2)
+            tds_amount_rounded = round(tds_amount, 2)
+            net_salary_rounded = round(net_salary, 2)
+            
             payroll_data.append({
                 'employee_id': employee.employee_id,
                 'employee_name': f"{employee.first_name} {employee.last_name}",
@@ -2310,10 +2368,13 @@ def calculate_simple_payroll(request):
                 'base_salary': base_salary,
                 'total_days': total_days_in_month,  # Total days in the month
                 'working_days': employee_working_days,
+                'raw_present_days': int(raw_present_days),  # Present without holidays
                 'present_days': present_days,
                 'absent_days': attendance['absent_days'],
                 'off_days': off_days_count,  # Add off days count
                 'holiday_days': holiday_count,  # Add holidays count
+                'extra_paid_days': extra_paid_days,  # Days worked on configured off days
+                'paid_days': int(paid_days),  # Present + holidays + basic off days
                 'ot_hours': ot_hours,
                 'late_minutes': late_minutes,
                 'gross_salary': gross_salary_rounded,
@@ -2814,8 +2875,14 @@ def calculate_simple_payroll_ultra_fast(request):
             holiday_count = int(data['holiday_days'] or 0)
             off_days_count = employee_off_days_map.get(employee_id, 0)
             
-            # Calculate paid_days using SQL-calculated holiday count (respects DOJ, dept, and off days)
-            paid_days = raw_present_days + holiday_count
+            # FIXED: Calculate extra paid days (days employee worked on their configured off days)
+            # If raw_present_days exceeds (working_days - holiday_count), it means they worked on off days
+            expected_max_present = employee_working_days - holiday_count
+            extra_paid_days = max(0, int(raw_present_days) - expected_max_present) if expected_max_present > 0 else 0
+            
+            # FIXED: Calculate paid_days = raw_present_days + holidays + basic_off_days
+            # This ensures employees with many off days still get full salary
+            paid_days = raw_present_days + holiday_count + off_days_count
             
             # Calculate gross salary using 30.4 (average days per month)
             daily_rate = base_salary / 30.4
@@ -2845,7 +2912,8 @@ def calculate_simple_payroll_ultra_fast(request):
                 'total_days': total_days_in_month,  # Total days in the month
                 'working_days': employee_working_days,
                 'raw_present_days': int(raw_present_days),  # Present without holidays
-                'paid_days': int(paid_days),  # Present + holidays (respects DOJ)
+                'extra_paid_days': extra_paid_days,  # Days worked on configured off days
+                'paid_days': int(paid_days),  # Present + holidays + basic off days
                 'present_days': int(paid_days),  # For backward compatibility (now same as paid_days)
                 'absent_days': int(data['absent_days'] or 0),
                 'off_days': off_days_count,  # Add off days count

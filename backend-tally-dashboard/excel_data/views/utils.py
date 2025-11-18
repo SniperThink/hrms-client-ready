@@ -1553,6 +1553,11 @@ class UploadAttendanceDataAPIView(APIView):
                         else:
                             total_working_days = 30
                         
+                        # For Excel uploads, unmarked_days should always be 0
+                        # because uploading Excel means the entire month is being marked/processed
+                        # This ensures that the calendar days for this month are excluded from total unmarked days
+                        unmarked_days = 0
+                        
                         attendance_data = {
                             'tenant': tenant,
                             'employee_id': employee_id,
@@ -1563,6 +1568,7 @@ class UploadAttendanceDataAPIView(APIView):
                             'total_working_days': int(total_working_days),
                             'present_days': present_days,
                             'absent_days': absent_days,
+                            'unmarked_days': unmarked_days,
                             'ot_hours': ot_hours,
                             'late_minutes': late_minutes
                         }
@@ -1589,7 +1595,7 @@ class UploadAttendanceDataAPIView(APIView):
                         Attendance.objects.bulk_update(
                             attendance_to_update,
                             ['name', 'department', 'total_working_days', 'present_days', 
-                             'absent_days', 'ot_hours', 'late_minutes', 'calendar_days'],
+                             'absent_days', 'unmarked_days', 'ot_hours', 'late_minutes', 'calendar_days'],
                             batch_size=100
                         )
                 
@@ -1714,6 +1720,10 @@ class UploadMonthlyAttendanceAPIView(APIView):
                     # Create attendance date (first day of the month)
                     attendance_date = date(int(year), int(month), 1)
                     
+                    # For Excel/JSON uploads, unmarked_days should always be 0
+                    # because uploading means the entire month is being marked/processed
+                    unmarked_days = 0
+                    
                     attendance_record = Attendance(
                         tenant=tenant,
                         employee_id=employee_id,
@@ -1724,6 +1734,7 @@ class UploadMonthlyAttendanceAPIView(APIView):
                         total_working_days=record.get('total_working_days', 0),
                         present_days=record.get('present_days', 0),
                         absent_days=record.get('absent_days', 0),
+                        unmarked_days=unmarked_days,
                         ot_hours=record.get('ot_hours', 0),
                         late_minutes=record.get('late_minutes', 0)
                     )
