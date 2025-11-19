@@ -1019,10 +1019,12 @@ const HRAttendanceLog: React.FC = () => {
   };
 
   const recalcOtLate = (employeeId: string, clockIn: string, clockOut: string, shiftStart: string, shiftEnd: string) => {
-    const late = Math.max(timeToMinutes(clockIn) - timeToMinutes(shiftStart), 0);
+    const lateArrival = Math.max(timeToMinutes(clockIn) - timeToMinutes(shiftStart), 0);
+    const earlyLeave = Math.max(timeToMinutes(shiftEnd) - timeToMinutes(clockOut), 0);
+    const late_minutes = lateArrival + earlyLeave;
     const otMinutes = Math.max(timeToMinutes(clockOut) - timeToMinutes(shiftEnd), 0);
     const otHours = parseFloat((otMinutes / 60).toFixed(1));
-    updateAttendanceEntry(employeeId, 'late_minutes', late);
+    updateAttendanceEntry(employeeId, 'late_minutes', late_minutes);
     updateAttendanceEntry(employeeId, 'ot_hours', otHours);
   };
 

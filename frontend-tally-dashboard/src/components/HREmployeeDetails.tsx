@@ -1247,8 +1247,8 @@ const HREmployeeDetails: React.FC = () => {
                   }}
                 />
                 <div className="mt-1 text-xs text-gray-500">
-                  <p className="mb-1">💡 <strong>Formula:</strong> Basic Salary / (Shift Hours × Working Days)</p>
-                  <p>This will be calculated automatically if not provided. The OT rate changes monthly based on each month's working days.</p>
+                  <p className="mb-1">💡 <strong>Formula:</strong> Basic Salary / (Shift Hours × 30.4)</p>
+                  <p>This will be calculated automatically if not provided. Using static 30.4 days (average days per month) for consistent OT rates.</p>
                 </div>
               </div>
               <div className="col-span-2">
