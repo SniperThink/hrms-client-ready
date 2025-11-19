@@ -65,7 +65,7 @@ const HRAttendanceTracker: React.FC = () => {
   const [loadingMore, setLoadingMore] = useState<boolean>(false);
   const [error, setError] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
-  const [filterType, setFilterType] = useState<FilterType>('last_5_years');
+  const [filterType, setFilterType] = useState<FilterType>('custom_month');
   const [selectedDepartment, setSelectedDepartment] = useState<string>('all');
   const [departments, setDepartments] = useState<string[]>([]);
   
