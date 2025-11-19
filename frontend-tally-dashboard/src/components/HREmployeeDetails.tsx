@@ -244,6 +244,24 @@ const HREmployeeDetails: React.FC = () => {
     }
   };
 
+
+  // Calculate OT charge (Basic Salary / (Shift Hours × 30.4))
+  const calculateOTCharge = (basicSalary: string, shiftStart: string, shiftEnd: string) => {
+    const salary = parseFloat(basicSalary);
+    if (isNaN(salary) || !shiftStart || !shiftEnd) return '';
+    // Parse times to hours
+    const [startH, startM] = formatTimeToHHMM(shiftStart).split(':').map(Number);
+    const [endH, endM] = formatTimeToHHMM(shiftEnd).split(':').map(Number);
+    if (
+      isNaN(startH) || isNaN(startM) || isNaN(endH) || isNaN(endM)
+    ) return '';
+    let shiftHours = (endH + endM / 60) - (startH + startM / 60);
+    if (shiftHours <= 0) shiftHours += 24; // handle overnight shifts
+    if (shiftHours <= 0) return '';
+    const ot = salary / (shiftHours * 30.4);
+    return ot ? ot.toFixed(2) : '';
+  };
+
   // Handle custom department add
   const handleCustomDepartmentAdd = (value: string) => {
     setDropdownOptions(prev => ({
@@ -257,14 +275,10 @@ const HREmployeeDetails: React.FC = () => {
     const fieldName = `off_${day.toLowerCase()}` as keyof EmployeeProfileData;
     if (isEditing) {
       setEditData(prev => {
-        // Initialize editData with employeeData if it's null
         const currentEditData = prev || { ...employeeData };
-        
-        // Get current value from editData, or fall back to original employeeData
         const currentValue = currentEditData[fieldName] !== undefined 
           ? (currentEditData[fieldName] as boolean)
           : (employeeData?.[fieldName] as boolean || false);
-        
         return {
           ...currentEditData,
           [fieldName]: !currentValue
@@ -272,6 +286,20 @@ const HREmployeeDetails: React.FC = () => {
       });
     }
   };
+
+  // Recalculate OT charge when relevant fields change in edit mode
+  useEffect(() => {
+    if (!isEditing || !editData) return;
+    const { basic_salary, shift_start_time, shift_end_time } = editData;
+    const newOtCharge = calculateOTCharge(
+      basic_salary || employeeData?.basic_salary || '',
+      shift_start_time || employeeData?.shift_start_time || '',
+      shift_end_time || employeeData?.shift_end_time || ''
+    );
+    if (newOtCharge !== '' && newOtCharge !== editData.ot_charge) {
+      setEditData(prev => ({ ...prev, ot_charge: newOtCharge }));
+    }
+  }, [isEditing, editData?.basic_salary, editData?.shift_start_time, editData?.shift_end_time]);
 
   // Move fetchEmployeeData outside useEffect so it can be called after save
   const fetchEmployeeData = async () => {
