@@ -1044,6 +1044,15 @@ const HREmployeeDetails: React.FC = () => {
                   allowCustom={isEditing}
                   onCustomAdd={handleCustomDepartmentAdd}
                   customPlaceholder="Enter new department"
+                    onRemoveOption={(value) => {
+                      setDropdownOptions(prev => ({
+                        ...prev,
+                        departments: prev.departments.filter(d => d !== value)
+                      }));
+                      if ((isEditing ? editData?.department : employeeData.department) === value) {
+                        setEditData(prev => ({ ...prev, department: '' }));
+                      }
+                    }}
                 />
               </div>
               <div>

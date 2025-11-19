@@ -251,6 +251,16 @@ const HRAddEmployee: React.FC = () => {
     }));
   };
 
+  const handleDepartmentRemove = (value: string) => {
+    setDropdownOptions(prev => ({
+      ...prev,
+      departments: prev.departments.filter(d => d !== value)
+    }));
+    if (formData.department === value) {
+      setFormData(prev => ({ ...prev, department: '' }));
+    }
+  };
+
   const handleCustomLocationAdd = (value: string) => {
     setDropdownOptions(prev => ({
       ...prev,
@@ -1061,6 +1071,7 @@ const HRAddEmployee: React.FC = () => {
               customPlaceholder="Enter new department"
               label="Department"
               required
+              onRemoveOption={handleDepartmentRemove}
             />
             <Dropdown
               options={designationOptions}
