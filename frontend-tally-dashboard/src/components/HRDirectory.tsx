@@ -60,6 +60,9 @@ const HRDirectory: React.FC = () => {
   const [selectedDepartments, setSelectedDepartments] = useState<string[]>([]);
   const [pendingDepartments, setPendingDepartments] = useState<string[]>([]);
   const [showFilter, setShowFilter] = useState(false);
+  
+  // Active/Inactive filter state
+  const [activeStatusFilter, setActiveStatusFilter] = useState<'all' | 'active' | 'inactive'>('all');
   const [selectedEmployee, setSelectedEmployee] = useState<EmployeeData | null>(null);
   const [showEmployeeDetail, setShowEmployeeDetail] = useState(false);
   
@@ -521,11 +524,22 @@ const HRDirectory: React.FC = () => {
     });
   };
 
-  // Filter employees based on search query
+  // Filter employees based on search query, department, and active status
   const filteredEmployees = employees.filter(employee => {
+    // Filter by department
     if (selectedDepartments.length > 0 && !selectedDepartments.includes(employee.department)) {
       return false;
     }
+    
+    // Filter by active/inactive status
+    if (activeStatusFilter === 'active' && !employee.is_active) {
+      return false;
+    }
+    if (activeStatusFilter === 'inactive' && employee.is_active) {
+      return false;
+    }
+    
+    // Filter by search query
     if (!searchQuery) return true;
     
     const query = searchQuery.toLowerCase();
@@ -670,7 +684,12 @@ const HRDirectory: React.FC = () => {
           <div className="flex items-center gap-4">
           <div>
             <span className="font-medium text-teal-900">Total Employees:</span>
-              <span className="ml-2 text-teal-700">{totalCount || filteredEmployees.length}</span>
+              <span className="ml-2 text-teal-700">{filteredEmployees.length}</span>
+              {activeStatusFilter !== 'all' && (
+                <span className="ml-2 text-sm text-gray-500">
+                  ({activeStatusFilter === 'active' ? 'Active' : 'Inactive'} only)
+                </span>
+              )}
             </div>
             {/* {employees.length < totalCount && hasMore && (
               <div className="text-sm text-gray-500">
@@ -696,6 +715,40 @@ const HRDirectory: React.FC = () => {
           </div>
           
           <div className="flex items-center gap-2">
+            {/* Active/Inactive Toggle */}
+            <div className="flex items-center gap-1 bg-gray-100 rounded-lg p-1 border border-gray-200">
+              <button
+                onClick={() => setActiveStatusFilter('all')}
+                className={`px-3 py-1.5 text-sm font-medium rounded-md transition-colors ${
+                  activeStatusFilter === 'all'
+                    ? 'bg-white text-teal-700 shadow-sm'
+                    : 'text-gray-600 hover:text-gray-900'
+                }`}
+              >
+                All
+              </button>
+              <button
+                onClick={() => setActiveStatusFilter('active')}
+                className={`px-3 py-1.5 text-sm font-medium rounded-md transition-colors ${
+                  activeStatusFilter === 'active'
+                    ? 'bg-white text-teal-700 shadow-sm'
+                    : 'text-gray-600 hover:text-gray-900'
+                }`}
+              >
+                Active
+              </button>
+              <button
+                onClick={() => setActiveStatusFilter('inactive')}
+                className={`px-3 py-1.5 text-sm font-medium rounded-md transition-colors ${
+                  activeStatusFilter === 'inactive'
+                    ? 'bg-white text-teal-700 shadow-sm'
+                    : 'text-gray-600 hover:text-gray-900'
+                }`}
+              >
+                Inactive
+              </button>
+            </div>
+            
             <button 
               className="flex items-center gap-2 px-3 py-2 bg-[#1A6262] text-white rounded-lg text-sm hover:bg-[#155252]"
               onClick={() => navigate('/hr-management/directory/add')}
@@ -1056,6 +1109,8 @@ const HRDirectory: React.FC = () => {
               <div className="fixed inset-0 flex items-center justify-center bg-black bg-opacity-30 z-50">
                 <div className="bg-white p-6 rounded-xl shadow-lg w-full max-w-xs">
                   <h2 className="text-lg font-semibold mb-4">Filter</h2>
+                  
+                  {/* Department Filter */}
                   <div className="mb-4">
                     <label className="block text-sm font-medium text-gray-700 mb-2">Department</label>
                     <div className="grid grid-cols-2 gap-2">
@@ -1078,9 +1133,13 @@ const HRDirectory: React.FC = () => {
                       ))}
                     </div>
                   </div>
+                  
                   <div className="flex justify-end gap-2 mt-6">
                     <button className="px-5 py-2 border border-gray-200 text-gray-700 rounded-lg" onClick={() => setShowFilter(false)}>Cancel</button>
-                    <button className="px-5 py-2 bg-teal-700 text-white rounded-lg" onClick={() => { setSelectedDepartments(pendingDepartments); setShowFilter(false); }}>Apply</button>
+                    <button className="px-5 py-2 bg-teal-700 text-white rounded-lg" onClick={() => { 
+                      setSelectedDepartments(pendingDepartments); 
+                      setShowFilter(false); 
+                    }}>Apply</button>
                   </div>
                 </div>
               </div>
