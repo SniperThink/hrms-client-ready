@@ -659,19 +659,129 @@ const HRDirectory: React.FC = () => {
     switch (action) {
       case 'activate':
         // Bulk activate employees
-        for (const emp of selectedEmployeesData) {
-          if (!emp.is_active) {
-            await handleToggleActiveStatus(emp.id, emp.is_active);
+        try {
+          const inactiveIds = selectedEmployeesData
+            .filter(emp => !emp.is_active)
+            .map(emp => emp.id);
+          
+          if (inactiveIds.length === 0) {
+            alert('All selected employees are already active');
+            setSelectedEmployees(new Set());
+            break;
           }
+          
+          // Optimistic update
+          setEmployees(prev => 
+            prev.map(emp => 
+              inactiveIds.includes(emp.id)
+                ? { ...emp, is_active: true, inactive_marked_at: null }
+                : emp
+            )
+          );
+          
+          const response = await apiCall('/api/employees/bulk_toggle_active_status/', {
+            method: 'POST',
+            body: JSON.stringify({
+              employee_ids: inactiveIds,
+              is_active: true
+            })
+          });
+          
+          if (response.ok) {
+            const data = await response.json();
+            // Update with server response
+            setEmployees(prev => 
+              prev.map(emp => 
+                inactiveIds.includes(emp.id)
+                  ? { ...emp, is_active: true, inactive_marked_at: null }
+                  : emp
+              )
+            );
+            // Dispatch event for other components
+            window.dispatchEvent(new CustomEvent('employeeStatusChanged', { 
+              detail: { employeeIds: inactiveIds, is_active: true, timestamp: Date.now() } 
+            }));
+            alert(`Successfully activated ${data.updated_count || inactiveIds.length} employee(s)`);
+          } else {
+            // Revert on failure
+            setEmployees(prev => 
+              prev.map(emp => 
+                inactiveIds.includes(emp.id)
+                  ? { ...emp, is_active: false }
+                  : emp
+              )
+            );
+            const errorData = await response.json().catch(() => ({}));
+            alert(`Failed to activate employees: ${errorData.error || 'Unknown error'}`);
+          }
+        } catch (error) {
+          logger.error('Error in bulk activate:', error);
+          alert('Failed to activate employees. Please try again.');
         }
         setSelectedEmployees(new Set());
         break;
       case 'deactivate':
         // Bulk deactivate employees
-        for (const emp of selectedEmployeesData) {
-          if (emp.is_active) {
-            await handleToggleActiveStatus(emp.id, emp.is_active);
+        try {
+          const activeIds = selectedEmployeesData
+            .filter(emp => emp.is_active)
+            .map(emp => emp.id);
+          
+          if (activeIds.length === 0) {
+            alert('All selected employees are already inactive');
+            setSelectedEmployees(new Set());
+            break;
           }
+          
+          const inactiveDate = new Date().toISOString().split('T')[0];
+          
+          // Optimistic update
+          setEmployees(prev => 
+            prev.map(emp => 
+              activeIds.includes(emp.id)
+                ? { ...emp, is_active: false, inactive_marked_at: inactiveDate }
+                : emp
+            )
+          );
+          
+          const response = await apiCall('/api/employees/bulk_toggle_active_status/', {
+            method: 'POST',
+            body: JSON.stringify({
+              employee_ids: activeIds,
+              is_active: false
+            })
+          });
+          
+          if (response.ok) {
+            const data = await response.json();
+            // Update with server response
+            setEmployees(prev => 
+              prev.map(emp => 
+                activeIds.includes(emp.id)
+                  ? { ...emp, is_active: false, inactive_marked_at: inactiveDate }
+                  : emp
+              )
+            );
+            // Dispatch event for other components
+            window.dispatchEvent(new CustomEvent('employeeStatusChanged', { 
+              detail: { employeeIds: activeIds, is_active: false, timestamp: Date.now() } 
+            }));
+            alert(`Successfully deactivated ${data.updated_count || activeIds.length} employee(s)`);
+          } else {
+            // Revert on failure
+            setEmployees(prev => 
+              prev.map(emp => 
+                activeIds.includes(emp.id)
+                  ? { ...emp, is_active: true }
+                  : emp
+              )
+            );
+            const errorData = await response.json().catch(() => ({}));
+            alert(`Failed to deactivate employees: ${errorData.error || 'Unknown error'}`);
+          }
+        } catch (error) {
+          logger.error('Error in bulk deactivate:', error);
+          alert('Failed to deactivate employees. Please try again.');
         }
         setSelectedEmployees(new Set());
         break;

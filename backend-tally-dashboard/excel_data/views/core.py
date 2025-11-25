@@ -3478,6 +3478,138 @@ class EmployeeProfileViewSet(viewsets.ModelViewSet):
         
         # Return response immediately without waiting for cache clearing
         return Response(response_data)
+    
+    @action(detail=False, methods=['post'])
+    def bulk_toggle_active_status(self, request):
+        """
+        Bulk activate or deactivate employees using raw SQL for performance
+        Expected payload:
+        {
+            "employee_ids": [1, 2, 3],
+            "is_active": true  // true to activate, false to deactivate
+        }
+        """
+        from django.db import connection, transaction
+        
+        tenant = getattr(request, 'tenant', None)
+        if not tenant:
+            return Response({"error": "No tenant found"}, status=400)
+        
+        employee_ids = request.data.get('employee_ids', [])
+        is_active = request.data.get('is_active')
+        
+        if not employee_ids:
+            return Response({"error": "employee_ids list is required"}, status=400)
+        
+        if not isinstance(is_active, bool):
+            return Response({"error": "is_active must be a boolean (true or false)"}, status=400)
+        
+        # Validate employee IDs belong to this tenant
+        employee_count = EmployeeProfile.objects.filter(
+            tenant=tenant,
+            id__in=employee_ids
+        ).count()
+        
+        if employee_count != len(employee_ids):
+            return Response({"error": "Some employee IDs not found or don't belong to this tenant"}, status=400)
+        
+        # Calculate inactive_marked_at date
+        inactive_marked_at_value = None if is_active else timezone.now().date()
+        
+        # Use raw SQL for bulk update
+        with transaction.atomic():
+            with connection.cursor() as cursor:
+                # Convert employee_ids to placeholders
+                id_placeholders = ','.join(['%s'] * len(employee_ids))
+                params = [is_active, tenant.id]
+                params.extend(employee_ids)
+                
+                if inactive_marked_at_value is None:
+                    # Activating - set is_active to True and clear inactive_marked_at
+                    sql = f"""
+                        UPDATE excel_data_employeeprofile
+                        SET is_active = %s, inactive_marked_at = NULL
+                        WHERE tenant_id = %s AND id IN ({id_placeholders})
+                    """
+                else:
+                    # Deactivating - set is_active to False and set inactive_marked_at
+                    sql = f"""
+                        UPDATE excel_data_employeeprofile
+                        SET is_active = %s, inactive_marked_at = %s
+                        WHERE tenant_id = %s AND id IN ({id_placeholders})
+                    """
+                    params.insert(1, inactive_marked_at_value)
+                
+                cursor.execute(sql, params)
+                updated_count = cursor.rowcount
+        
+        if updated_count == 0:
+            return Response({"error": "No employees were updated"}, status=400)
+        
+        # Clear caches asynchronously (don't block the response)
+        tenant_id = tenant.id
+        import threading
+        def clear_caches_async():
+            try:
+                cache_keys_to_clear = [
+                    f"directory_data_{tenant_id}",
+                    f"directory_data_full_{tenant_id}",
+                    f"payroll_overview_{tenant_id}",
+                    f"months_with_attendance_{tenant_id}",
+                ]
+                
+                for key in cache_keys_to_clear:
+                    cache.delete(key)
+                
+                # Clear attendance_all_records cache variations
+                try:
+                    cache.delete_pattern(f"attendance_all_records_{tenant_id}_*")
+                except (AttributeError, NotImplementedError):
+                    common_time_periods = ['last_6_months', 'last_12_months', 'last_5_years', 'this_month', 'custom', 'custom_month', 'custom_range', 'one_day']
+                    for period in common_time_periods:
+                        variations = [
+                            f"attendance_all_records_{tenant_id}_{period}_None_None_None_None_rt_1",
+                            f"attendance_all_records_{tenant_id}_{period}_None_None_None_None_rt_0",
+                        ]
+                        for var_key in variations:
+                            cache.delete(var_key)
+                    cache.delete(f"attendance_all_records_{tenant_id}")
+                
+                # Clear frontend charts cache
+                try:
+                    cache.delete_pattern(f"frontend_charts_{tenant_id}_*")
+                except AttributeError:
+                    chart_keys = [
+                        f"frontend_charts_{tenant_id}_this_month_All_",
+                        f"frontend_charts_{tenant_id}_last_6_months_All_",
+                        f"frontend_charts_{tenant_id}_last_12_months_All_",
+                        f"frontend_charts_{tenant_id}_last_5_years_All_"
+                    ]
+                    for key in chart_keys:
+                        cache.delete(key)
+                
+                # Clear eligible_employees cache
+                try:
+                    cache.delete_pattern(f"eligible_employees_{tenant_id}_*")
+                    cache.delete_pattern(f"eligible_employees_progressive_{tenant_id}_*")
+                    cache.delete_pattern(f"total_eligible_count_{tenant_id}_*")
+                except (AttributeError, NotImplementedError):
+                    cache.delete(f"eligible_employees_{tenant_id}")
+                
+                logger.info(f"✨ Cleared all caches for tenant {tenant_id} after bulk status change (is_active={is_active}, count={updated_count})")
+            except Exception as e:
+                logger.error(f"Error clearing caches asynchronously: {str(e)}")
+        
+        # Start cache clearing in background thread (non-blocking)
+        cache_thread = threading.Thread(target=clear_caches_async, daemon=True)
+        cache_thread.start()
+        
+        return Response({
+            'success': True,
+            'updated_count': updated_count,
+            'is_active': is_active,
+            'message': f'Successfully {"activated" if is_active else "deactivated"} {updated_count} employee(s)'
+        })
 
     @action(detail=False, methods=['post'], parser_classes=[MultiPartParser, FormParser])
     def bulk_upload(self, request):
