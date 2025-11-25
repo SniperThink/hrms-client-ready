@@ -3365,88 +3365,119 @@ class EmployeeProfileViewSet(viewsets.ModelViewSet):
     @action(detail=True, methods=['patch'])
     def toggle_active_status(self, request, pk=None):
         """
-        Toggle employee active/inactive status and clear cache
+        Toggle employee active/inactive status and clear cache (optimized with raw SQL)
         """
-        employee = self.get_object()
-        employee.is_active = not employee.is_active
-        # Set inactive_marked_at when deactivating; clear when activating
-        if employee.is_active:
-            employee.inactive_marked_at = None
-        else:
-            employee.inactive_marked_at = timezone.now().date()
-        employee.save()
+        from django.db import connection, transaction
         
-        # Clear multiple caches when employee status changes
+        # Get employee to validate it exists and get current status
+        employee = self.get_object()
+        tenant = getattr(request, 'tenant', None)
+        if not tenant:
+            return Response({"error": "No tenant found"}, status=400)
+        
+        # Get current status
+        current_status = employee.is_active
+        new_status = not current_status
+        
+        # Calculate inactive_marked_at date
+        inactive_marked_at_value = None if new_status else timezone.now().date()
+        
+        # Use raw SQL for fast update
+        with transaction.atomic():
+            with connection.cursor() as cursor:
+                if inactive_marked_at_value is None:
+                    # Activating - set is_active to True and clear inactive_marked_at
+                    sql = """
+                        UPDATE excel_data_employeeprofile
+                        SET is_active = %s, inactive_marked_at = NULL
+                        WHERE id = %s AND tenant_id = %s
+                    """
+                    cursor.execute(sql, [new_status, employee.id, tenant.id])
+                else:
+                    # Deactivating - set is_active to False and set inactive_marked_at
+                    sql = """
+                        UPDATE excel_data_employeeprofile
+                        SET is_active = %s, inactive_marked_at = %s
+                        WHERE id = %s AND tenant_id = %s
+                    """
+                    cursor.execute(sql, [new_status, inactive_marked_at_value, employee.id, tenant.id])
+                
+                if cursor.rowcount == 0:
+                    return Response({"error": "Employee not found or update failed"}, status=404)
+        
+        # Prepare response data immediately
+        response_data = {
+            'is_active': new_status,
+            'inactive_marked_at': inactive_marked_at_value.isoformat() if inactive_marked_at_value else None
+        }
+        
+        # Clear caches asynchronously (don't block the response)
         tenant = getattr(request, 'tenant', None)
         tenant_id = tenant.id if tenant else 'default'
         
-        # Clear directory data cache
-        cache_keys_to_clear = [
-            f"directory_data_{tenant_id}",
-            f"directory_data_full_{tenant_id}",
-            f"payroll_overview_{tenant_id}",
-            f"months_with_attendance_{tenant_id}",
-        ]
-        
-        for key in cache_keys_to_clear:
-            cache.delete(key)
-        
-        # FIXED: Clear all attendance_all_records cache variations (pattern-based)
-        # This ensures attendance log cache is cleared after activation/deactivation
-        try:
-            cache.delete_pattern(f"attendance_all_records_{tenant_id}_*")
-            logger.info(f"✅ Cleared all attendance_all_records cache variations (pattern) for tenant {tenant_id}")
-        except (AttributeError, NotImplementedError):
-            # Fallback: Clear common variations manually
-            common_time_periods = ['last_6_months', 'last_12_months', 'last_5_years', 'this_month', 'custom', 'custom_month', 'custom_range', 'one_day']
-            for period in common_time_periods:
-                variations = [
-                    f"attendance_all_records_{tenant_id}_{period}_None_None_None_None_rt_1",
-                    f"attendance_all_records_{tenant_id}_{period}_None_None_None_None_rt_0",
+        # Use a background task or thread to clear caches without blocking
+        import threading
+        def clear_caches_async():
+            try:
+                # Clear directory data cache
+                cache_keys_to_clear = [
+                    f"directory_data_{tenant_id}",
+                    f"directory_data_full_{tenant_id}",
+                    f"payroll_overview_{tenant_id}",
+                    f"months_with_attendance_{tenant_id}",
                 ]
-                for var_key in variations:
-                    cache.delete(var_key)
-            # Also clear base key
-            cache.delete(f"attendance_all_records_{tenant_id}")
-            logger.info(f"✅ Cleared attendance_all_records cache variations (manual fallback) for tenant {tenant_id}")
+                
+                for key in cache_keys_to_clear:
+                    cache.delete(key)
+                
+                # Clear attendance_all_records cache variations (pattern-based)
+                try:
+                    cache.delete_pattern(f"attendance_all_records_{tenant_id}_*")
+                except (AttributeError, NotImplementedError):
+                    # Fallback: Clear common variations manually
+                    common_time_periods = ['last_6_months', 'last_12_months', 'last_5_years', 'this_month', 'custom', 'custom_month', 'custom_range', 'one_day']
+                    for period in common_time_periods:
+                        variations = [
+                            f"attendance_all_records_{tenant_id}_{period}_None_None_None_None_rt_1",
+                            f"attendance_all_records_{tenant_id}_{period}_None_None_None_None_rt_0",
+                        ]
+                        for var_key in variations:
+                            cache.delete(var_key)
+                    cache.delete(f"attendance_all_records_{tenant_id}")
+                
+                # Clear frontend charts cache (pattern matching)
+                try:
+                    cache.delete_pattern(f"frontend_charts_{tenant_id}_*")
+                except AttributeError:
+                    # Fallback: Clear common chart cache keys
+                    chart_keys = [
+                        f"frontend_charts_{tenant_id}_this_month_All_",
+                        f"frontend_charts_{tenant_id}_last_6_months_All_",
+                        f"frontend_charts_{tenant_id}_last_12_months_All_",
+                        f"frontend_charts_{tenant_id}_last_5_years_All_"
+                    ]
+                    for key in chart_keys:
+                        cache.delete(key)
+                
+                # Clear eligible_employees cache (pattern matching for all date variations)
+                try:
+                    cache.delete_pattern(f"eligible_employees_{tenant_id}_*")
+                    cache.delete_pattern(f"eligible_employees_progressive_{tenant_id}_*")
+                    cache.delete_pattern(f"total_eligible_count_{tenant_id}_*")
+                except (AttributeError, NotImplementedError):
+                    # Fallback: Clear base key (less optimal but works)
+                    cache.delete(f"eligible_employees_{tenant_id}")
+                
+                logger.info(f"✨ Cleared all caches for tenant {tenant_id} after employee status change (is_active={new_status})")
+            except Exception as e:
+                logger.error(f"Error clearing caches asynchronously: {str(e)}")
         
-        # Clear frontend charts cache (pattern matching)
-        try:
-            cache.delete_pattern(f"frontend_charts_{tenant_id}_*")
-            logger.info(f"✅ Cleared frontend_charts pattern cache for tenant {tenant_id}")
-        except AttributeError:
-            # Fallback: Clear common chart cache keys
-            chart_keys = [
-                f"frontend_charts_{tenant_id}_this_month_All_",
-                f"frontend_charts_{tenant_id}_last_6_months_All_",
-                f"frontend_charts_{tenant_id}_last_12_months_All_",
-                f"frontend_charts_{tenant_id}_last_5_years_All_"
-            ]
-            for key in chart_keys:
-                cache.delete(key)
-            logger.info(f"✅ Cleared frontend_charts fallback cache for tenant {tenant_id}")
+        # Start cache clearing in background thread (non-blocking)
+        cache_thread = threading.Thread(target=clear_caches_async, daemon=True)
+        cache_thread.start()
         
-        # Clear eligible_employees cache (pattern matching for all date variations)
-        # This endpoint uses: eligible_employees_progressive_{tenant_id}_{date_str}_{initial/remaining}
-        try:
-            cache.delete_pattern(f"eligible_employees_{tenant_id}_*")
-            cache.delete_pattern(f"eligible_employees_progressive_{tenant_id}_*")
-            cache.delete_pattern(f"total_eligible_count_{tenant_id}_*")
-            logger.info(f"✅ Cleared all eligible_employees pattern cache for tenant {tenant_id}")
-        except (AttributeError, NotImplementedError):
-            # Fallback: Clear base key (less optimal but works)
-            cache.delete(f"eligible_employees_{tenant_id}")
-            logger.info(f"✅ Cleared eligible_employees base cache (fallback) for tenant {tenant_id}")
-        
-        logger.info(f"✨ Cleared all caches for tenant {tenant_id} after employee status change (is_active={employee.is_active})")
-        
-        return Response({
-            'message': f'Employee {employee.full_name} is now {"active" if employee.is_active else "inactive"}',
-            'is_active': employee.is_active,
-            'inactive_marked_at': employee.inactive_marked_at.isoformat() if employee.inactive_marked_at else None,
-            'cache_cleared': True,
-            'caches_invalidated': ['directory_data', 'payroll_overview', 'attendance_all_records', 'frontend_charts', 'months_with_attendance', 'eligible_employees']
-        })
+        # Return response immediately without waiting for cache clearing
+        return Response(response_data)
 
     @action(detail=False, methods=['post'], parser_classes=[MultiPartParser, FormParser])
     def bulk_upload(self, request):

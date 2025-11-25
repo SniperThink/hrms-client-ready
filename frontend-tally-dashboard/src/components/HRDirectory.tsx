@@ -935,8 +935,24 @@ const HRDirectory: React.FC = () => {
     return Array.from(setLoc).sort((a,b)=>a.localeCompare(b));
   }, [employees]);
 
-  // Toggle employee active status
+  // Toggle employee active status with optimistic update
   const handleToggleActiveStatus = async (employeeId: number, currentStatus: boolean) => {
+    const newStatus = !currentStatus;
+    const previousStatus = currentStatus;
+    
+    // Optimistic update - update UI immediately
+    setEmployees(prev => 
+      prev.map(emp => 
+        emp.id === employeeId 
+          ? { 
+              ...emp, 
+              is_active: newStatus, 
+              inactive_marked_at: newStatus ? null : (emp.inactive_marked_at || new Date().toISOString().split('T')[0])
+            }
+          : emp
+      )
+    );
+    
     try {
       const response = await apiCall(`/api/employees/${employeeId}/toggle_active_status/`, {
         method: 'PATCH'
@@ -950,24 +966,40 @@ const HRDirectory: React.FC = () => {
         } catch (e) {
           inactiveMarkedAt = null;
         }
-        // Update local state
+        // Update with actual server response
         setEmployees(prev => 
           prev.map(emp => 
             emp.id === employeeId 
-              ? { ...emp, is_active: !currentStatus, inactive_marked_at: inactiveMarkedAt }
+              ? { ...emp, is_active: newStatus, inactive_marked_at: inactiveMarkedAt }
               : emp
           )
         );
         
         // Dispatch event to notify other components (e.g., attendance log) to invalidate cache
         window.dispatchEvent(new CustomEvent('employeeStatusChanged', { 
-          detail: { employeeId, is_active: !currentStatus, timestamp: Date.now() } 
+          detail: { employeeId, is_active: newStatus, timestamp: Date.now() } 
         }));
       } else {
-        // Handle toggle failure silently
+        // Revert on failure
+        setEmployees(prev => 
+          prev.map(emp => 
+            emp.id === employeeId 
+              ? { ...emp, is_active: previousStatus }
+              : emp
+          )
+        );
+        alert('Failed to update employee status. Please try again.');
       }
     } catch (error) {
-      // Handle error silently
+      // Revert on error
+      setEmployees(prev => 
+        prev.map(emp => 
+          emp.id === employeeId 
+            ? { ...emp, is_active: previousStatus }
+            : emp
+        )
+      );
+      alert('Error updating employee status. Please try again.');
     }
   };
 
