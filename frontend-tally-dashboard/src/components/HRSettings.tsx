@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { apiGet, apiPatch } from '../services/api';
+import { apiGet, apiPatch, apiPost } from '../services/api';
 import ChangePasswordModal from './ChangePasswordModal';
 import DeleteAccountModal from './DeleteAccountModal';
 import HRHolidayManagement from './HRHolidayManagement';
@@ -413,24 +413,17 @@ const HRSettings: React.FC = () => {
               setSalaryConfigSuccess(null);
 
               try {
-                const response = await fetch('/api/salary-config/update/', {
-                  method: 'POST',
-                  headers: {
-                    'Content-Type': 'application/json',
-                    'Authorization': `Bearer ${localStorage.getItem('access')}`,
-                  },
-                  body: JSON.stringify({
-                    average_days_per_month: averageDaysPerMonth,
-                  }),
+                const response = await apiPost('/api/salary-config/update/', {
+                  average_days_per_month: averageDaysPerMonth,
                 });
 
-                const data = await response.json();
-
                 if (!response.ok) {
-                  throw new Error(data.error || 'Failed to update salary configuration');
+                  const errorData = await response.json().catch(() => ({}));
+                  throw new Error(errorData.error || 'Failed to update salary configuration');
                 }
 
-                setSalaryConfigSuccess('Salary configuration updated successfully!');
+                const data = await response.json();
+                setSalaryConfigSuccess(data.message || 'Salary configuration updated successfully!');
                 setTimeout(() => setSalaryConfigSuccess(null), 3000);
               } catch (err: any) {
                 logger.error('Error updating salary config:', err);
