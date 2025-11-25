@@ -262,7 +262,7 @@ ZEPTOMAIL_FROM_NAME = config('ZEPTOMAIL_FROM_NAME', default='SniperThink Team')
 DEFAULT_FROM_EMAIL = config('DEFAULT_FROM_EMAIL', default='noreply@sniperthink.com')
 
 # Support Ticket Email Configuration
-SUPPORT_ADMIN_EMAIL = config('SUPPORT_ADMIN_EMAIL', default='')
+SUPPORT_ADMIN_EMAIL = config('SUPPORT_ADMIN_EMAIL', default='techsupport@sniperthink.com')
 
 # Salary Calculation Configuration
 # Average days per month for salary and OT rate calculations

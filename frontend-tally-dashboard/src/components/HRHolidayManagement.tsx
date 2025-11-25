@@ -2,6 +2,8 @@ import React, { useState, useEffect } from 'react';
 import { Plus, Calendar, Trash2, Edit, CheckCircle, AlertCircle, X } from 'lucide-react';
 import { apiGet, apiPost, apiPut, apiDelete } from '../services/api';
 import { format, parseISO, isPast } from 'date-fns';
+import CustomDateInputWithOverlay from './CustomDateInputWithOverlay';
+import Dropdown, { DropdownOption } from './Dropdown';
 
 interface Holiday {
   id: number;
@@ -39,9 +41,19 @@ const HRHolidayManagement: React.FC = () => {
     date: '',
     holiday_type: 'COMPANY',
     description: '',
-    applies_to_all: true,
+    applies_to_all: true, // Always true by default
     specific_departments: '',
   });
+
+  // Holiday type options for dropdown
+  const holidayTypeOptions: DropdownOption[] = [
+    { value: 'NATIONAL', label: 'National Holiday' },
+    { value: 'REGIONAL', label: 'Regional Holiday' },
+    { value: 'COMPANY', label: 'Company Holiday' },
+    { value: 'FESTIVAL', label: 'Festival' },
+    { value: 'EXAM', label: 'Examination' },
+    { value: 'OTHER', label: 'Other' },
+  ];
 
   useEffect(() => {
     loadHolidays();
@@ -271,65 +283,26 @@ const HRHolidayManagement: React.FC = () => {
                 <label className="block text-sm font-medium text-gray-700 mb-2">
                   Date <span className="text-red-500">*</span>
                 </label>
-                <input
-                  type="date"
-                  name="date"
-                  required
+                <CustomDateInputWithOverlay
                   value={formData.date}
-                  onChange={handleInputChange}
+                  onChange={(date) => setFormData(prev => ({ ...prev, date }))}
+                  placeholder="Select holiday date"
                   className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-teal-500 focus:border-transparent"
+                  required={true}
                 />
               </div>
 
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-2">
-                  Holiday Type <span className="text-red-500">*</span>
-                </label>
-                <select
-                  name="holiday_type"
-                  required
+                <Dropdown
+                  options={holidayTypeOptions}
                   value={formData.holiday_type}
-                  onChange={handleInputChange}
-                  className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-teal-500 focus:border-transparent"
-                >
-                  <option value="NATIONAL">National Holiday</option>
-                  <option value="REGIONAL">Regional Holiday</option>
-                  <option value="COMPANY">Company Holiday</option>
-                  <option value="FESTIVAL">Festival</option>
-                  <option value="EXAM">Examination</option>
-                  <option value="OTHER">Other</option>
-                </select>
-              </div>
-
-              <div className="flex items-center">
-                <label className="flex items-center">
-                  <input
-                    type="checkbox"
-                    name="applies_to_all"
-                    checked={formData.applies_to_all}
-                    onChange={handleInputChange}
-                    className="w-4 h-4 text-teal-600 border-gray-300 rounded focus:ring-teal-500"
-                  />
-                  <span className="ml-2 text-sm text-gray-700">Applies to all departments</span>
-                </label>
+                  onChange={(value) => setFormData(prev => ({ ...prev, holiday_type: value as HolidayFormData['holiday_type'] }))}
+                  placeholder="Select holiday type"
+                  label="Holiday Type"
+                  required={true}
+                />
               </div>
             </div>
-
-            {!formData.applies_to_all && (
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-2">
-                  Specific Departments (comma-separated)
-                </label>
-                <input
-                  type="text"
-                  name="specific_departments"
-                  value={formData.specific_departments}
-                  onChange={handleInputChange}
-                  className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-teal-500 focus:border-transparent"
-                  placeholder="e.g., Engineering, Finance"
-                />
-              </div>
-            )}
 
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-2">
@@ -453,4 +426,5 @@ const HRHolidayManagement: React.FC = () => {
 };
 
 export default HRHolidayManagement;
+
 

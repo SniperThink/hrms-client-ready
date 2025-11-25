@@ -3799,6 +3799,180 @@ class EmployeeProfileViewSet(viewsets.ModelViewSet):
             }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
     @action(detail=False, methods=['post'])
+    def bulk_update(self, request):
+        """
+        Bulk update employee fields for multiple employees using raw SQL for better performance
+        Expected payload:
+        {
+            "employee_ids": [1, 2, 3],
+            "updates": {
+                "department": "Engineering",
+                "designation": "Senior Developer",
+                "employment_type": "FULL_TIME",
+                "date_of_joining": "2024-01-15",
+                "location_branch": "Mumbai",
+                "basic_salary": 50000,
+                "off_monday": false,
+                "off_tuesday": false,
+                "off_wednesday": false,
+                "off_thursday": false,
+                "off_friday": false,
+                "off_saturday": false,
+                "off_sunday": true
+            }
+        }
+        """
+        try:
+            from django.db import connection, transaction
+            from datetime import datetime
+            
+            tenant = getattr(request, 'tenant', None)
+            if not tenant:
+                return Response({"error": "No tenant found"}, status=400)
+
+            employee_ids = request.data.get('employee_ids', [])
+            updates = request.data.get('updates', {})
+
+            if not employee_ids:
+                return Response({"error": "employee_ids list is required"}, status=400)
+
+            if not updates:
+                return Response({"error": "updates object is required"}, status=400)
+
+            # Validate employee IDs belong to this tenant
+            employee_count = EmployeeProfile.objects.filter(
+                tenant=tenant,
+                id__in=employee_ids
+            ).count()
+
+            if employee_count != len(employee_ids):
+                return Response({"error": "Some employee IDs not found or don't belong to this tenant"}, status=400)
+
+            # Allowed fields for bulk update
+            allowed_fields = [
+                'department', 'designation', 'employment_type', 'date_of_joining',
+                'location_branch', 'basic_salary', 'off_monday', 'off_tuesday',
+                'off_wednesday', 'off_thursday', 'off_friday', 'off_saturday', 'off_sunday',
+                'shift_start_time', 'shift_end_time'
+            ]
+
+            # Build SQL SET clauses and parameters
+            set_clauses = []
+            params = []
+            
+            for field, value in updates.items():
+                if field not in allowed_fields:
+                    continue
+                
+                if value is None or (isinstance(value, str) and value == ''):
+                    continue
+                
+                if field == 'date_of_joining':
+                    try:
+                        if isinstance(value, str):
+                            date_value = datetime.strptime(value, '%Y-%m-%d').date()
+                        else:
+                            date_value = value
+                        set_clauses.append(f'"{field}" = %s')
+                        params.append(date_value)
+                    except ValueError:
+                        return Response({"error": f"Invalid date format for {field}. Use YYYY-MM-DD"}, status=400)
+                
+                elif field == 'basic_salary':
+                    try:
+                        salary_value = float(value)
+                        set_clauses.append(f'"{field}" = %s')
+                        params.append(salary_value)
+                    except (ValueError, TypeError):
+                        return Response({"error": f"Invalid salary value"}, status=400)
+                
+                elif field.startswith('off_'):
+                    bool_value = bool(value)
+                    set_clauses.append(f'"{field}" = %s')
+                    params.append(bool_value)
+                
+                elif field in ['shift_start_time', 'shift_end_time']:
+                    # Time fields - value should be in HH:MM:SS format
+                    try:
+                        # Validate time format (HH:MM or HH:MM:SS)
+                        if isinstance(value, str):
+                            # Parse time string
+                            time_parts = value.split(':')
+                            if len(time_parts) >= 2:
+                                # Ensure it's in HH:MM:SS format
+                                if len(time_parts) == 2:
+                                    time_value = f"{time_parts[0]}:{time_parts[1]}:00"
+                                else:
+                                    time_value = value
+                                set_clauses.append(f'"{field}" = %s')
+                                params.append(time_value)
+                            else:
+                                return Response({"error": f"Invalid time format for {field}. Use HH:MM or HH:MM:SS"}, status=400)
+                        else:
+                            return Response({"error": f"Invalid time value for {field}"}, status=400)
+                    except Exception as e:
+                        return Response({"error": f"Invalid time format for {field}: {str(e)}"}, status=400)
+                
+                else:
+                    # String fields (department, designation, employment_type, location_branch)
+                    set_clauses.append(f'"{field}" = %s')
+                    params.append(str(value))
+
+            if not set_clauses:
+                return Response({"error": "No valid updates to process"}, status=400)
+
+            # Build the SQL query
+            # Convert employee_ids to a list of placeholders
+            id_placeholders = ','.join(['%s'] * len(employee_ids))
+            params.extend(employee_ids)
+            params.append(tenant.id)  # For tenant filter
+            
+            sql = f"""
+                UPDATE excel_data_employeeprofile
+                SET {', '.join(set_clauses)}
+                WHERE id IN ({id_placeholders})
+                  AND tenant_id = %s
+            """
+
+            # Execute raw SQL update
+            with transaction.atomic():
+                with connection.cursor() as cursor:
+                    cursor.execute(sql, params)
+                    updated_count = cursor.rowcount
+
+            # Clear relevant caches
+            from django.core.cache import cache
+            cache_keys = [
+                f"directory_data_{tenant.id}",
+                f"directory_data_full_{tenant.id}",
+                f"payroll_overview_{tenant.id}",
+                f"attendance_all_records_{tenant.id}"
+            ]
+            
+            for key in cache_keys:
+                cache.delete(key)
+            
+            # Also clear frontend chart caches using pattern deletion if available
+            try:
+                cache.delete_pattern(f"frontend_charts_{tenant.id}_*")
+                cache.delete_pattern(f"attendance_charts_{tenant.id}_*")
+            except AttributeError:
+                # Fallback if delete_pattern not available
+                pass
+
+            return Response({
+                "success": True,
+                "updated_count": updated_count,
+                "message": f"Successfully updated {updated_count} employee(s)"
+            })
+
+        except Exception as e:
+            import logging
+            logger = logging.getLogger(__name__)
+            logger.error(f"Error in bulk_update: {str(e)}", exc_info=True)
+            return Response({"error": f"Bulk update failed: {str(e)}"}, status=500)
+
+    @action(detail=False, methods=['post'])
     def create_missing_employees(self, request):
         """
         Create missing employees from attendance/salary upload confirmation

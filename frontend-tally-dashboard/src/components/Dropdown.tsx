@@ -48,21 +48,44 @@ const Dropdown: React.FC<DropdownProps> = ({
   const [isOpen, setIsOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
   const [customValue, setCustomValue] = useState("");
+  const [menuPosition, setMenuPosition] = useState<{ top: number; left: number; width: number } | null>(null);
   const dropdownRef = useRef<HTMLDivElement>(null);
+  const triggerRef = useRef<HTMLDivElement>(null);
 
-  // Close dropdown when clicking outside
+  // Close dropdown when clicking outside and update position on scroll/resize
   useEffect(() => {
     const handleClickOutside = (event: MouseEvent) => {
       if (dropdownRef.current && !dropdownRef.current.contains(event.target as Node)) {
         setIsOpen(false);
         setSearchQuery("");
         setCustomValue("");
+        setMenuPosition(null);
       }
     };
 
-    document.addEventListener('mousedown', handleClickOutside);
-    return () => document.removeEventListener('mousedown', handleClickOutside);
-  }, []);
+    const updatePosition = () => {
+      if (isOpen && triggerRef.current) {
+        const rect = triggerRef.current.getBoundingClientRect();
+        setMenuPosition({
+          top: rect.bottom + window.scrollY + 4,
+          left: rect.left + window.scrollX,
+          width: rect.width
+        });
+      }
+    };
+
+    if (isOpen) {
+      document.addEventListener('mousedown', handleClickOutside);
+      window.addEventListener('scroll', updatePosition, true);
+      window.addEventListener('resize', updatePosition);
+    }
+
+    return () => {
+      document.removeEventListener('mousedown', handleClickOutside);
+      window.removeEventListener('scroll', updatePosition, true);
+      window.removeEventListener('resize', updatePosition);
+    };
+  }, [isOpen]);
 
   // Handle search
   const handleSearch = (query: string) => {
@@ -88,6 +111,7 @@ const Dropdown: React.FC<DropdownProps> = ({
     setIsOpen(false);
     setSearchQuery("");
     setCustomValue("");
+    setMenuPosition(null);
   };
 
   const handleCustomAdd = () => {
@@ -97,11 +121,12 @@ const Dropdown: React.FC<DropdownProps> = ({
       setIsOpen(false);
       setCustomValue("");
       setSearchQuery("");
+      setMenuPosition(null);
     }
   };
 
   return (
-    <div className={`relative ${className}`} ref={dropdownRef}>
+    <div className={`relative ${className}`} ref={dropdownRef} style={{ zIndex: 'auto' }}>
       {label && (
         <label className="block text-sm font-medium text-gray-700 mb-1">
           {label}
@@ -110,6 +135,7 @@ const Dropdown: React.FC<DropdownProps> = ({
       )}
       
       <div
+        ref={triggerRef}
         className={`
           w-full p-3 border rounded-lg cursor-pointer text-sm
           flex items-center justify-between
@@ -124,7 +150,19 @@ const Dropdown: React.FC<DropdownProps> = ({
           }
           ${isOpen ? 'border-teal-500 ring-1 ring-teal-500' : ''}
         `}
-        onClick={() => !disabled && setIsOpen(!isOpen)}
+        onClick={() => {
+          if (!disabled) {
+            if (triggerRef.current) {
+              const rect = triggerRef.current.getBoundingClientRect();
+              setMenuPosition({
+                top: rect.bottom + window.scrollY + 4,
+                left: rect.left + window.scrollX,
+                width: rect.width
+              });
+            }
+            setIsOpen(!isOpen);
+          }
+        }}
       >
         <span className={selectedOption ? 'text-gray-900' : 'text-gray-500'}>
           {displayValue}
@@ -142,7 +180,22 @@ const Dropdown: React.FC<DropdownProps> = ({
       )}
 
       {isOpen && (
-        <div className="absolute top-full left-0 right-0 z-50 mt-1 bg-white border border-gray-200 rounded-lg shadow-lg max-h-60 overflow-hidden">
+        <div 
+          className="bg-white border border-gray-200 rounded-lg shadow-lg max-h-60 overflow-hidden"
+          style={menuPosition ? {
+            position: 'fixed',
+            top: menuPosition.top,
+            left: menuPosition.left,
+            width: menuPosition.width,
+            zIndex: 9999
+          } : {
+            position: 'absolute',
+            top: '100%',
+            left: 0,
+            right: 0,
+            zIndex: 100
+          }}
+        >
           {searchable && (
             <div className="p-2 border-b border-gray-200">
               <input

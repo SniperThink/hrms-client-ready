@@ -1,10 +1,13 @@
 import React, { useState, useEffect } from 'react';
-import { Search, Eye, Edit, Plus, Download, MoreVertical, Trash2 } from 'lucide-react';
+import { Search, Eye, Edit, Plus, Download, MoreVertical, Trash2, ChevronDown } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { exportToExcel, EmployeeData } from '../utils/excelExport';
 import { apiCall } from '../services/api';
 import { SkeletonTable, SkeletonSearchBar, SkeletonButton } from './SkeletonComponents';
 import { logger } from '../utils/logger';
+import Dropdown, { DropdownOption } from './Dropdown';
+import { getDropdownOptions, DropdownOptions } from '../services/dropdownService';
+import CustomDateInputWithOverlay from './CustomDateInputWithOverlay';
 
 interface AttendanceRecord {
   employee_id: string;
@@ -71,10 +74,57 @@ const HRDirectory: React.FC = () => {
   const [employeeToDelete, setEmployeeToDelete] = useState<EmployeeData | null>(null);
   const [deleting, setDeleting] = useState(false);
 
+  // Bulk selection state
+  const [selectedEmployees, setSelectedEmployees] = useState<Set<number>>(new Set());
+  const [showBulkActionsDropdown, setShowBulkActionsDropdown] = useState(false);
+  
+  // Bulk update modal state
+  const [showBulkUpdateModal, setShowBulkUpdateModal] = useState(false);
+  const [bulkUpdateField, setBulkUpdateField] = useState<string>('');
+  const [bulkUpdateValue, setBulkUpdateValue] = useState<any>('');
+  const [bulkUpdating, setBulkUpdating] = useState(false);
+
+  // Dropdown options state
+  const [dropdownOptions, setDropdownOptions] = useState<DropdownOptions>({
+    departments: [] as string[],
+    locations: [] as string[],
+    designations: [] as string[],
+    cities: [] as string[],
+    states: [] as string[]
+  });
+
+  // Initialize off_days as object when opening modal
+  useEffect(() => {
+    if (bulkUpdateField === 'off_days' && showBulkUpdateModal && typeof bulkUpdateValue !== 'object') {
+      setBulkUpdateValue({
+        off_monday: false,
+        off_tuesday: false,
+        off_wednesday: false,
+        off_thursday: false,
+        off_friday: false,
+        off_saturday: false,
+        off_sunday: false
+      });
+    }
+  }, [bulkUpdateField, showBulkUpdateModal]);
+
   useEffect(() => {
     // Always call refresh function when component mounts (page is opened)
     refreshEmployeeData();
     // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Load dropdown options on mount
+  useEffect(() => {
+    const loadDropdownOptions = async () => {
+      try {
+        const options = await getDropdownOptions();
+        setDropdownOptions(options);
+      } catch (error) {
+        logger.error('Error loading dropdown options:', error);
+      }
+    };
+    loadDropdownOptions();
   }, []);
 
   // Listen for attendance updates to refresh directory data
@@ -558,6 +608,199 @@ const HRDirectory: React.FC = () => {
 
   // Use all filtered employees instead of pagination
   const currentEntries = filteredEmployees;
+
+  // Handle checkbox selection
+  const handleSelectEmployee = (employeeId: number) => {
+    setSelectedEmployees(prev => {
+      const newSet = new Set(prev);
+      if (newSet.has(employeeId)) {
+        newSet.delete(employeeId);
+      } else {
+        newSet.add(employeeId);
+      }
+      return newSet;
+    });
+  };
+
+  // Handle select all
+  const handleSelectAll = (checked: boolean) => {
+    if (checked) {
+      setSelectedEmployees(new Set(currentEntries.map(emp => emp.id)));
+    } else {
+      setSelectedEmployees(new Set());
+    }
+  };
+
+  // Check if all visible employees are selected
+  const allSelected = currentEntries.length > 0 && currentEntries.every(emp => selectedEmployees.has(emp.id));
+  const someSelected = currentEntries.some(emp => selectedEmployees.has(emp.id)) && !allSelected;
+  const hasSelectedEmployees = selectedEmployees.size > 0;
+
+  // Close dropdown when clicking outside
+  useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      const target = event.target as HTMLElement;
+      if (!target.closest('.bulk-actions-dropdown')) {
+        setShowBulkActionsDropdown(false);
+      }
+    };
+
+    if (showBulkActionsDropdown) {
+      document.addEventListener('mousedown', handleClickOutside);
+      return () => document.removeEventListener('mousedown', handleClickOutside);
+    }
+  }, [showBulkActionsDropdown]);
+
+  // Handle bulk actions
+  const handleBulkAction = async (action: string) => {
+    const selectedIds = Array.from(selectedEmployees);
+    const selectedEmployeesData = employees.filter(emp => selectedIds.includes(emp.id));
+    
+    switch (action) {
+      case 'activate':
+        // Bulk activate employees
+        for (const emp of selectedEmployeesData) {
+          if (!emp.is_active) {
+            await handleToggleActiveStatus(emp.id, emp.is_active);
+          }
+        }
+        setSelectedEmployees(new Set());
+        break;
+      case 'deactivate':
+        // Bulk deactivate employees
+        for (const emp of selectedEmployeesData) {
+          if (emp.is_active) {
+            await handleToggleActiveStatus(emp.id, emp.is_active);
+          }
+        }
+        setSelectedEmployees(new Set());
+        break;
+      case 'delete':
+        // Show confirmation for bulk delete
+        if (window.confirm(`Are you sure you want to delete ${selectedEmployeesData.length} employee(s)? This action cannot be undone.`)) {
+          for (const emp of selectedEmployeesData) {
+            await apiCall(`/api/employees/${emp.id}/`, { method: 'DELETE' });
+          }
+          setEmployees(prev => prev.filter(emp => !selectedIds.includes(emp.id)));
+          setSelectedEmployees(new Set());
+        }
+        break;
+      case 'off_days':
+        // Open bulk update modal for off days
+        setBulkUpdateField(action);
+        setBulkUpdateValue({
+          off_monday: false,
+          off_tuesday: false,
+          off_wednesday: false,
+          off_thursday: false,
+          off_friday: false,
+          off_saturday: false,
+          off_sunday: false
+        });
+        setShowBulkUpdateModal(true);
+        break;
+      case 'department':
+      case 'designation':
+      case 'employment_type':
+      case 'date_of_joining':
+      case 'location_branch':
+      case 'basic_salary':
+      case 'shift_timings':
+        // Open bulk update modal for these fields
+        setBulkUpdateField(action);
+        if (action === 'shift_timings') {
+          setBulkUpdateValue({
+            shift_start_time: '',
+            shift_end_time: ''
+          });
+        } else {
+          setBulkUpdateValue('');
+        }
+        setShowBulkUpdateModal(true);
+        break;
+      default:
+        break;
+    }
+    setShowBulkActionsDropdown(false);
+  };
+
+  // Handle bulk update submission
+  const handleBulkUpdateSubmit = async () => {
+    const selectedIds = Array.from(selectedEmployees);
+    if (selectedIds.length === 0) {
+      alert('Please select at least one employee');
+      return;
+    }
+
+    // Validate input
+    if (bulkUpdateField === 'off_days') {
+      if (!bulkUpdateValue || typeof bulkUpdateValue !== 'object') {
+        alert('Please select at least one off day');
+        return;
+      }
+    } else if (bulkUpdateField === 'shift_timings') {
+      if (!bulkUpdateValue || typeof bulkUpdateValue !== 'object' || !bulkUpdateValue.shift_start_time || !bulkUpdateValue.shift_end_time) {
+        alert('Please enter both shift start time and end time');
+        return;
+      }
+    } else if (!bulkUpdateValue || bulkUpdateValue === '') {
+      alert('Please enter a value');
+      return;
+    }
+
+    setBulkUpdating(true);
+    try {
+      const updates: any = {};
+      
+      if (bulkUpdateField === 'off_days') {
+        // Handle off days - bulkUpdateValue should be an object with day flags
+        Object.assign(updates, bulkUpdateValue);
+      } else if (bulkUpdateField === 'shift_timings') {
+        // Handle shift timings - bulkUpdateValue should be an object with shift_start_time and shift_end_time
+        updates.shift_start_time = bulkUpdateValue.shift_start_time;
+        updates.shift_end_time = bulkUpdateValue.shift_end_time;
+      } else if (bulkUpdateField === 'date_of_joining') {
+        updates.date_of_joining = bulkUpdateValue;
+      } else if (bulkUpdateField === 'basic_salary') {
+        const salaryValue = parseFloat(bulkUpdateValue.toString().replace(/,/g, ''));
+        if (isNaN(salaryValue) || salaryValue < 0) {
+          alert('Please enter a valid salary amount');
+          setBulkUpdating(false);
+          return;
+        }
+        updates.basic_salary = salaryValue;
+      } else {
+        updates[bulkUpdateField] = bulkUpdateValue;
+      }
+
+      const response = await apiCall('/api/employees/bulk_update/', {
+        method: 'POST',
+        body: JSON.stringify({
+          employee_ids: selectedIds,
+          updates: updates
+        })
+      });
+
+      if (response.ok) {
+        const data = await response.json();
+        alert(`Successfully updated ${data.updated_count} employee(s)`);
+        setShowBulkUpdateModal(false);
+        setBulkUpdateField('');
+        setBulkUpdateValue('');
+        setSelectedEmployees(new Set());
+        // Refresh employee data
+        refreshEmployeeData(false, true);
+      } else {
+        const errorData = await response.json().catch(() => ({}));
+        alert(`Failed to update employees: ${errorData.error || 'Unknown error'}`);
+      }
+    } catch (error) {
+      logger.error('Error in bulk update:', error);
+      alert('Failed to update employees. Please try again.');
+    } finally {
+      setBulkUpdating(false);
+    }
+  };
   
 
 
@@ -598,6 +841,98 @@ const HRDirectory: React.FC = () => {
       setDep.add(normalizeDepartment(emp.department));
     });
     return Array.from(setDep).sort((a,b)=>a.localeCompare(b));
+  }, [employees]);
+
+  // Unique designations for dropdown (derived from loaded employees)
+  const designationOptions = React.useMemo(() => {
+    const setDes = new Set<string>();
+    employees.forEach(emp => {
+      const des = normalizeField(emp.designation);
+      if (des && des !== '-') {
+        setDes.add(des);
+      }
+    });
+    return Array.from(setDes).sort((a,b)=>a.localeCompare(b));
+  }, [employees]);
+
+  // Combine backend dropdown options with employee data for bulk update dropdowns
+  const bulkDepartmentOptions: DropdownOption[] = React.useMemo(() => {
+    const combined = new Set<string>();
+    // Add from backend dropdown options
+    dropdownOptions.departments.forEach(dept => combined.add(dept));
+    // Add from current employee data
+    departmentOptions.forEach(dept => {
+      if (dept && dept !== '-') {
+        combined.add(dept);
+      }
+    });
+    return Array.from(combined).sort((a, b) => a.localeCompare(b)).map(dept => ({
+      value: dept,
+      label: dept
+    }));
+  }, [dropdownOptions.departments, departmentOptions]);
+
+  const bulkDesignationOptions: DropdownOption[] = React.useMemo(() => {
+    const combined = new Set<string>();
+    // Add from backend dropdown options
+    dropdownOptions.designations.forEach(des => combined.add(des));
+    // Add from current employee data
+    designationOptions.forEach(des => {
+      if (des && des !== '-') {
+        combined.add(des);
+      }
+    });
+    return Array.from(combined).sort((a, b) => a.localeCompare(b)).map(des => ({
+      value: des,
+      label: des
+    }));
+  }, [dropdownOptions.designations, designationOptions]);
+
+  // Custom add handlers for bulk update dropdowns
+  const handleCustomDepartmentAdd = (value: string) => {
+    setDropdownOptions(prev => ({
+      ...prev,
+      departments: prev.departments.includes(value) ? prev.departments : [...prev.departments, value]
+    }));
+  };
+
+  const handleDepartmentRemove = (value: string) => {
+    setDropdownOptions(prev => ({
+      ...prev,
+      departments: prev.departments.filter(d => d !== value)
+    }));
+    if (bulkUpdateValue === value) {
+      setBulkUpdateValue('');
+    }
+  };
+
+  const handleCustomDesignationAdd = (value: string) => {
+    setDropdownOptions(prev => ({
+      ...prev,
+      designations: prev.designations.includes(value) ? prev.designations : [...prev.designations, value]
+    }));
+  };
+
+  const handleDesignationRemove = (value: string) => {
+    setDropdownOptions(prev => ({
+      ...prev,
+      designations: prev.designations.filter(d => d !== value)
+    }));
+    if (bulkUpdateValue === value) {
+      setBulkUpdateValue('');
+    }
+  };
+
+  // Unique branch locations for dropdown (derived from loaded employees)
+  const locationBranchOptions = React.useMemo(() => {
+    const setLoc = new Set<string>();
+    employees.forEach(emp => {
+      const loc = normalizeField(emp.branch_location);
+      if (loc && loc !== '-') {
+        setLoc.add(loc);
+      }
+    });
+    return Array.from(setLoc).sort((a,b)=>a.localeCompare(b));
   }, [employees]);
 
   // Toggle employee active status
@@ -684,18 +1019,17 @@ const HRDirectory: React.FC = () => {
           <div className="flex items-center gap-4">
           <div>
             <span className="font-medium text-teal-900">Total Employees:</span>
-              <span className="ml-2 text-teal-700">{filteredEmployees.length}</span>
+              {searchQuery || selectedDepartments.length > 0 || activeStatusFilter !== 'all' ? (
+                <span className="ml-2 text-teal-700">{filteredEmployees.length}</span>
+              ) : (
+                <span className="ml-2 text-teal-700">{totalCount || filteredEmployees.length}</span>
+              )}
               {activeStatusFilter !== 'all' && (
                 <span className="ml-2 text-sm text-gray-500">
                   ({activeStatusFilter === 'active' ? 'Active' : 'Inactive'} only)
                 </span>
               )}
             </div>
-            {/* {employees.length < totalCount && hasMore && (
-              <div className="text-sm text-gray-500">
-                (Showing {employees.length}, scroll for more)
-              </div>
-            )} */}
           </div>
       </div>
       <div className="p-4">
@@ -748,6 +1082,95 @@ const HRDirectory: React.FC = () => {
                 Inactive
               </button>
             </div>
+            
+            {/* Bulk Actions Dropdown - Only show when employees are selected */}
+            {hasSelectedEmployees && (
+              <div className="relative bulk-actions-dropdown">
+                <button
+                  onClick={() => setShowBulkActionsDropdown(!showBulkActionsDropdown)}
+                  className="flex items-center gap-2 px-3 py-2 bg-white border border-gray-200 text-gray-700 rounded-lg text-sm hover:bg-gray-50 transition-colors"
+                >
+                  Bulk Actions ({selectedEmployees.size})
+                  <ChevronDown size={16} className={showBulkActionsDropdown ? 'rotate-180' : ''} />
+                </button>
+                {showBulkActionsDropdown && (
+                  <div className="absolute right-0 mt-2 w-56 bg-white rounded-lg shadow-lg border border-gray-200 divide-y divide-gray-100 z-40 max-h-96 overflow-y-auto">
+                    <div className="px-2 py-1 text-xs font-semibold text-gray-500 uppercase">Status</div>
+                    <button
+                      onClick={() => handleBulkAction('activate')}
+                      className="w-full px-4 py-2.5 text-left text-sm text-gray-700 hover:bg-gray-50 flex items-center gap-2"
+                    >
+                      <span className="w-2 h-2 rounded-full bg-teal-500"></span>
+                      Activate Selected
+                    </button>
+                    <button
+                      onClick={() => handleBulkAction('deactivate')}
+                      className="w-full px-4 py-2.5 text-left text-sm text-gray-700 hover:bg-gray-50 flex items-center gap-2"
+                    >
+                      <span className="w-2 h-2 rounded-full bg-gray-400"></span>
+                      Deactivate Selected
+                    </button>
+                    <div className="px-2 py-1 text-xs font-semibold text-gray-500 uppercase">Update Fields</div>
+                    <button
+                      onClick={() => handleBulkAction('department')}
+                      className="w-full px-4 py-2.5 text-left text-sm text-gray-700 hover:bg-gray-50"
+                    >
+                      Change Department
+                    </button>
+                    <button
+                      onClick={() => handleBulkAction('designation')}
+                      className="w-full px-4 py-2.5 text-left text-sm text-gray-700 hover:bg-gray-50"
+                    >
+                      Change Designation
+                    </button>
+                    <button
+                      onClick={() => handleBulkAction('employment_type')}
+                      className="w-full px-4 py-2.5 text-left text-sm text-gray-700 hover:bg-gray-50"
+                    >
+                      Change Employment Type
+                    </button>
+                    <button
+                      onClick={() => handleBulkAction('date_of_joining')}
+                      className="w-full px-4 py-2.5 text-left text-sm text-gray-700 hover:bg-gray-50"
+                    >
+                      Change Date of Joining
+                    </button>
+                    <button
+                      onClick={() => handleBulkAction('location_branch')}
+                      className="w-full px-4 py-2.5 text-left text-sm text-gray-700 hover:bg-gray-50"
+                    >
+                      Change Branch Location
+                    </button>
+                    <button
+                      onClick={() => handleBulkAction('basic_salary')}
+                      className="w-full px-4 py-2.5 text-left text-sm text-gray-700 hover:bg-gray-50"
+                    >
+                      Change Salary
+                    </button>
+                    <button
+                      onClick={() => handleBulkAction('off_days')}
+                      className="w-full px-4 py-2.5 text-left text-sm text-gray-700 hover:bg-gray-50"
+                    >
+                      Change Off Days
+                    </button>
+                    <button
+                      onClick={() => handleBulkAction('shift_timings')}
+                      className="w-full px-4 py-2.5 text-left text-sm text-gray-700 hover:bg-gray-50"
+                    >
+                      Change Shift Timings
+                    </button>
+                    <div className="px-2 py-1 text-xs font-semibold text-gray-500 uppercase">Danger Zone</div>
+                    <button
+                      onClick={() => handleBulkAction('delete')}
+                      className="w-full px-4 py-2.5 text-left text-sm text-red-600 hover:bg-red-50 flex items-center gap-2"
+                    >
+                      <Trash2 size={16} className="text-red-500" />
+                      Delete Selected
+                    </button>
+                  </div>
+                )}
+              </div>
+            )}
             
             <button 
               className="flex items-center gap-2 px-3 py-2 bg-[#1A6262] text-white rounded-lg text-sm hover:bg-[#155252]"
@@ -804,35 +1227,45 @@ const HRDirectory: React.FC = () => {
           </div>
         ) : (
           <>
-            <div className="overflow-x-auto thin-scrollbar">
+            <div className="overflow-x-auto thin-scrollbar max-h-[600px] overflow-y-auto">
               <table className="w-full min-w-max">
                 <thead className="bg-gray-50 text-left">
                   <tr>
-                    
-                    <th className="px-4 py-3 text-sm font-medium text-gray-600 sticky left-0 bg-gray-50 w-48">Employee ID</th>
-                    <th className="px-4 py-3 text-sm font-medium text-gray-600 sticky left-36 z-20 z-20 bg-gray-50">Employee Name</th>
-                    <th className="px-4 py-3 text-sm font-medium text-gray-600">Mobile Number</th>
-                    <th className="px-4 py-3 text-sm font-medium text-gray-600">Email</th>
-                    <th className="px-4 py-3 text-sm font-medium text-gray-600">Department</th>
-                    <th className="px-4 py-3 text-sm font-medium text-gray-600">Designation</th>
-                    <th className="px-4 py-3 text-sm font-medium text-gray-600">Employment Type</th>
-                    <th className="px-4 py-3 text-sm font-medium text-gray-600">Date of Joining</th>
-                    <th className="px-4 py-3 text-sm font-medium text-gray-600">Branch/Location</th>
-                    <th className="px-4 py-3 text-sm font-medium text-gray-600">Attendance %</th>
-                    <th className="px-4 py-3 text-sm font-medium text-gray-600">Total OT Hours</th>
-                    <th className="px-4 py-3 text-sm font-medium text-gray-600">Total Late Hours</th>
-                    <th className="px-4 py-3 text-sm font-medium text-gray-600">Shift Start Time</th>
-                    <th className="px-4 py-3 text-sm font-medium text-gray-600">Shift End Time</th>
-                    <th className="px-4 py-3 text-sm font-medium text-gray-600">Basic Salary</th>
-                    <th className="px-4 py-3 text-sm font-medium text-gray-600">Off Days</th>
-                    <th className="px-4 py-3 text-sm font-medium text-gray-600">Status</th>
-                    <th className="px-4 py-3 text-sm font-medium text-gray-600">Actions</th>
+                    <th className="px-4 py-3 text-sm font-medium text-gray-600 sticky top-0 left-0 bg-gray-50 z-30 w-12">
+                      <input
+                        type="checkbox"
+                        checked={allSelected}
+                        ref={(input) => {
+                          if (input) input.indeterminate = someSelected;
+                        }}
+                        onChange={(e) => handleSelectAll(e.target.checked)}
+                        className="w-4 h-4 text-teal-600 border-gray-300 rounded focus:ring-teal-500"
+                      />
+                    </th>
+                    <th className="px-4 py-3 text-sm font-medium text-gray-600 sticky top-0 left-12 bg-gray-50 z-30 w-48">Employee ID</th>
+                    <th className="px-4 py-3 text-sm font-medium text-gray-600 sticky top-0 left-60 bg-gray-50 z-30">Employee Name</th>
+                    <th className="px-4 py-3 text-sm font-medium text-gray-600 sticky top-0 bg-gray-50 z-20">Mobile Number</th>
+                    <th className="px-4 py-3 text-sm font-medium text-gray-600 sticky top-0 bg-gray-50 z-20">Email</th>
+                    <th className="px-4 py-3 text-sm font-medium text-gray-600 sticky top-0 bg-gray-50 z-20">Department</th>
+                    <th className="px-4 py-3 text-sm font-medium text-gray-600 sticky top-0 bg-gray-50 z-20">Designation</th>
+                    <th className="px-4 py-3 text-sm font-medium text-gray-600 sticky top-0 bg-gray-50 z-20">Employment Type</th>
+                    <th className="px-4 py-3 text-sm font-medium text-gray-600 sticky top-0 bg-gray-50 z-20">Date of Joining</th>
+                    <th className="px-4 py-3 text-sm font-medium text-gray-600 sticky top-0 bg-gray-50 z-20">Branch/Location</th>
+                    <th className="px-4 py-3 text-sm font-medium text-gray-600 sticky top-0 bg-gray-50 z-20">Attendance %</th>
+                    <th className="px-4 py-3 text-sm font-medium text-gray-600 sticky top-0 bg-gray-50 z-20">Total OT Hours</th>
+                    <th className="px-4 py-3 text-sm font-medium text-gray-600 sticky top-0 bg-gray-50 z-20">Total Late Hours</th>
+                    <th className="px-4 py-3 text-sm font-medium text-gray-600 sticky top-0 bg-gray-50 z-20">Shift Start Time</th>
+                    <th className="px-4 py-3 text-sm font-medium text-gray-600 sticky top-0 bg-gray-50 z-20">Shift End Time</th>
+                    <th className="px-4 py-3 text-sm font-medium text-gray-600 sticky top-0 bg-gray-50 z-20">Basic Salary</th>
+                    <th className="px-4 py-3 text-sm font-medium text-gray-600 sticky top-0 bg-gray-50 z-20">Off Days</th>
+                    <th className="px-4 py-3 text-sm font-medium text-gray-600 sticky top-0 bg-gray-50 z-20">Status</th>
+                    <th className="px-4 py-3 text-sm font-medium text-gray-600 sticky top-0 bg-gray-50 z-20">Actions</th>
                   </tr>
                 </thead>
                 <tbody>
                   {currentEntries.length === 0 ? (
                     <tr>
-                      <td colSpan={18} className="px-4 py-6 text-center text-gray-500">
+                      <td colSpan={19} className="px-4 py-6 text-center text-gray-500">
                         {searchQuery ? `No employees found matching "${searchQuery}"` : 'No employee records found.'}
                       </td>
                     </tr>
@@ -841,8 +1274,16 @@ const HRDirectory: React.FC = () => {
                       try {
                         return (
                       <tr key={`${employee.id}-${employee.employee_id}-${index}`} className="border-b border-gray-100 hover:bg-gray-50">
-                        <td className="px-4 py-3 text-sm sticky left-0 bg-white z-20">{employee.employee_id}</td>
-                        <td className="px-4 py-3 text-sm sticky left-36 bg-white z-20">
+                        <td className="px-4 py-3 text-sm sticky left-0 bg-white z-20">
+                          <input
+                            type="checkbox"
+                            checked={selectedEmployees.has(employee.id)}
+                            onChange={() => handleSelectEmployee(employee.id)}
+                            className="w-4 h-4 text-teal-600 border-gray-300 rounded focus:ring-teal-500"
+                          />
+                        </td>
+                        <td className="px-4 py-3 text-sm sticky left-12 bg-white z-20">{employee.employee_id}</td>
+                        <td className="px-4 py-3 text-sm sticky left-60 bg-white z-20">
                           <button
                             onClick={() => navigate(`/hr-management/employees/edit/${employee.employee_id}`)}
                             className="text-[#0B5E59] hover:underline text-left"
@@ -1212,6 +1653,244 @@ const HRDirectory: React.FC = () => {
                   )}
                 </button>
               </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Bulk Update Modal */}
+      {showBulkUpdateModal && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-lg shadow-xl max-w-md w-full max-h-[90vh] flex flex-col overflow-hidden">
+            <div className="flex items-center justify-between p-6 border-b border-gray-200">
+              <h2 className="text-xl font-semibold text-gray-900">
+                Bulk Update {bulkUpdateField === 'off_days' ? 'Off Days' : bulkUpdateField.replace('_', ' ').replace(/\b\w/g, l => l.toUpperCase())}
+              </h2>
+              <button
+                onClick={() => {
+                  setShowBulkUpdateModal(false);
+                  setBulkUpdateField('');
+                  setBulkUpdateValue('');
+                }}
+                className="text-gray-400 hover:text-gray-600"
+              >
+                <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                </svg>
+              </button>
+            </div>
+
+            <div className="p-6 overflow-y-auto flex-1">
+              <p className="text-sm text-gray-600 mb-4">
+                Updating <strong>{selectedEmployees.size}</strong> employee{selectedEmployees.size !== 1 ? 's' : ''}
+              </p>
+
+              <div className="space-y-4">
+                {bulkUpdateField === 'department' && (
+                  <div>
+                    <Dropdown
+                      options={bulkDepartmentOptions}
+                      value={bulkUpdateValue}
+                      onChange={(value) => setBulkUpdateValue(value)}
+                      placeholder="Select department"
+                      allowCustom
+                      onCustomAdd={handleCustomDepartmentAdd}
+                      onRemoveOption={handleDepartmentRemove}
+                      customPlaceholder="Enter new department"
+                      label="Department"
+                    />
+                  </div>
+                )}
+
+                {bulkUpdateField === 'designation' && (
+                  <div>
+                    <Dropdown
+                      options={bulkDesignationOptions}
+                      value={bulkUpdateValue}
+                      onChange={(value) => setBulkUpdateValue(value)}
+                      placeholder="Select designation"
+                      allowCustom
+                      onCustomAdd={handleCustomDesignationAdd}
+                      onRemoveOption={handleDesignationRemove}
+                      customPlaceholder="Enter new designation"
+                      label="Designation"
+                    />
+                  </div>
+                )}
+
+                {bulkUpdateField === 'employment_type' && (
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-2">Employment Type</label>
+                    <select
+                      value={bulkUpdateValue}
+                      onChange={(e) => setBulkUpdateValue(e.target.value)}
+                      className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-1 focus:ring-teal-500"
+                    >
+                      <option value="">Select employment type</option>
+                      <option value="FULL_TIME">Full Time</option>
+                      <option value="PART_TIME">Part Time</option>
+                      <option value="CONTRACT">Contract</option>
+                      <option value="INTERN">Intern</option>
+                    </select>
+                  </div>
+                )}
+
+                {bulkUpdateField === 'date_of_joining' && (
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-2">Date of Joining</label>
+                    <CustomDateInputWithOverlay
+                      value={bulkUpdateValue}
+                      onChange={(date) => setBulkUpdateValue(date)}
+                      placeholder="Select date of joining"
+                      className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-1 focus:ring-teal-500"
+                    />
+                  </div>
+                )}
+
+                {bulkUpdateField === 'shift_timings' && (
+                  <div className="space-y-4">
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-2">Shift Start Time</label>
+                      <input
+                        type="time"
+                        value={bulkUpdateValue.shift_start_time || ''}
+                        onChange={(e) => setBulkUpdateValue((prev: any) => ({
+                          ...prev,
+                          shift_start_time: e.target.value
+                        }))}
+                        className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-1 focus:ring-teal-500"
+                        onClick={(e) => {
+                          const input = e.currentTarget as HTMLInputElement;
+                          if (input.showPicker) {
+                            input.showPicker();
+                          }
+                        }}
+                        onFocus={(e) => {
+                          const input = e.currentTarget as HTMLInputElement;
+                          if (input.showPicker) {
+                            input.showPicker();
+                          }
+                        }}
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-2">Shift End Time</label>
+                      <input
+                        type="time"
+                        value={bulkUpdateValue.shift_end_time || ''}
+                        onChange={(e) => setBulkUpdateValue((prev: any) => ({
+                          ...prev,
+                          shift_end_time: e.target.value
+                        }))}
+                        className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-1 focus:ring-teal-500"
+                        onClick={(e) => {
+                          const input = e.currentTarget as HTMLInputElement;
+                          if (input.showPicker) {
+                            input.showPicker();
+                          }
+                        }}
+                        onFocus={(e) => {
+                          const input = e.currentTarget as HTMLInputElement;
+                          if (input.showPicker) {
+                            input.showPicker();
+                          }
+                        }}
+                      />
+                    </div>
+                  </div>
+                )}
+
+                {bulkUpdateField === 'location_branch' && (
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-2">Branch/Location</label>
+                    <select
+                      value={bulkUpdateValue}
+                      onChange={(e) => setBulkUpdateValue(e.target.value)}
+                      className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-1 focus:ring-teal-500"
+                    >
+                      <option value="">Select branch/location</option>
+                      {locationBranchOptions.map((loc) => (
+                        <option key={loc} value={loc}>
+                          {loc}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                )}
+
+                {bulkUpdateField === 'basic_salary' && (
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-2">Basic Salary</label>
+                    <input
+                      type="number"
+                      value={bulkUpdateValue}
+                      onChange={(e) => setBulkUpdateValue(e.target.value)}
+                      placeholder="Enter salary amount"
+                      min="0"
+                      step="0.01"
+                      className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-1 focus:ring-teal-500"
+                    />
+                  </div>
+                )}
+
+                {bulkUpdateField === 'off_days' && (
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-2">Off Days</label>
+                    <div className="space-y-2">
+                      {['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'].map((day) => {
+                        const dayKey = `off_${day.toLowerCase()}`;
+                        return (
+                          <label key={day} className="flex items-center gap-2">
+                            <input
+                              type="checkbox"
+                              checked={bulkUpdateValue[dayKey] || false}
+                              onChange={(e) => {
+                                setBulkUpdateValue((prev: any) => ({
+                                  ...prev,
+                                  [dayKey]: e.target.checked
+                                }));
+                              }}
+                              className="w-4 h-4 text-teal-600 border-gray-300 rounded focus:ring-teal-500"
+                            />
+                            <span className="text-sm text-gray-700">{day}</span>
+                          </label>
+                        );
+                      })}
+                    </div>
+                  </div>
+                )}
+              </div>
+            </div>
+
+            <div className="flex items-center justify-end gap-3 p-6 border-t border-gray-200 bg-gray-50">
+              <button
+                onClick={() => {
+                  setShowBulkUpdateModal(false);
+                  setBulkUpdateField('');
+                  setBulkUpdateValue('');
+                }}
+                disabled={bulkUpdating}
+                className="px-4 py-2 text-gray-700 bg-white border border-gray-300 rounded-lg hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleBulkUpdateSubmit}
+                disabled={bulkUpdating || 
+                  (bulkUpdateField === 'off_days' && (!bulkUpdateValue || typeof bulkUpdateValue !== 'object')) ||
+                  (bulkUpdateField === 'shift_timings' && (!bulkUpdateValue || typeof bulkUpdateValue !== 'object' || !bulkUpdateValue.shift_start_time || !bulkUpdateValue.shift_end_time)) ||
+                  (bulkUpdateField !== 'off_days' && bulkUpdateField !== 'shift_timings' && !bulkUpdateValue)}
+                className="px-6 py-2 bg-teal-600 text-white rounded-lg hover:bg-teal-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors flex items-center gap-2"
+              >
+                {bulkUpdating ? (
+                  <>
+                    <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
+                    Updating...
+                  </>
+                ) : (
+                  'Update Employees'
+                )}
+              </button>
             </div>
           </div>
         </div>
