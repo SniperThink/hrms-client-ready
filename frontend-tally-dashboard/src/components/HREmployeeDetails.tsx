@@ -96,6 +96,7 @@ const HREmployeeDetails: React.FC = () => {
   const [activeTab, setActiveTab] = useState('personal');
   const [employeeData, setEmployeeData] = useState<EmployeeProfileData | null>(null);
   const [attendanceRecords, setAttendanceRecords] = useState<AttendanceRecord[]>([]);
+  const [averageDaysPerMonth, setAverageDaysPerMonth] = useState<number>(30.4); // Default fallback
   const [loading, setLoading] = useState(true);
   const [initialLoad, setInitialLoad] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -156,6 +157,22 @@ const HREmployeeDetails: React.FC = () => {
     { value: 'Delhi', label: 'Delhi' },
     { value: 'Mumbai', label: 'Mumbai' }
   ];
+
+  // Fetch salary config on component mount
+  useEffect(() => {
+    const loadSalaryConfig = async () => {
+      try {
+        const response = await apiRequest('/api/salary-config/', { method: 'GET' });
+        if (response && response.average_days_per_month) {
+          setAverageDaysPerMonth(response.average_days_per_month);
+        }
+      } catch (error) {
+        // Use default value if fetch fails
+        logger.warn('Failed to load salary config, using default 30.4');
+      }
+    };
+    loadSalaryConfig();
+  }, []);
 
   // Load location data
   useEffect(() => {
@@ -245,7 +262,7 @@ const HREmployeeDetails: React.FC = () => {
   };
 
 
-  // Calculate OT charge (Basic Salary / (Shift Hours × 30.4))
+  // Calculate OT charge (Basic Salary / (Shift Hours × AVERAGE_DAYS_PER_MONTH))
   const calculateOTCharge = (basicSalary: string, shiftStart: string, shiftEnd: string) => {
     const salary = parseFloat(basicSalary);
     if (isNaN(salary) || !shiftStart || !shiftEnd) return '';
@@ -258,7 +275,7 @@ const HREmployeeDetails: React.FC = () => {
     let shiftHours = (endH + endM / 60) - (startH + startM / 60);
     if (shiftHours <= 0) shiftHours += 24; // handle overnight shifts
     if (shiftHours <= 0) return '';
-    const ot = salary / (shiftHours * 30.4);
+    const ot = salary / (shiftHours * averageDaysPerMonth);
     return ot ? ot.toFixed(2) : '';
   };
 
@@ -1275,8 +1292,8 @@ const HREmployeeDetails: React.FC = () => {
                   }}
                 />
                 <div className="mt-1 text-xs text-gray-500">
-                  <p className="mb-1">💡 <strong>Formula:</strong> Basic Salary / (Shift Hours × 30.4)</p>
-                  <p>This will be calculated automatically if not provided. Using static 30.4 days (average days per month) for consistent OT rates.</p>
+                  <p className="mb-1">💡 <strong>Formula:</strong> Basic Salary / (Shift Hours × {averageDaysPerMonth})</p>
+                  <p>This will be calculated automatically if not provided. Using {averageDaysPerMonth} days (average days per month) for consistent OT rates.</p>
                 </div>
               </div>
               <div className="col-span-2">

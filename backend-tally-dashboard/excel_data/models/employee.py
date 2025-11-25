@@ -1,4 +1,5 @@
 from django.db import models
+from django.conf import settings
 from .tenant import TenantAwareModel
 from datetime import datetime, timedelta
 
@@ -145,22 +146,22 @@ class EmployeeProfile(TenantAwareModel):
             full_name = f"{self.first_name} {self.last_name}"
             self.employee_id = generate_employee_id(full_name, self.tenant_id, self.department)
         
-        # Auto-calculate OT charge per hour using STATIC formula: basic_salary / (shift_hours × 30.4)
-        # Formula: OT Charge per Hour = basic_salary / ((shift_end_time - shift_start_time) × 30.4)
-        # Using fixed 30.4 days (average days per month) for consistent OT rates across all months
+        # Auto-calculate OT charge per hour using STATIC formula: basic_salary / (shift_hours × AVERAGE_DAYS_PER_MONTH)
+        # Formula: OT Charge per Hour = basic_salary / ((shift_end_time - shift_start_time) × AVERAGE_DAYS_PER_MONTH)
+        # Using AVERAGE_DAYS_PER_MONTH from settings for consistent OT rates across all months
         # Only auto-calculate if OT charge is not already provided (preserves manual entries)
         if not self.ot_charge_per_hour and self.shift_start_time and self.shift_end_time and self.basic_salary:
             # Calculate (end_time - start_time) in hours
             shift_hours_per_day = self._calculate_shift_hours()  # This is (shift_end_time - shift_start_time)
             
-            # OT Charge per Hour = basic_salary / (shift_hours × 30.4)
+            # OT Charge per Hour = basic_salary / (shift_hours × AVERAGE_DAYS_PER_MONTH)
             if shift_hours_per_day > 0:
                 from decimal import Decimal
                 # Convert both values to Decimal to avoid type mismatch
                 basic_salary_decimal = Decimal(str(self.basic_salary))
                 shift_hours_decimal = Decimal(str(shift_hours_per_day))
-                static_days = Decimal('30.4')  # Static average days per month
-                self.ot_charge_per_hour = basic_salary_decimal / (shift_hours_decimal * static_days)
+                average_days = Decimal(str(settings.AVERAGE_DAYS_PER_MONTH))
+                self.ot_charge_per_hour = basic_salary_decimal / (shift_hours_decimal * average_days)
         
         super().save(*args, **kwargs)
 

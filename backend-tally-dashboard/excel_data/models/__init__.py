@@ -71,6 +71,11 @@ from .chart_data import (
     ChartAggregatedData,
 )
 
+# Support Models
+from .support import (
+    SupportTicket,
+)
+
 # Define all models to be imported via 'from excel_data.models import *'
 __all__ = [
     # Tenant Models
@@ -118,4 +123,7 @@ __all__ = [
     
     # Chart Data Models
     'ChartAggregatedData',
+    
+    # Support Models
+    'SupportTicket',
 ]

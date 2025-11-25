@@ -260,12 +260,13 @@ def get_dropdown_options(request):
 def calculate_ot_rate(request):
     """
     Calculate OT rate based on shift times and basic salary using STATIC formula
-    Formula: OT Rate = basic_salary / (shift_hours × 30.4)
-    Using fixed 30.4 days (average days per month) for consistent OT rates
+    Formula: OT Rate = basic_salary / (shift_hours × AVERAGE_DAYS_PER_MONTH)
+    Using AVERAGE_DAYS_PER_MONTH from settings for consistent OT rates
     """
     try:
         from datetime import datetime, timedelta
         from decimal import Decimal
+        from django.conf import settings
         
         shift_start_time_str = request.data.get('shift_start_time', '09:00')
         shift_end_time_str = request.data.get('shift_end_time', '18:00')
@@ -292,20 +293,36 @@ def calculate_ot_rate(request):
         if shift_hours <= 0:
             return Response({'error': 'Shift hours must be greater than 0'}, status=400)
         
-        # Calculate OT rate using STATIC formula: basic_salary / (shift_hours × 30.4)
-        static_days = Decimal('30.4')  # Static average days per month
-        ot_rate = basic_salary / (shift_hours * static_days)
-        calculation = f"{basic_salary} / ({shift_hours:.2f} hours × 30.4 days) = {round(ot_rate, 2)}"
+        # Calculate OT rate using STATIC formula: basic_salary / (shift_hours × AVERAGE_DAYS_PER_MONTH)
+        average_days = Decimal(str(settings.AVERAGE_DAYS_PER_MONTH))
+        ot_rate = basic_salary / (shift_hours * average_days)
+        calculation = f"{basic_salary} / ({shift_hours:.2f} hours × {average_days} days) = {round(ot_rate, 2)}"
         
         return Response({
             'ot_rate': round(float(ot_rate), 2),
             'calculation': calculation,
             'shift_hours_per_day': round(float(shift_hours), 2),
-            'static_days': 30.4,
+            'average_days_per_month': float(average_days),
             'basic_salary': float(basic_salary)
         })
     except (ValueError, TypeError) as e:
         return Response({'error': f'Invalid input: {str(e)}'}, status=400)
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def get_salary_config(request):
+    """
+    Get salary calculation configuration values
+    Returns AVERAGE_DAYS_PER_MONTH for frontend use
+    """
+    try:
+        from django.conf import settings
+        return Response({
+            'average_days_per_month': settings.AVERAGE_DAYS_PER_MONTH,
+            'description': 'Average days per month used for salary and OT rate calculations'
+        })
+    except Exception as e:
+        return Response({'error': f'Failed to get config: {str(e)}'}, status=500)
 
 @api_view(['GET'])
 @permission_classes([IsAuthenticated])

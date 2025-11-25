@@ -6,7 +6,7 @@ from ..views import (
     AttendanceViewSet, DailyAttendanceViewSet, AdvanceLedgerViewSet,
     PaymentViewSet, UserManagementViewSet, UserInvitationViewSet,
     PayrollPeriodViewSet, CalculatedSalaryViewSet, AdvancePaymentViewSet,
-    CacheManagementViewSet, HolidayViewSet,
+    CacheManagementViewSet, HolidayViewSet, SupportTicketViewSet,
 )
 from ..views.tenant_views import TenantCreditsView
 
@@ -42,6 +42,9 @@ router.register(r'cache', CacheManagementViewSet, basename='cache')
 
 # Holiday Management
 router.register(r'holidays', HolidayViewSet, basename='holiday')
+
+# Support Ticket Management
+router.register(r'support/tickets', SupportTicketViewSet, basename='support-ticket')
 
 urlpatterns = [
     path('', include(router.urls)),

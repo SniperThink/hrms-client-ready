@@ -9,7 +9,8 @@ import {
   CalendarCheck, 
   CircleDollarSign, 
   Shield, 
-  Settings 
+  Settings,
+  MessageSquare
 } from 'lucide-react';
 
 interface HRSidebarProps {
@@ -35,6 +36,7 @@ const HRSidebar: React.FC<HRSidebarProps> = ({ activePage, onPageChange }) => {
     { name: "Attendance Tracker", icon: CalendarCheck, id: "attendance-tracker", path: "/hr-management/attendance-tracker", roles: ['admin', 'hr_manager', 'payroll_master'] },
     { name: "Payroll", icon: CircleDollarSign, id: "payroll", path: "/hr-management/payroll", roles: ['admin', 'payroll_master'] },
     { name: "Team Management", icon: Shield, id: "team", path: "/hr-management/team", roles: ['admin'] },
+    { name: "Support", icon: MessageSquare, id: "support", path: "/hr-management/support", roles: ['admin', 'hr_manager', 'payroll_master'] },
     { name: "Settings", icon: Settings, id: "settings", path: "/hr-management/settings", roles: ['admin', 'hr_manager', 'payroll_master'] }
   ];
 
@@ -45,7 +47,7 @@ const HRSidebar: React.FC<HRSidebarProps> = ({ activePage, onPageChange }) => {
       // Payroll master can see everything except Team Management
       return item.id !== 'team';
     }
-    if (isHRManager) return ['attendance-log', 'attendance-tracker', 'settings'].includes(item.id);
+    if (isHRManager) return ['attendance-log', 'attendance-tracker', 'support', 'settings'].includes(item.id);
     return false; // No access for other roles
   });
 

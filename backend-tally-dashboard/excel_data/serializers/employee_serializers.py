@@ -132,9 +132,10 @@ class EmployeeFormSerializer(serializers.ModelSerializer):
         ]
         
     def get_ot_calculation(self, obj):
-        """Show OT calculation formula: basic_salary / (shift_hours × 30.4)"""
+        """Show OT calculation formula: basic_salary / (shift_hours × AVERAGE_DAYS_PER_MONTH)"""
         from datetime import datetime, timedelta
         from decimal import Decimal
+        from django.conf import settings
         
         if obj.shift_start_time and obj.shift_end_time and obj.basic_salary:
             # Calculate shift hours
@@ -144,13 +145,13 @@ class EmployeeFormSerializer(serializers.ModelSerializer):
                 end_dt += timedelta(days=1)
             shift_hours = (end_dt - start_dt).total_seconds() / 3600
             
-            # Use static 30.4 days (average days per month)
-            static_days = Decimal('30.4')
+            # Use AVERAGE_DAYS_PER_MONTH from settings
+            average_days = Decimal(str(settings.AVERAGE_DAYS_PER_MONTH))
             
             if shift_hours > 0 and obj.basic_salary:
                 basic_salary = Decimal(str(obj.basic_salary))
-                ot_rate = basic_salary / (Decimal(str(shift_hours)) * static_days)
-                return f"{basic_salary} / ({shift_hours:.2f} hrs × 30.4 days) = {round(ot_rate, 2)}"
+                ot_rate = basic_salary / (Decimal(str(shift_hours)) * average_days)
+                return f"{basic_salary} / ({shift_hours:.2f} hrs × {average_days} days) = {round(ot_rate, 2)}"
             else:
                 return "Invalid shift times or basic salary"
         return "Enter shift times and basic salary to calculate"

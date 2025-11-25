@@ -28,6 +28,7 @@
 from rest_framework.response import Response
 from rest_framework import status, viewsets, filters
 from rest_framework.decorators import api_view, permission_classes
+from django.conf import settings
 from ..models import EmployeeProfile
 from decimal import Decimal, InvalidOperation
 from datetime import datetime
@@ -2247,7 +2248,7 @@ def calculate_simple_payroll(request):
                 salary_for_present_days = 0
             
             # Calculate OT rate using STATIC formula
-            # Formula: OT Charge per Hour = basic_salary / (shift_hours × 30.4)
+            # Formula: OT Charge per Hour = basic_salary / (shift_hours × AVERAGE_DAYS_PER_MONTH)
             from datetime import datetime, timedelta
             shift_hours_per_day = 0
             if employee.shift_start_time and employee.shift_end_time:
@@ -2261,10 +2262,10 @@ def calculate_simple_payroll(request):
                 # Fallback to 8 hours if shift times not set
                 shift_hours_per_day = 8
             
-            # Calculate OT rate using STATIC 30.4 days
-            static_days = 30.4  # Average days per month
+            # Calculate OT rate using AVERAGE_DAYS_PER_MONTH from settings
+            average_days = settings.AVERAGE_DAYS_PER_MONTH
             if shift_hours_per_day > 0 and base_salary > 0:
-                ot_rate = base_salary / (shift_hours_per_day * static_days)
+                ot_rate = base_salary / (shift_hours_per_day * average_days)
             else:
                 ot_rate = 0
             
@@ -2347,7 +2348,7 @@ def calculate_simple_payroll(request):
             
             # UPDATED: Recalculate gross salary using paid_days instead of present_days
             # This ensures employees with many off days get full salary
-            daily_rate = base_salary / 30.4  # Use standardized 30.4 days per month
+            daily_rate = base_salary / settings.AVERAGE_DAYS_PER_MONTH  # Use AVERAGE_DAYS_PER_MONTH from settings
             salary_for_present_days = daily_rate * paid_days
             gross_salary = salary_for_present_days + ot_charges - late_deduction
             
@@ -2722,8 +2723,8 @@ def calculate_simple_payroll_ultra_fast(request):
                 SELECT 
                     e.employee_id,
                     CASE 
-                        WHEN es.shift_hours * 30.4 > 0 AND COALESCE(e.basic_salary, 0) > 0 
-                        THEN e.basic_salary / (es.shift_hours * 30.4)
+                        WHEN es.shift_hours * %s > 0 AND COALESCE(e.basic_salary, 0) > 0 
+                        THEN e.basic_salary / (es.shift_hours * %s)
                         ELSE 0
                     END as ot_rate_per_hour
                 FROM excel_data_employeeprofile e
@@ -2832,7 +2833,7 @@ def calculate_simple_payroll_ultra_fast(request):
             
             params = [
                 tenant.id,  # employee_shifts
-                tenant.id,  # ot_rates
+                settings.AVERAGE_DAYS_PER_MONTH, settings.AVERAGE_DAYS_PER_MONTH, tenant.id,  # ot_rates (two placeholders for AVERAGE_DAYS_PER_MONTH)
                 tenant.id, year, month_num,  # attendance_summary
                 year, month_num, tenant.id,  # employee_holidays
                 tenant.id,  # total_advances
@@ -2884,8 +2885,8 @@ def calculate_simple_payroll_ultra_fast(request):
             # This ensures employees with many off days still get full salary
             paid_days = raw_present_days + holiday_count + off_days_count
             
-            # Calculate gross salary using 30.4 (average days per month)
-            daily_rate = base_salary / 30.4
+            # Calculate gross salary using AVERAGE_DAYS_PER_MONTH from settings
+            daily_rate = base_salary / settings.AVERAGE_DAYS_PER_MONTH
             gross_salary = (
                 (daily_rate * paid_days) + 
                 ot_charges - 

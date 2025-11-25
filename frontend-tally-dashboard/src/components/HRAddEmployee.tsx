@@ -60,6 +60,7 @@ const HRAddEmployee: React.FC = () => {
   const [isSubmitting, setIsSubmitting] = useState<boolean>(false);
   const [error, setError] = useState<string | null>(null);
   const [isOTChargeManuallyEdited, setIsOTChargeManuallyEdited] = useState<boolean>(false);
+  const [averageDaysPerMonth, setAverageDaysPerMonth] = useState<number>(); // Default fallback
 
   // Dropdown options state
   const [dropdownOptions, setDropdownOptions] = useState({
@@ -219,6 +220,22 @@ const HRAddEmployee: React.FC = () => {
   });
 
 
+  // Fetch salary config on component mount
+  useEffect(() => {
+    const loadSalaryConfig = async () => {
+      try {
+        const response = await apiCall('/api/salary-config/', { method: 'GET' });
+        if (response && response.average_days_per_month) {
+          setAverageDaysPerMonth(response.average_days_per_month);
+        }
+      } catch (error) {
+        // Use default value if fetch fails
+        logger.warn('Failed to load salary config, using default ');
+      }
+    };
+    loadSalaryConfig();
+  }, []);
+
   // Fetch dropdown options on component mount
   useEffect(() => {
     const loadDropdownOptions = async () => {
@@ -367,7 +384,7 @@ const HRAddEmployee: React.FC = () => {
     return workingDays;
   };
 
-  // Helper function to calculate OT rate using STATIC formula: basic_salary / (shift_hours × 30.4)
+  // Helper function to calculate OT rate using STATIC formula: basic_salary / (shift_hours × AVERAGE_DAYS_PER_MONTH)
   const calculateOTRate = (
     basicSalary: string,
     shiftStartTime: string,
@@ -398,10 +415,9 @@ const HRAddEmployee: React.FC = () => {
       return '';
     }
     
-    // OT Charge per Hour = basic_salary / (shift_hours × 30.4)
-    // Using static 30.4 days (average days per month) for consistent OT rates
-    const staticDays = 30.4;
-    const otRate = basicSalaryNum / (shiftHours * staticDays);
+    // OT Charge per Hour = basic_salary / (shift_hours × AVERAGE_DAYS_PER_MONTH)
+    // Using AVERAGE_DAYS_PER_MONTH from backend config for consistent OT rates
+    const otRate = basicSalaryNum / (shiftHours * averageDaysPerMonth);
     
     return otRate.toFixed(2);
   };
@@ -837,7 +853,7 @@ const HRAddEmployee: React.FC = () => {
               <li><strong>Gender:</strong> Male, Female, Other</li>
               <li><strong>Shift Times:</strong> Use HH:MM:SS format (e.g., 09:00:00)</li>
               <li><strong>Basic Salary:</strong> Enter as number only (e.g., 50000)</li>
-              <li><strong>OT Rate (per hour):</strong> Overtime hourly rate. Auto-calculated as Basic Salary / (Shift Hours × 30.4)</li>
+              <li><strong>OT Rate (per hour):</strong> Overtime hourly rate. Auto-calculated as Basic Salary / (Shift Hours × {averageDaysPerMonth})</li>
               <li><strong>Dates:</strong> Use YYYY-MM-DD format (e.g., 2024-01-01)</li>
               <li><strong>TDS:</strong> Enter as percentage number (e.g., 10 for 10%)</li>
               <li><strong>OFF DAY:</strong> Monday, Tuesday, etc. (comma-separated for multiple days)</li>
@@ -1217,13 +1233,13 @@ const HRAddEmployee: React.FC = () => {
               />
               {!isOTChargeManuallyEdited && (
                 <div className="mt-1 text-xs text-gray-500">
-                  <p className="mb-1">💡 <strong>Formula:</strong> Basic Salary / (Shift Hours × 30.4)</p>
-                  <p>This will be calculated automatically if not provided. Using static 30.4 days (average days per month) for consistent OT rates.</p>
+                  <p className="mb-1">💡 <strong>Formula:</strong> Basic Salary / (Shift Hours × {averageDaysPerMonth})</p>
+                  <p>This will be calculated automatically if not provided. Using {averageDaysPerMonth} days (average days per month) for consistent OT rates.</p>
                 </div>
               )}
               {!isOTChargeManuallyEdited && formData.ot_charge && formData.shift_start_time && formData.shift_end_time && formData.basic_salary && (
                 <div className="mt-2 text-xs text-gray-600 bg-teal-50 p-2 rounded border border-teal-200">
-                  <strong>Current Calculation:</strong> {formData.basic_salary.replace(/,/g, '')} / ({calculateShiftHours(formData.shift_start_time, formData.shift_end_time).toFixed(2)} hours × 30.4 days) = ₹{formData.ot_charge}
+                  <strong>Current Calculation:</strong> {formData.basic_salary.replace(/,/g, '')} / ({calculateShiftHours(formData.shift_start_time, formData.shift_end_time).toFixed(2)} hours × {averageDaysPerMonth} days) = ₹{formData.ot_charge}
                 </div>
               )}
             </div>

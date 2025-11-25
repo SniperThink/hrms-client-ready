@@ -59,12 +59,32 @@ const SimplePayrollCalculator: React.FC = () => {
   const [attendancePeriods, setAttendancePeriods] = useState<AttendancePeriod[]>([]);
   const [selectedPeriod, setSelectedPeriod] = useState<AttendancePeriod | null>(null);
   const [payrollData, setPayrollData] = useState<PayrollEntry[]>([]);
+  const [averageDaysPerMonth, setAverageDaysPerMonth] = useState<number>(30.4); // Default fallback
   const [summary, setSummary] = useState<PayrollSummary | null>(null);
   const [loading, setLoading] = useState(false);
   const [calculating, setCalculating] = useState(false);
   const [editingEntry, setEditingEntry] = useState<string | null>(null);
   const [editValues, setEditValues] = useState<{[key: string]: string | number}>({});
   const [showAdvanceModal, setShowAdvanceModal] = useState(false);
+
+  // Fetch salary config on component mount
+  useEffect(() => {
+    const loadSalaryConfig = async () => {
+      try {
+        const response = await apiCall('/api/salary-config/', { method: 'GET' });
+        if (response && response.ok) {
+          const data = await response.json();
+          if (data && data.average_days_per_month) {
+            setAverageDaysPerMonth(data.average_days_per_month);
+          }
+        }
+      } catch (error) {
+        // Use default value if fetch fails
+        logger.warn('Failed to load salary config, using default 30.4');
+      }
+    };
+    loadSalaryConfig();
+  }, []);
 
   useEffect(() => {
     fetchAttendancePeriods();
@@ -602,7 +622,7 @@ const SimplePayrollCalculator: React.FC = () => {
               <h5 className="text-sm font-medium text-gray-900 mb-2">Calculation Formula:</h5>
               <div className="text-xs text-gray-600 space-y-1">
                 <p><span className="font-medium">Paid Days</span> = Present Days + Paid Holidays (Off days are marked as Present)</p>
-                <p><span className="font-medium">Daily Rate</span> = Base Salary ÷ 30.4</p>
+                <p><span className="font-medium">Daily Rate</span> = Base Salary ÷ {averageDaysPerMonth}</p>
                 <p><span className="font-medium">Base Pay</span> = Daily Rate × Paid Days</p>
                 <p><span className="font-medium">Gross Salary</span> = Base Pay + OT Charges - Late Deduction</p>
                 <p><span className="font-medium">Advance Deduction</span> = Min(50% of Salary After TDS, Total Advance Balance)</p>

@@ -8,9 +8,9 @@ Formula:
     Paid Days = PRESENT + PAID_HOLIDAYS + BASIC_OFF_DAYS
     (OFF days are counted as paid to ensure employees with weekly off days get full salary)
     Extra Paid Days = Days worked on configured off days (additional compensation)
-    Daily Rate = Base Salary ÷ 30.4
+    Daily Rate = Base Salary ÷ AVERAGE_DAYS_PER_MONTH
     Base Pay = Daily Rate × Paid Days
-    Hourly Rate = Base Salary ÷ (Shift Hours × 30.4)
+    Hourly Rate = Base Salary ÷ (Shift Hours × AVERAGE_DAYS_PER_MONTH)
     OT Pay = Hourly Rate × OT Hours
     Per-Minute Rate = Hourly Rate ÷ 60
     Late Deduction = Per-Minute Rate × Late Minutes
@@ -20,6 +20,7 @@ Formula:
 from decimal import Decimal
 from typing import Dict, Any
 import logging
+from django.conf import settings
 
 logger = logging.getLogger(__name__)
 
@@ -45,7 +46,7 @@ class UnifiedSalaryCalculator:
         Note: present_days should include PRESENT + PAID_HOLIDAYS + BASIC_OFF_DAYS
         This ensures employees with weekly off days (e.g., only work 1 day/week) get full salary.
         
-        Daily Rate = Base Salary ÷ 30.4
+        Daily Rate = Base Salary ÷ AVERAGE_DAYS_PER_MONTH
         Base Pay = Daily Rate × Present Days (includes holidays + basic off days)
         OT Pay = OT Hours × OT Rate per Hour
         Late Deduction = (OT Rate ÷ 60) × Late Minutes
@@ -64,8 +65,9 @@ class UnifiedSalaryCalculator:
             Dict containing all calculated salary components
         """
         
-        # 1. Calculate salary for present days using 30.4 (average days per month)
-        daily_rate = base_salary / Decimal('30.4')
+        # 1. Calculate salary for present days using AVERAGE_DAYS_PER_MONTH from settings
+        average_days = Decimal(str(settings.AVERAGE_DAYS_PER_MONTH))
+        daily_rate = base_salary / average_days
         salary_for_present_days = daily_rate * present_days
         
         # 2. Calculate overtime charges

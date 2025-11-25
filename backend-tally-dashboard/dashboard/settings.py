@@ -261,6 +261,14 @@ ZEPTOMAIL_API_TOKEN = config('ZEPTOMAIL_API_TOKEN', default='')
 ZEPTOMAIL_FROM_NAME = config('ZEPTOMAIL_FROM_NAME', default='SniperThink Team')
 DEFAULT_FROM_EMAIL = config('DEFAULT_FROM_EMAIL', default='noreply@sniperthink.com')
 
+# Support Ticket Email Configuration
+SUPPORT_ADMIN_EMAIL = config('SUPPORT_ADMIN_EMAIL', default='')
+
+# Salary Calculation Configuration
+# Average days per month for salary and OT rate calculations
+# Default: 30.4 (365 days / 12 months = 30.416...)
+AVERAGE_DAYS_PER_MONTH = config('AVERAGE_DAYS_PER_MONTH', default=30.4, cast=float)
+
 # Invitation and OTP Settings
 INVITATION_TOKEN_EXPIRY_HOURS = config('INVITATION_TOKEN_EXPIRY_HOURS', default=72, cast=int)
 OTP_EXPIRY_MINUTES = config('OTP_EXPIRY_MINUTES', default=10, cast=int)

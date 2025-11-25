@@ -8,6 +8,7 @@ from datetime import date, timedelta
 from decimal import Decimal
 from django.db import transaction
 from django.db.models import Sum, Q
+from django.conf import settings
 from ..models import (
     EmployeeProfile, Attendance, SalaryData, AdvanceLedger, PayrollPeriod, CalculatedSalary, SalaryAdjustment, DataSource,
     MonthlyAttendanceSummary, DailyAttendance, Holiday,
@@ -529,12 +530,12 @@ class SalaryCalculationService:
             basic_salary_per_hour = basic_salary / (working_days * shift_hours_per_day) if working_days > 0 and shift_hours_per_day > 0 else Decimal('0')
             basic_salary_per_minute = basic_salary / (working_days * minutes_per_day) if working_days > 0 and minutes_per_day > 0 else Decimal('0')
             
-            # STATIC OT rate calculation: basic_salary / (shift_hours × 30.4)
-            # Using fixed 30.4 days (average days per month) for consistent OT rates across all months
-            # Formula: OT Charge per Hour = basic_salary / ((shift_end_time - shift_start_time) × 30.4)
+            # STATIC OT rate calculation: basic_salary / (shift_hours × AVERAGE_DAYS_PER_MONTH)
+            # Using AVERAGE_DAYS_PER_MONTH from settings for consistent OT rates across all months
+            # Formula: OT Charge per Hour = basic_salary / ((shift_end_time - shift_start_time) × AVERAGE_DAYS_PER_MONTH)
             if shift_hours_per_day > 0 and basic_salary > 0:
-                static_days = Decimal('30.4')  # Static average days per month
-                ot_rate_per_hour = basic_salary / (shift_hours_per_day * static_days)
+                average_days = Decimal(str(settings.AVERAGE_DAYS_PER_MONTH))
+                ot_rate_per_hour = basic_salary / (shift_hours_per_day * average_days)
             else:
                 ot_rate_per_hour = Decimal('0')
             
