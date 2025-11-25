@@ -38,7 +38,8 @@ class UnifiedSalaryCalculator:
         ot_hours: Decimal,
         ot_rate_per_hour: Decimal,
         late_minutes: int,
-        incentive: Decimal = Decimal('0')
+        incentive: Decimal = Decimal('0'),
+        tenant=None
     ) -> Dict[str, Decimal]:
         """
         Calculate gross salary using the standardized formula:
@@ -65,8 +66,9 @@ class UnifiedSalaryCalculator:
             Dict containing all calculated salary components
         """
         
-        # 1. Calculate salary for present days using AVERAGE_DAYS_PER_MONTH from settings
-        average_days = Decimal(str(settings.AVERAGE_DAYS_PER_MONTH))
+        # 1. Calculate salary for present days using tenant-specific AVERAGE_DAYS_PER_MONTH
+        from ..utils.utils import get_average_days_per_month
+        average_days = Decimal(str(get_average_days_per_month(tenant)))
         daily_rate = base_salary / average_days
         salary_for_present_days = daily_rate * present_days
         
@@ -178,7 +180,8 @@ class UnifiedSalaryCalculator:
         incentive: Decimal = Decimal('0'),
         tds_percentage: Decimal = Decimal('5.0'),
         total_advance_balance: Decimal = Decimal('0'),
-        max_advance_deduction_percentage: Decimal = Decimal('50')
+        max_advance_deduction_percentage: Decimal = Decimal('50'),
+        tenant=None
     ) -> Dict[str, Any]:
         """
         Calculate complete salary breakdown using standardized formulas
@@ -195,7 +198,8 @@ class UnifiedSalaryCalculator:
             ot_hours=ot_hours,
             ot_rate_per_hour=ot_rate_per_hour,
             late_minutes=late_minutes,
-            incentive=incentive
+            incentive=incentive,
+            tenant=tenant
         )
         
         # Calculate TDS

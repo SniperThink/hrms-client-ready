@@ -2262,8 +2262,9 @@ def calculate_simple_payroll(request):
                 # Fallback to 8 hours if shift times not set
                 shift_hours_per_day = 8
             
-            # Calculate OT rate using AVERAGE_DAYS_PER_MONTH from settings
-            average_days = settings.AVERAGE_DAYS_PER_MONTH
+            # Calculate OT rate using tenant-specific AVERAGE_DAYS_PER_MONTH
+            from ..utils.utils import get_average_days_per_month
+            average_days = get_average_days_per_month(tenant)
             if shift_hours_per_day > 0 and base_salary > 0:
                 ot_rate = base_salary / (shift_hours_per_day * average_days)
             else:
@@ -2348,7 +2349,9 @@ def calculate_simple_payroll(request):
             
             # UPDATED: Recalculate gross salary using paid_days instead of present_days
             # This ensures employees with many off days get full salary
-            daily_rate = base_salary / settings.AVERAGE_DAYS_PER_MONTH  # Use AVERAGE_DAYS_PER_MONTH from settings
+            from ..utils.utils import get_average_days_per_month
+            average_days = get_average_days_per_month(tenant)
+            daily_rate = base_salary / average_days
             salary_for_present_days = daily_rate * paid_days
             gross_salary = salary_for_present_days + ot_charges - late_deduction
             
@@ -2831,9 +2834,11 @@ def calculate_simple_payroll_ultra_fast(request):
             ORDER BY e.first_name, e.last_name
             """
             
+            from ..utils.utils import get_average_days_per_month
+            average_days = get_average_days_per_month(tenant)
             params = [
                 tenant.id,  # employee_shifts
-                settings.AVERAGE_DAYS_PER_MONTH, settings.AVERAGE_DAYS_PER_MONTH, tenant.id,  # ot_rates (two placeholders for AVERAGE_DAYS_PER_MONTH)
+                average_days, average_days, tenant.id,  # ot_rates (two placeholders for AVERAGE_DAYS_PER_MONTH)
                 tenant.id, year, month_num,  # attendance_summary
                 year, month_num, tenant.id,  # employee_holidays
                 tenant.id,  # total_advances
@@ -2885,8 +2890,10 @@ def calculate_simple_payroll_ultra_fast(request):
             # This ensures employees with many off days still get full salary
             paid_days = raw_present_days + holiday_count + off_days_count
             
-            # Calculate gross salary using AVERAGE_DAYS_PER_MONTH from settings
-            daily_rate = base_salary / settings.AVERAGE_DAYS_PER_MONTH
+            # Calculate gross salary using tenant-specific AVERAGE_DAYS_PER_MONTH
+            from ..utils.utils import get_average_days_per_month
+            average_days = get_average_days_per_month(tenant)
+            daily_rate = base_salary / average_days
             gross_salary = (
                 (daily_rate * paid_days) + 
                 ot_charges - 

@@ -294,7 +294,9 @@ def calculate_ot_rate(request):
             return Response({'error': 'Shift hours must be greater than 0'}, status=400)
         
         # Calculate OT rate using STATIC formula: basic_salary / (shift_hours × AVERAGE_DAYS_PER_MONTH)
-        average_days = Decimal(str(settings.AVERAGE_DAYS_PER_MONTH))
+        from ..utils.utils import get_average_days_per_month
+        tenant = getattr(request, 'tenant', None)
+        average_days = Decimal(str(get_average_days_per_month(tenant)))
         ot_rate = basic_salary / (shift_hours * average_days)
         calculation = f"{basic_salary} / ({shift_hours:.2f} hours × {average_days} days) = {round(ot_rate, 2)}"
         
@@ -313,16 +315,68 @@ def calculate_ot_rate(request):
 def get_salary_config(request):
     """
     Get salary calculation configuration values
-    Returns AVERAGE_DAYS_PER_MONTH for frontend use
+    Returns tenant-specific AVERAGE_DAYS_PER_MONTH for frontend use
     """
     try:
-        from django.conf import settings
+        tenant = getattr(request, 'tenant', None)
+        if not tenant:
+            return Response({'error': 'No tenant found'}, status=400)
+        
+        # Use tenant-specific value, fallback to default if not set
+        average_days = float(tenant.average_days_per_month) if tenant.average_days_per_month else 30.4
+        
         return Response({
-            'average_days_per_month': settings.AVERAGE_DAYS_PER_MONTH,
+            'average_days_per_month': average_days,
             'description': 'Average days per month used for salary and OT rate calculations'
         })
     except Exception as e:
         return Response({'error': f'Failed to get config: {str(e)}'}, status=500)
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def update_salary_config(request):
+    """
+    Update salary calculation configuration values (tenant-specific)
+    Expected payload: { "average_days_per_month": 30.4 }
+    """
+    try:
+        tenant = getattr(request, 'tenant', None)
+        if not tenant:
+            return Response({'error': 'No tenant found'}, status=400)
+        
+        average_days = request.data.get('average_days_per_month')
+        if average_days is None:
+            return Response({'error': 'average_days_per_month is required'}, status=400)
+        
+        try:
+            average_days_float = float(average_days)
+            if average_days_float <= 0 or average_days_float > 31:
+                return Response({'error': 'average_days_per_month must be between 0 and 31'}, status=400)
+        except (ValueError, TypeError):
+            return Response({'error': 'average_days_per_month must be a valid number'}, status=400)
+        
+        tenant.average_days_per_month = average_days_float
+        tenant.save(update_fields=['average_days_per_month'])
+        
+        # Clear relevant caches
+        from django.core.cache import cache
+        cache_keys_to_clear = [
+            f"directory_data_{tenant.id}",
+            f"directory_data_full_{tenant.id}",
+            f"payroll_overview_{tenant.id}",
+            f"months_with_attendance_{tenant.id}",
+        ]
+        for key in cache_keys_to_clear:
+            cache.delete(key)
+        
+        return Response({
+            'success': True,
+            'average_days_per_month': float(tenant.average_days_per_month),
+            'message': 'Salary configuration updated successfully'
+        })
+    except Exception as e:
+        logger.error(f"Error updating salary config: {str(e)}", exc_info=True)
+        return Response({'error': f'Failed to update config: {str(e)}'}, status=500)
 
 @api_view(['GET'])
 @permission_classes([IsAuthenticated])

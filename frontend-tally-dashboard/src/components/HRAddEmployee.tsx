@@ -60,7 +60,7 @@ const HRAddEmployee: React.FC = () => {
   const [isSubmitting, setIsSubmitting] = useState<boolean>(false);
   const [error, setError] = useState<string | null>(null);
   const [isOTChargeManuallyEdited, setIsOTChargeManuallyEdited] = useState<boolean>(false);
-  const [averageDaysPerMonth, setAverageDaysPerMonth] = useState<number>(); // Default fallback
+  const [averageDaysPerMonth, setAverageDaysPerMonth] = useState<number>(30.4); // Default fallback
 
   // Dropdown options state
   const [dropdownOptions, setDropdownOptions] = useState({
@@ -225,12 +225,16 @@ const HRAddEmployee: React.FC = () => {
     const loadSalaryConfig = async () => {
       try {
         const response = await apiCall('/api/salary-config/', { method: 'GET' });
-        if (response && response.average_days_per_month) {
-          setAverageDaysPerMonth(response.average_days_per_month);
+        if (response.ok) {
+          const data = await response.json();
+          if (data && data.average_days_per_month) {
+            setAverageDaysPerMonth(data.average_days_per_month);
+          }
         }
       } catch (error) {
         // Use default value if fetch fails
-        logger.warn('Failed to load salary config, using default ');
+        logger.warn('Failed to load salary config, using default 30.4');
+        setAverageDaysPerMonth(30.4);
       }
     };
     loadSalaryConfig();
@@ -415,9 +419,12 @@ const HRAddEmployee: React.FC = () => {
       return '';
     }
     
+    // Use averageDaysPerMonth from state, fallback to 30.4 if not loaded yet
+    const avgDays = averageDaysPerMonth || 30.4;
+    
     // OT Charge per Hour = basic_salary / (shift_hours × AVERAGE_DAYS_PER_MONTH)
     // Using AVERAGE_DAYS_PER_MONTH from backend config for consistent OT rates
-    const otRate = basicSalaryNum / (shiftHours * averageDaysPerMonth);
+    const otRate = basicSalaryNum / (shiftHours * avgDays);
     
     return otRate.toFixed(2);
   };

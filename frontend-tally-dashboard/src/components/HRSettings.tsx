@@ -50,7 +50,11 @@ const HRSettings: React.FC = () => {
   const [success, setSuccess] = useState<string | null>(null);
   const [showChangePasswordModal, setShowChangePasswordModal] = useState(false);
   const [showDeleteAccountModal, setShowDeleteAccountModal] = useState(false);
-  const [activeTab, setActiveTab] = useState<'profile' | 'holidays'>('profile');
+  const [activeTab, setActiveTab] = useState<'profile' | 'holidays' | 'salary'>('profile');
+  const [averageDaysPerMonth, setAverageDaysPerMonth] = useState<number>(30.4);
+  const [salaryConfigLoading, setSalaryConfigLoading] = useState(false);
+  const [salaryConfigError, setSalaryConfigError] = useState<string | null>(null);
+  const [salaryConfigSuccess, setSalaryConfigSuccess] = useState<string | null>(null);
 
   // Fetch current user info (in case localStorage is stale)
   useEffect(() => {
@@ -203,6 +207,26 @@ const HRSettings: React.FC = () => {
   // Check if user is Payroll Master
   const isPayrollMaster = userRole === 'payroll_master' || false;
   
+  // Fetch salary config if user is admin or payroll master
+  useEffect(() => {
+    if (isAdmin || isPayrollMaster) {
+      setSalaryConfigLoading(true);
+      apiGet('/api/salary-config/')
+        .then(res => {
+          if (!res.ok) throw new Error('Failed to fetch salary config');
+          return res.json();
+        })
+        .then(data => {
+          setAverageDaysPerMonth(data.average_days_per_month || 30.4);
+        })
+        .catch((err) => {
+          logger.error('Error fetching salary config:', err);
+          setSalaryConfigError('Failed to load salary configuration');
+        })
+        .finally(() => setSalaryConfigLoading(false));
+    }
+  }, [isAdmin, isPayrollMaster]);
+  
   // Debug logging
   useEffect(() => {
     logger.info('HRSettings - Current user role:', userRole);
@@ -237,6 +261,18 @@ const HRSettings: React.FC = () => {
           >
             Holiday Management
           </button>
+          {(isAdmin || isPayrollMaster) && (
+            <button
+              onClick={() => setActiveTab('salary')}
+              className={`py-4 px-1 border-b-2 font-medium text-sm ${
+                activeTab === 'salary'
+                  ? 'border-teal-500 text-teal-600'
+                  : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
+              }`}
+            >
+              Salary Settings
+            </button>
+          )}
         </nav>
       </div>
 
@@ -346,6 +382,95 @@ const HRSettings: React.FC = () => {
       {activeTab === 'holidays' && (
         <div className="bg-white rounded-lg p-6 shadow-sm">
           <HRHolidayManagement />
+        </div>
+      )}
+
+      {/* Salary Settings Tab */}
+      {activeTab === 'salary' && (isAdmin || isPayrollMaster) && (
+        <div className="bg-white rounded-lg p-8 shadow-sm max-w-2xl mx-auto">
+          <h2 className="text-xl font-bold mb-6">Salary Configuration</h2>
+          <p className="text-sm text-gray-600 mb-6">
+            Configure the average days per month used for salary and overtime rate calculations.
+          </p>
+          
+          {salaryConfigError && (
+            <div className="mb-4 p-3 bg-red-50 border border-red-200 text-red-700 rounded">
+              {salaryConfigError}
+            </div>
+          )}
+          
+          {salaryConfigSuccess && (
+            <div className="mb-4 p-3 bg-teal-50 border border-teal-200 text-teal-700 rounded">
+              {salaryConfigSuccess}
+            </div>
+          )}
+
+          <form
+            onSubmit={async (e) => {
+              e.preventDefault();
+              setSalaryConfigLoading(true);
+              setSalaryConfigError(null);
+              setSalaryConfigSuccess(null);
+
+              try {
+                const response = await fetch('/api/salary-config/update/', {
+                  method: 'POST',
+                  headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': `Bearer ${localStorage.getItem('access')}`,
+                  },
+                  body: JSON.stringify({
+                    average_days_per_month: averageDaysPerMonth,
+                  }),
+                });
+
+                const data = await response.json();
+
+                if (!response.ok) {
+                  throw new Error(data.error || 'Failed to update salary configuration');
+                }
+
+                setSalaryConfigSuccess('Salary configuration updated successfully!');
+                setTimeout(() => setSalaryConfigSuccess(null), 3000);
+              } catch (err: any) {
+                logger.error('Error updating salary config:', err);
+                setSalaryConfigError(err.message || 'Failed to update salary configuration');
+              } finally {
+                setSalaryConfigLoading(false);
+              }
+            }}
+            className="space-y-6"
+          >
+            <div>
+              <label className="block text-gray-700 mb-2 font-medium">
+                Average Days Per Month
+              </label>
+              <input
+                type="number"
+                step="0.1"
+                min="1"
+                max="31"
+                value={averageDaysPerMonth}
+                onChange={(e) => setAverageDaysPerMonth(parseFloat(e.target.value) || 30.4)}
+                className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-teal-500 focus:border-transparent"
+                placeholder="30.4"
+                required
+                disabled={salaryConfigLoading}
+              />
+              <p className="mt-2 text-sm text-gray-500">
+                Total calendar days per month (default: 30.4). Used for calculating daily rates and overtime rates.
+                Formula: OT Rate = Basic Salary ÷ (Shift Hours × Average Days Per Month)
+              </p>
+            </div>
+
+            <button
+              type="submit"
+              disabled={salaryConfigLoading}
+              className="w-full bg-teal-600 text-white px-6 py-3 rounded-lg hover:bg-teal-700 transition-colors disabled:bg-gray-400 disabled:cursor-not-allowed"
+            >
+              {salaryConfigLoading ? 'Saving...' : 'Save Configuration'}
+            </button>
+          </form>
         </div>
       )}
 

@@ -135,7 +135,7 @@ class EmployeeFormSerializer(serializers.ModelSerializer):
         """Show OT calculation formula: basic_salary / (shift_hours × AVERAGE_DAYS_PER_MONTH)"""
         from datetime import datetime, timedelta
         from decimal import Decimal
-        from django.conf import settings
+        from ..utils.utils import get_average_days_per_month
         
         if obj.shift_start_time and obj.shift_end_time and obj.basic_salary:
             # Calculate shift hours
@@ -145,8 +145,8 @@ class EmployeeFormSerializer(serializers.ModelSerializer):
                 end_dt += timedelta(days=1)
             shift_hours = (end_dt - start_dt).total_seconds() / 3600
             
-            # Use AVERAGE_DAYS_PER_MONTH from settings
-            average_days = Decimal(str(settings.AVERAGE_DAYS_PER_MONTH))
+            # Use tenant-specific AVERAGE_DAYS_PER_MONTH
+            average_days = Decimal(str(get_average_days_per_month(obj.tenant)))
             
             if shift_hours > 0 and obj.basic_salary:
                 basic_salary = Decimal(str(obj.basic_salary))

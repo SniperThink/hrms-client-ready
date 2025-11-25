@@ -45,6 +45,14 @@ class Tenant(models.Model):
         help_text="Automatically calculate payroll on 1st of each month for previous month"
     )
     
+    # Average days per month for salary and OT calculations
+    average_days_per_month = models.DecimalField(
+        max_digits=5,
+        decimal_places=2,
+        default=30.4,
+        help_text="Average days per month used for salary and OT rate calculations (default: 30.4)"
+    )
+    
     class Meta:
         app_label = 'excel_data'
         verbose_name = _('tenant')

@@ -4,7 +4,7 @@ from ..views import (
     dashboard_stats, cleanup_salary_data, health_check, get_dropdown_options,
     calculate_ot_rate, attendance_status, bulk_update_attendance,
     update_monthly_summaries_parallel, get_eligible_employees_for_date,
-    CleanupTokensView, get_salary_config
+    CleanupTokensView, get_salary_config, update_salary_config
 )
 
 urlpatterns = [
@@ -14,6 +14,7 @@ urlpatterns = [
     path('dropdown-options/', get_dropdown_options, name='dropdown-options'),
     path('calculate-ot/', calculate_ot_rate, name='calculate-ot'),
     path('salary-config/', get_salary_config, name='salary-config'),
+    path('salary-config/update/', update_salary_config, name='salary-config-update'),
     path('attendance-status/', attendance_status, name='attendance-status'),
     path('bulk-update-attendance/', bulk_update_attendance, name='bulk-update-attendance'),
     path('update-monthly-summaries/', update_monthly_summaries_parallel, name='update-monthly-summaries'),

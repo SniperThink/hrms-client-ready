@@ -157,10 +157,11 @@ class EmployeeProfile(TenantAwareModel):
             # OT Charge per Hour = basic_salary / (shift_hours × AVERAGE_DAYS_PER_MONTH)
             if shift_hours_per_day > 0:
                 from decimal import Decimal
+                from ..utils.utils import get_average_days_per_month
                 # Convert both values to Decimal to avoid type mismatch
                 basic_salary_decimal = Decimal(str(self.basic_salary))
                 shift_hours_decimal = Decimal(str(shift_hours_per_day))
-                average_days = Decimal(str(settings.AVERAGE_DAYS_PER_MONTH))
+                average_days = Decimal(str(get_average_days_per_month(self.tenant)))
                 self.ot_charge_per_hour = basic_salary_decimal / (shift_hours_decimal * average_days)
         
         super().save(*args, **kwargs)

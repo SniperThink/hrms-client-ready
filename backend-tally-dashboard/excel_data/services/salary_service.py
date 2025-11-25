@@ -531,10 +531,11 @@ class SalaryCalculationService:
             basic_salary_per_minute = basic_salary / (working_days * minutes_per_day) if working_days > 0 and minutes_per_day > 0 else Decimal('0')
             
             # STATIC OT rate calculation: basic_salary / (shift_hours × AVERAGE_DAYS_PER_MONTH)
-            # Using AVERAGE_DAYS_PER_MONTH from settings for consistent OT rates across all months
+            # Using tenant-specific AVERAGE_DAYS_PER_MONTH for consistent OT rates across all months
             # Formula: OT Charge per Hour = basic_salary / ((shift_end_time - shift_start_time) × AVERAGE_DAYS_PER_MONTH)
             if shift_hours_per_day > 0 and basic_salary > 0:
-                average_days = Decimal(str(settings.AVERAGE_DAYS_PER_MONTH))
+                from ..utils.utils import get_average_days_per_month
+                average_days = Decimal(str(get_average_days_per_month(employee.tenant)))
                 ot_rate_per_hour = basic_salary / (shift_hours_per_day * average_days)
             else:
                 ot_rate_per_hour = Decimal('0')

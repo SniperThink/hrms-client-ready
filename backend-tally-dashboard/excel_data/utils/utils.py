@@ -18,6 +18,20 @@ def clear_current_tenant():
     if hasattr(_thread_local, 'tenant'):
         delattr(_thread_local, 'tenant')
 
+def get_average_days_per_month(tenant=None):
+    """
+    Get tenant-specific average days per month, with fallback to default 30.4
+    If tenant is not provided, tries to get from thread local storage
+    """
+    if tenant is None:
+        tenant = get_current_tenant()
+    
+    if tenant and hasattr(tenant, 'average_days_per_month') and tenant.average_days_per_month:
+        return float(tenant.average_days_per_month)
+    
+    # Fallback to default
+    return 30.4
+
 def generate_employee_id(name: str, tenant_id: int, department: str = None) -> str:
     """
     Generate employee ID using format: First three letters-Department first two letters-Tenant id

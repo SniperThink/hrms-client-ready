@@ -163,8 +163,15 @@ const HREmployeeDetails: React.FC = () => {
     const loadSalaryConfig = async () => {
       try {
         const response = await apiRequest('/api/salary-config/', { method: 'GET' });
-        if (response && response.average_days_per_month) {
-          setAverageDaysPerMonth(response.average_days_per_month);
+        if (response.ok) {
+          const data = await response.json();
+          if (data && data.average_days_per_month) {
+            setAverageDaysPerMonth(data.average_days_per_month);
+          } else {
+            setAverageDaysPerMonth(30.4);
+          }
+        } else {
+          setAverageDaysPerMonth(30.4);
         }
       } catch (error) {
         // Use default value if fetch fails
@@ -264,8 +271,12 @@ const HREmployeeDetails: React.FC = () => {
 
   // Calculate OT charge (Basic Salary / (Shift Hours × AVERAGE_DAYS_PER_MONTH))
   const calculateOTCharge = (basicSalary: string, shiftStart: string, shiftEnd: string) => {
-    const salary = parseFloat(basicSalary);
-    if (isNaN(salary) || !shiftStart || !shiftEnd) return '';
+    if (!basicSalary || !shiftStart || !shiftEnd) return '';
+    
+    // Parse basic salary (remove commas if any)
+    const salary = parseFloat(basicSalary.replace(/,/g, ''));
+    if (isNaN(salary) || salary <= 0) return '';
+    
     // Parse times to hours
     const [startH, startM] = formatTimeToHHMM(shiftStart).split(':').map(Number);
     const [endH, endM] = formatTimeToHHMM(shiftEnd).split(':').map(Number);
@@ -275,7 +286,10 @@ const HREmployeeDetails: React.FC = () => {
     let shiftHours = (endH + endM / 60) - (startH + startM / 60);
     if (shiftHours <= 0) shiftHours += 24; // handle overnight shifts
     if (shiftHours <= 0) return '';
-    const ot = salary / (shiftHours * averageDaysPerMonth);
+    
+    // Use averageDaysPerMonth from state, fallback to 30.4 if not loaded yet
+    const avgDays = averageDaysPerMonth || 30.4;
+    const ot = salary / (shiftHours * avgDays);
     return ot ? ot.toFixed(2) : '';
   };
 
@@ -304,19 +318,7 @@ const HREmployeeDetails: React.FC = () => {
     }
   };
 
-  // Recalculate OT charge when relevant fields change in edit mode
-  useEffect(() => {
-    if (!isEditing || !editData) return;
-    const { basic_salary, shift_start_time, shift_end_time } = editData;
-    const newOtCharge = calculateOTCharge(
-      basic_salary || employeeData?.basic_salary || '',
-      shift_start_time || employeeData?.shift_start_time || '',
-      shift_end_time || employeeData?.shift_end_time || ''
-    );
-    if (newOtCharge !== '' && newOtCharge !== editData.ot_charge) {
-      setEditData(prev => ({ ...prev, ot_charge: newOtCharge }));
-    }
-  }, [isEditing, editData?.basic_salary, editData?.shift_start_time, editData?.shift_end_time]);
+  // Note: OT charge recalculation is now handled directly in onChange handlers for shift_start_time, shift_end_time, and basic_salary
 
   // Move fetchEmployeeData outside useEffect so it can be called after save
   const fetchEmployeeData = async () => {
@@ -1191,7 +1193,24 @@ const HREmployeeDetails: React.FC = () => {
                       }
                     }
                   }}
-                  onChange={e => isEditing && setEditData(prev => ({ ...prev, shift_start_time: e.target.value }))}
+                  onChange={e => {
+                    if (isEditing) {
+                      const newValue = e.target.value;
+                      setEditData(prev => {
+                        const updated = { ...prev, shift_start_time: newValue };
+                        // Recalculate OT charge
+                        const newOtCharge = calculateOTCharge(
+                          updated.basic_salary || employeeData?.basic_salary || '',
+                          newValue,
+                          updated.shift_end_time || employeeData?.shift_end_time || ''
+                        );
+                        if (newOtCharge) {
+                          updated.ot_charge = newOtCharge;
+                        }
+                        return updated;
+                      });
+                    }
+                  }}
                 />
               </div>
               <div>
@@ -1228,7 +1247,24 @@ const HREmployeeDetails: React.FC = () => {
                       }
                     }
                   }}
-                  onChange={e => isEditing && setEditData(prev => ({ ...prev, shift_end_time: e.target.value }))}
+                  onChange={e => {
+                    if (isEditing) {
+                      const newValue = e.target.value;
+                      setEditData(prev => {
+                        const updated = { ...prev, shift_end_time: newValue };
+                        // Recalculate OT charge
+                        const newOtCharge = calculateOTCharge(
+                          updated.basic_salary || employeeData?.basic_salary || '',
+                          updated.shift_start_time || employeeData?.shift_start_time || '',
+                          newValue
+                        );
+                        if (newOtCharge) {
+                          updated.ot_charge = newOtCharge;
+                        }
+                        return updated;
+                      });
+                    }
+                  }}
                 />
               </div>
               <div>
@@ -1245,7 +1281,24 @@ const HREmployeeDetails: React.FC = () => {
                   }`}
                   placeholder="Basic Salary"
                   readOnly={!isEditing}
-                  onChange={e => isEditing && setEditData(prev => ({ ...prev, basic_salary: e.target.value }))}
+                  onChange={e => {
+                    if (isEditing) {
+                      const newValue = e.target.value;
+                      setEditData(prev => {
+                        const updated = { ...prev, basic_salary: newValue };
+                        // Recalculate OT charge
+                        const newOtCharge = calculateOTCharge(
+                          newValue,
+                          updated.shift_start_time || employeeData?.shift_start_time || '',
+                          updated.shift_end_time || employeeData?.shift_end_time || ''
+                        );
+                        if (newOtCharge) {
+                          updated.ot_charge = newOtCharge;
+                        }
+                        return updated;
+                      });
+                    }
+                  }}
                 />
               </div>
               <div>
