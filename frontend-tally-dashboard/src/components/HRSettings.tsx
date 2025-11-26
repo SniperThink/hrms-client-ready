@@ -52,6 +52,7 @@ const HRSettings: React.FC = () => {
   const [showDeleteAccountModal, setShowDeleteAccountModal] = useState(false);
   const [activeTab, setActiveTab] = useState<'profile' | 'holidays' | 'salary'>('profile');
   const [averageDaysPerMonth, setAverageDaysPerMonth] = useState<number>(30.4);
+  const [breakTime, setBreakTime] = useState<number>(0.5);
   const [salaryConfigLoading, setSalaryConfigLoading] = useState(false);
   const [salaryConfigError, setSalaryConfigError] = useState<string | null>(null);
   const [salaryConfigSuccess, setSalaryConfigSuccess] = useState<string | null>(null);
@@ -218,6 +219,7 @@ const HRSettings: React.FC = () => {
         })
         .then(data => {
           setAverageDaysPerMonth(data.average_days_per_month || 30.4);
+          setBreakTime(data.break_time !== undefined ? data.break_time : 0.5);
         })
         .catch((err) => {
           logger.error('Error fetching salary config:', err);
@@ -415,6 +417,7 @@ const HRSettings: React.FC = () => {
               try {
                 const response = await apiPost('/api/salary-config/update/', {
                   average_days_per_month: averageDaysPerMonth,
+                  break_time: breakTime,
                 });
 
                 if (!response.ok) {
@@ -424,6 +427,13 @@ const HRSettings: React.FC = () => {
 
                 const data = await response.json();
                 setSalaryConfigSuccess(data.message || 'Salary configuration updated successfully!');
+                // Dispatch event to notify other components
+                window.dispatchEvent(new CustomEvent('salaryConfigUpdated', { 
+                  detail: { 
+                    average_days_per_month: data.average_days_per_month,
+                    break_time: data.break_time 
+                  } 
+                }));
                 setTimeout(() => setSalaryConfigSuccess(null), 3000);
               } catch (err: any) {
                 logger.error('Error updating salary config:', err);
@@ -441,19 +451,64 @@ const HRSettings: React.FC = () => {
               <input
                 type="number"
                 step="0.1"
-                min="1"
+                min="28"
                 max="31"
                 value={averageDaysPerMonth}
-                onChange={(e) => setAverageDaysPerMonth(parseFloat(e.target.value) || 30.4)}
+                onChange={(e) => {
+                  const value = parseFloat(e.target.value);
+                  if (!isNaN(value)) {
+                    // Clamp value between 28 and 31
+                    const clampedValue = Math.max(28, Math.min(31, value));
+                    setAverageDaysPerMonth(clampedValue);
+                  } else if (e.target.value === '') {
+                    setAverageDaysPerMonth(30.4);
+                  }
+                }}
+                onBlur={(e) => {
+                  const value = parseFloat(e.target.value);
+                  if (isNaN(value) || value < 28 || value > 31) {
+                    setAverageDaysPerMonth(30.4);
+                  }
+                }}
                 className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-teal-500 focus:border-transparent"
                 placeholder="30.4"
                 required
                 disabled={salaryConfigLoading}
               />
               <p className="mt-2 text-sm text-gray-500">
-                Total calendar days per month (default: 30.4). Used for calculating daily rates and overtime rates.
-                Formula: OT Rate = Basic Salary ÷ (Shift Hours × Average Days Per Month)
+                Total calendar days per month (default: 30.4). Must be between 28 and 31 days. Used for calculating daily rates and overtime rates.
               </p>
+            </div>
+
+            <div>
+              <label className="block text-gray-700 mb-2 font-medium">
+                Break Time (Hours)
+              </label>
+              <input
+                type="number"
+                step="0.1"
+                min="0"
+                max="24"
+                value={breakTime}
+                onChange={(e) => setBreakTime(parseFloat(e.target.value) || 0.0)}
+                className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-teal-500 focus:border-transparent"
+                placeholder="0.5"
+                required
+                disabled={salaryConfigLoading}
+              />
+                <p className="mt-2 text-sm text-gray-500">
+                Break time in hours to be deducted from shift hours for OT calculations (default: 0.5 hours = 30 minutes).
+              </p>
+              <div className="mt-2 p-3 bg-gray-50 rounded border border-gray-200">
+                <p className="text-sm font-semibold text-gray-700 mb-1">📋 OT Rate Calculation Formula:</p>
+                <p className="text-xs text-gray-600 mb-1">OT Rate = Basic Salary ÷ ((Shift Hours - Break Time) × Average Days Per Month)</p>
+                <p className="text-xs text-gray-600 mb-1"><strong>Breakdown:</strong></p>
+                <ul className="text-xs text-gray-600 ml-4 list-disc space-y-0.5">
+                  <li>Raw Shift Hours = End Time - Start Time</li>
+                  <li>Effective Shift Hours = Raw Shift Hours - Break Time</li>
+                  <li>OT Rate = Basic Salary ÷ (Effective Shift Hours × Average Days Per Month)</li>
+                </ul>
+              </div>
             </div>
 
             <button

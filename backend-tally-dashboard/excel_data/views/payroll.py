@@ -2248,22 +2248,26 @@ def calculate_simple_payroll(request):
                 salary_for_present_days = 0
             
             # Calculate OT rate using STATIC formula
-            # Formula: OT Charge per Hour = basic_salary / (shift_hours × AVERAGE_DAYS_PER_MONTH)
+            # Formula: OT Charge per Hour = basic_salary / ((shift_hours - break_time) × AVERAGE_DAYS_PER_MONTH)
             from datetime import datetime, timedelta
-            shift_hours_per_day = 0
+            raw_shift_hours_per_day = 0
             if employee.shift_start_time and employee.shift_end_time:
                 start_dt = datetime.combine(datetime.today().date(), employee.shift_start_time)
                 end_dt = datetime.combine(datetime.today().date(), employee.shift_end_time)
                 # Handle overnight shifts
                 if end_dt <= start_dt:
                     end_dt += timedelta(days=1)
-                shift_hours_per_day = (end_dt - start_dt).total_seconds() / 3600
+                raw_shift_hours_per_day = (end_dt - start_dt).total_seconds() / 3600
             else:
                 # Fallback to 8 hours if shift times not set
-                shift_hours_per_day = 8
+                raw_shift_hours_per_day = 8
+            
+            # Subtract break time from shift hours
+            from ..utils.utils import get_break_time, get_average_days_per_month
+            break_time = get_break_time(tenant)
+            shift_hours_per_day = max(0, raw_shift_hours_per_day - break_time)
             
             # Calculate OT rate using tenant-specific AVERAGE_DAYS_PER_MONTH
-            from ..utils.utils import get_average_days_per_month
             average_days = get_average_days_per_month(tenant)
             if shift_hours_per_day > 0 and base_salary > 0:
                 ot_rate = base_salary / (shift_hours_per_day * average_days)
@@ -2701,7 +2705,7 @@ def calculate_simple_payroll_ultra_fast(request):
         with connection.cursor() as cursor:
             sql = """
             WITH 
-            -- Calculate shift hours once
+            -- Calculate shift hours once (raw shift hours before break time deduction)
             employee_shifts AS (
                 SELECT 
                     employee_id,
@@ -2717,17 +2721,18 @@ def calculate_simple_payroll_ultra_fast(request):
                                     EXTRACT(EPOCH FROM (shift_end_time::time - shift_start_time::time)) / 3600.0
                             END
                         ELSE 8.0
-                    END as shift_hours
+                    END as raw_shift_hours
                 FROM excel_data_employeeprofile
                 WHERE tenant_id = %s AND is_active = true
             ),
-            -- Calculate OT rate once
+            -- Calculate effective shift hours (after subtracting break time) and OT rate once
             ot_rates AS (
                 SELECT 
                     e.employee_id,
+                    GREATEST(0, es.raw_shift_hours - %s) as shift_hours,
                     CASE 
-                        WHEN es.shift_hours * %s > 0 AND COALESCE(e.basic_salary, 0) > 0 
-                        THEN e.basic_salary / (es.shift_hours * %s)
+                        WHEN GREATEST(0, es.raw_shift_hours - %s) * %s > 0 AND COALESCE(e.basic_salary, 0) > 0 
+                        THEN e.basic_salary / (GREATEST(0, es.raw_shift_hours - %s) * %s)
                         ELSE 0
                     END as ot_rate_per_hour
                 FROM excel_data_employeeprofile e
@@ -2834,11 +2839,12 @@ def calculate_simple_payroll_ultra_fast(request):
             ORDER BY e.first_name, e.last_name
             """
             
-            from ..utils.utils import get_average_days_per_month
+            from ..utils.utils import get_average_days_per_month, get_break_time
             average_days = get_average_days_per_month(tenant)
+            break_time = get_break_time(tenant)
             params = [
                 tenant.id,  # employee_shifts
-                average_days, average_days, tenant.id,  # ot_rates (two placeholders for AVERAGE_DAYS_PER_MONTH)
+                break_time, break_time, average_days, break_time, average_days, tenant.id,  # ot_rates (break_time appears 4 times, average_days 2 times)
                 tenant.id, year, month_num,  # attendance_summary
                 year, month_num, tenant.id,  # employee_holidays
                 tenant.id,  # total_advances

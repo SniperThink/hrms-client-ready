@@ -61,6 +61,7 @@ const HRAddEmployee: React.FC = () => {
   const [error, setError] = useState<string | null>(null);
   const [isOTChargeManuallyEdited, setIsOTChargeManuallyEdited] = useState<boolean>(false);
   const [averageDaysPerMonth, setAverageDaysPerMonth] = useState<number>(30.4); // Default fallback
+  const [breakTime, setBreakTime] = useState<number>(0.5); // Default fallback (30 minutes)
 
   // Dropdown options state
   const [dropdownOptions, setDropdownOptions] = useState({
@@ -230,6 +231,11 @@ const HRAddEmployee: React.FC = () => {
           if (data && data.average_days_per_month) {
             setAverageDaysPerMonth(data.average_days_per_month);
           }
+          if (data && data.break_time !== undefined) {
+            setBreakTime(data.break_time);
+          } else {
+            setBreakTime(0.5); // Default to 30 minutes if not provided
+          }
         }
       } catch (error) {
         // Use default value if fetch fails
@@ -388,7 +394,7 @@ const HRAddEmployee: React.FC = () => {
     return workingDays;
   };
 
-  // Helper function to calculate OT rate using STATIC formula: basic_salary / (shift_hours × AVERAGE_DAYS_PER_MONTH)
+  // Helper function to calculate OT rate using STATIC formula: basic_salary / ((shift_hours - break_time) × AVERAGE_DAYS_PER_MONTH)
   const calculateOTRate = (
     basicSalary: string,
     shiftStartTime: string,
@@ -408,7 +414,14 @@ const HRAddEmployee: React.FC = () => {
     }
     
     // Calculate (end_time - start_time) in hours
-    const shiftHours = calculateShiftHours(shiftStartTime, shiftEndTime);
+    const rawShiftHours = calculateShiftHours(shiftStartTime, shiftEndTime);
+    if (rawShiftHours <= 0) {
+      return '';
+    }
+    
+    // Subtract break time from shift hours
+    const breakTimeHours = breakTime !== undefined ? breakTime : 0.5;
+    const shiftHours = Math.max(0, rawShiftHours - breakTimeHours);
     if (shiftHours <= 0) {
       return '';
     }
@@ -422,8 +435,8 @@ const HRAddEmployee: React.FC = () => {
     // Use averageDaysPerMonth from state, fallback to 30.4 if not loaded yet
     const avgDays = averageDaysPerMonth || 30.4;
     
-    // OT Charge per Hour = basic_salary / (shift_hours × AVERAGE_DAYS_PER_MONTH)
-    // Using AVERAGE_DAYS_PER_MONTH from backend config for consistent OT rates
+    // OT Charge per Hour = basic_salary / ((shift_hours - break_time) × AVERAGE_DAYS_PER_MONTH)
+    // Using AVERAGE_DAYS_PER_MONTH and break_time from backend config for consistent OT rates
     const otRate = basicSalaryNum / (shiftHours * avgDays);
     
     return otRate.toFixed(2);
@@ -860,7 +873,13 @@ const HRAddEmployee: React.FC = () => {
               <li><strong>Gender:</strong> Male, Female, Other</li>
               <li><strong>Shift Times:</strong> Use HH:MM:SS format (e.g., 09:00:00)</li>
               <li><strong>Basic Salary:</strong> Enter as number only (e.g., 50000)</li>
-              <li><strong>OT Rate (per hour):</strong> Overtime hourly rate. Auto-calculated as Basic Salary / (Shift Hours × {averageDaysPerMonth})</li>
+              <li><strong>OT Rate (per hour):</strong> Overtime hourly rate. Auto-calculated as Basic Salary / ((Shift Hours - Break Time) × {averageDaysPerMonth})
+                <ul className="ml-4 mt-1 list-disc space-y-0.5 text-xs">
+                  <li>Raw Shift Hours = End Time - Start Time</li>
+                  <li>Effective Shift Hours = Raw Shift Hours - Break Time ({breakTime} hours)</li>
+                  <li>OT Rate = Basic Salary ÷ (Effective Shift Hours × {averageDaysPerMonth} days)</li>
+                </ul>
+              </li>
               <li><strong>Dates:</strong> Use YYYY-MM-DD format (e.g., 2024-01-01)</li>
               <li><strong>TDS:</strong> Enter as percentage number (e.g., 10 for 10%)</li>
               <li><strong>OFF DAY:</strong> Monday, Tuesday, etc. (comma-separated for multiple days)</li>
@@ -1240,13 +1259,32 @@ const HRAddEmployee: React.FC = () => {
               />
               {!isOTChargeManuallyEdited && (
                 <div className="mt-1 text-xs text-gray-500">
-                  <p className="mb-1">💡 <strong>Formula:</strong> Basic Salary / (Shift Hours × {averageDaysPerMonth})</p>
-                  <p>This will be calculated automatically if not provided. Using {averageDaysPerMonth} days (average days per month) for consistent OT rates.</p>
+                  <p className="mb-1">💡 <strong>Formula:</strong> Basic Salary / ((Shift Hours - Break Time) × {averageDaysPerMonth})</p>
+                  <p className="mb-1">📋 <strong>Breakdown:</strong></p>
+                  <ul className="ml-4 list-disc space-y-0.5">
+                    <li>Raw Shift Hours = End Time - Start Time</li>
+                    <li>Effective Shift Hours = Raw Shift Hours - Break Time ({breakTime} hours)</li>
+                    <li>OT Rate = Basic Salary ÷ (Effective Shift Hours × {averageDaysPerMonth} days)</li>
+                  </ul>
+                  <p className="mt-1">This will be calculated automatically if not provided. Using {averageDaysPerMonth} days (average days per month) and {breakTime} hours break time (configured in Salary Settings) for consistent OT rates.</p>
                 </div>
               )}
               {!isOTChargeManuallyEdited && formData.ot_charge && formData.shift_start_time && formData.shift_end_time && formData.basic_salary && (
                 <div className="mt-2 text-xs text-gray-600 bg-teal-50 p-2 rounded border border-teal-200">
-                  <strong>Current Calculation:</strong> {formData.basic_salary.replace(/,/g, '')} / ({calculateShiftHours(formData.shift_start_time, formData.shift_end_time).toFixed(2)} hours × {averageDaysPerMonth} days) = ₹{formData.ot_charge}
+                  <p className="font-semibold mb-1">📊 Current Calculation:</p>
+                  {(() => {
+                    const rawShiftHours = calculateShiftHours(formData.shift_start_time, formData.shift_end_time);
+                    const effectiveShiftHours = Math.max(0, rawShiftHours - breakTime);
+                    const basicSalaryNum = parseFloat(formData.basic_salary.replace(/,/g, ''));
+                    return (
+                      <div className="space-y-1">
+                        <p>• Raw Shift Hours: {rawShiftHours.toFixed(2)} hours (End Time - Start Time)</p>
+                        <p>• Break Time: {breakTime} hours (deducted)</p>
+                        <p>• Effective Shift Hours: {effectiveShiftHours.toFixed(2)} hours (Raw - Break)</p>
+                        <p>• OT Rate = ₹{basicSalaryNum.toLocaleString()} ÷ ({effectiveShiftHours.toFixed(2)} × {averageDaysPerMonth}) = ₹{formData.ot_charge}</p>
+                      </div>
+                    );
+                  })()}
                 </div>
               )}
             </div>

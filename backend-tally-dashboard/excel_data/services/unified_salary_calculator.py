@@ -10,7 +10,7 @@ Formula:
     Extra Paid Days = Days worked on configured off days (additional compensation)
     Daily Rate = Base Salary ÷ AVERAGE_DAYS_PER_MONTH
     Base Pay = Daily Rate × Paid Days
-    Hourly Rate = Base Salary ÷ (Shift Hours × AVERAGE_DAYS_PER_MONTH)
+    Hourly Rate = Base Salary ÷ ((Shift Hours - Break Time) × AVERAGE_DAYS_PER_MONTH)
     OT Pay = Hourly Rate × OT Hours
     Per-Minute Rate = Hourly Rate ÷ 60
     Late Deduction = Per-Minute Rate × Late Minutes

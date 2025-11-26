@@ -32,6 +32,20 @@ def get_average_days_per_month(tenant=None):
     # Fallback to default
     return 30.4
 
+def get_break_time(tenant=None):
+    """
+    Get tenant-specific break time in hours, with fallback to default 0.5 (30 minutes)
+    If tenant is not provided, tries to get from thread local storage
+    """
+    if tenant is None:
+        tenant = get_current_tenant()
+    
+    if tenant and hasattr(tenant, 'break_time') and tenant.break_time is not None:
+        return float(tenant.break_time)
+    
+    # Fallback to default (30 minutes = 0.5 hours)
+    return 0.5
+
 def generate_employee_id(name: str, tenant_id: int, department: str = None) -> str:
     """
     Generate employee ID using format: First three letters-Department first two letters-Tenant id

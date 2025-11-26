@@ -511,7 +511,7 @@ class SalaryCalculationService:
             
             # Calculate shift hours from shift_start_time and shift_end_time
             from datetime import datetime, timedelta
-            shift_hours_per_day = Decimal('0')
+            raw_shift_hours_per_day = Decimal('0')
             if hasattr(employee, 'shift_start_time') and hasattr(employee, 'shift_end_time') and \
                employee.shift_start_time and employee.shift_end_time:
                 start_dt = datetime.combine(datetime.today().date(), employee.shift_start_time)
@@ -520,19 +520,24 @@ class SalaryCalculationService:
                 if end_dt <= start_dt:
                     end_dt += timedelta(days=1)
                 delta = end_dt - start_dt
-                shift_hours_per_day = Decimal(str(delta.total_seconds() / 3600))
+                raw_shift_hours_per_day = Decimal(str(delta.total_seconds() / 3600))
             else:
                 # Fallback to 8 hours if shift times not set
-                shift_hours_per_day = Decimal('8')
+                raw_shift_hours_per_day = Decimal('8')
+            
+            # Subtract break time from shift hours
+            from ..utils.utils import get_break_time
+            break_time = Decimal(str(get_break_time(employee.tenant)))
+            shift_hours_per_day = max(Decimal('0'), raw_shift_hours_per_day - break_time)
             
             minutes_per_day = shift_hours_per_day * Decimal('60')
             
             basic_salary_per_hour = basic_salary / (working_days * shift_hours_per_day) if working_days > 0 and shift_hours_per_day > 0 else Decimal('0')
             basic_salary_per_minute = basic_salary / (working_days * minutes_per_day) if working_days > 0 and minutes_per_day > 0 else Decimal('0')
             
-            # STATIC OT rate calculation: basic_salary / (shift_hours × AVERAGE_DAYS_PER_MONTH)
+            # STATIC OT rate calculation: basic_salary / ((shift_hours - break_time) × AVERAGE_DAYS_PER_MONTH)
             # Using tenant-specific AVERAGE_DAYS_PER_MONTH for consistent OT rates across all months
-            # Formula: OT Charge per Hour = basic_salary / ((shift_end_time - shift_start_time) × AVERAGE_DAYS_PER_MONTH)
+            # Formula: OT Charge per Hour = basic_salary / ((shift_end_time - shift_start_time - break_time) × AVERAGE_DAYS_PER_MONTH)
             if shift_hours_per_day > 0 and basic_salary > 0:
                 from ..utils.utils import get_average_days_per_month
                 average_days = Decimal(str(get_average_days_per_month(employee.tenant)))

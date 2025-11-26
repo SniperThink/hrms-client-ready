@@ -53,6 +53,14 @@ class Tenant(models.Model):
         help_text="Average days per month used for salary and OT rate calculations (default: 30.4)"
     )
     
+    # Break time in hours to be deducted from shift hours
+    break_time = models.DecimalField(
+        max_digits=5,
+        decimal_places=2,
+        default=0.5,
+        help_text="Break time in hours to be deducted from shift hours for OT calculations (default: 0.5 hours = 30 minutes)"
+    )
+    
     class Meta:
         app_label = 'excel_data'
         verbose_name = _('tenant')

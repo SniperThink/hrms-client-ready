@@ -97,6 +97,7 @@ const HREmployeeDetails: React.FC = () => {
   const [employeeData, setEmployeeData] = useState<EmployeeProfileData | null>(null);
   const [attendanceRecords, setAttendanceRecords] = useState<AttendanceRecord[]>([]);
   const [averageDaysPerMonth, setAverageDaysPerMonth] = useState<number>(30.4); // Default fallback
+  const [breakTime, setBreakTime] = useState<number>(0.5); // Default fallback (30 minutes)
   const [loading, setLoading] = useState(true);
   const [initialLoad, setInitialLoad] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -158,27 +159,71 @@ const HREmployeeDetails: React.FC = () => {
     { value: 'Mumbai', label: 'Mumbai' }
   ];
 
+  // Function to load salary config (can be called multiple times)
+  const loadSalaryConfig = async () => {
+    try {
+      const data = await apiRequest('/api/salary-config/', { method: 'GET' }) as { average_days_per_month?: number; break_time?: number };
+      logger.info('📊 Salary config loaded:', data);
+      if (data && data.average_days_per_month !== undefined) {
+        logger.info('✅ Setting averageDaysPerMonth to:', data.average_days_per_month);
+        setAverageDaysPerMonth(data.average_days_per_month);
+      } else {
+        logger.warn('⚠️ average_days_per_month not found, using default 30.4');
+        setAverageDaysPerMonth(30.4);
+      }
+      if (data && data.break_time !== undefined) {
+        logger.info('✅ Setting breakTime to:', data.break_time);
+        setBreakTime(data.break_time);
+      } else {
+        logger.warn('⚠️ break_time not found, using default 0.5');
+        setBreakTime(0.5); // Default to 30 minutes
+      }
+    } catch (error) {
+      // Use default value if fetch fails
+      logger.warn('Failed to load salary config, using defaults', error);
+      setAverageDaysPerMonth(30.4);
+      setBreakTime(0.5);
+    }
+  };
+
   // Fetch salary config on component mount
   useEffect(() => {
-    const loadSalaryConfig = async () => {
-      try {
-        const response = await apiRequest('/api/salary-config/', { method: 'GET' });
-        if (response.ok) {
-          const data = await response.json();
-          if (data && data.average_days_per_month) {
-            setAverageDaysPerMonth(data.average_days_per_month);
-          } else {
-            setAverageDaysPerMonth(30.4);
-          }
-        } else {
-          setAverageDaysPerMonth(30.4);
-        }
-      } catch (error) {
-        // Use default value if fetch fails
-        logger.warn('Failed to load salary config, using default 30.4');
+    loadSalaryConfig();
+  }, []);
+
+  // Refetch salary config when editing starts to get latest values
+  useEffect(() => {
+    if (isEditing) {
+      loadSalaryConfig();
+    }
+  }, [isEditing]);
+
+  // Listen for salary config updates from HRSettings
+  useEffect(() => {
+    const handleSalaryConfigUpdate = () => {
+      loadSalaryConfig();
+    };
+    
+    window.addEventListener('salaryConfigUpdated', handleSalaryConfigUpdate);
+    
+    return () => {
+      window.removeEventListener('salaryConfigUpdated', handleSalaryConfigUpdate);
+    };
+  }, []);
+
+  // Refetch salary config when page becomes visible (user switches back to tab)
+  useEffect(() => {
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'visible') {
+        loadSalaryConfig();
       }
     };
-    loadSalaryConfig();
+    
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+    
+    return () => {
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+    };
   }, []);
 
   // Load location data
@@ -283,8 +328,13 @@ const HREmployeeDetails: React.FC = () => {
     if (
       isNaN(startH) || isNaN(startM) || isNaN(endH) || isNaN(endM)
     ) return '';
-    let shiftHours = (endH + endM / 60) - (startH + startM / 60);
-    if (shiftHours <= 0) shiftHours += 24; // handle overnight shifts
+    let rawShiftHours = (endH + endM / 60) - (startH + startM / 60);
+    if (rawShiftHours <= 0) rawShiftHours += 24; // handle overnight shifts
+    if (rawShiftHours <= 0) return '';
+    
+    // Subtract break time from shift hours
+    const breakTimeHours = breakTime !== undefined ? breakTime : 0.5;
+    const shiftHours = Math.max(0, rawShiftHours - breakTimeHours);
     if (shiftHours <= 0) return '';
     
     // Use averageDaysPerMonth from state, fallback to 30.4 if not loaded yet
@@ -1345,9 +1395,40 @@ const HREmployeeDetails: React.FC = () => {
                   }}
                 />
                 <div className="mt-1 text-xs text-gray-500">
-                  <p className="mb-1">💡 <strong>Formula:</strong> Basic Salary / (Shift Hours × {averageDaysPerMonth})</p>
-                  <p>This will be calculated automatically if not provided. Using {averageDaysPerMonth} days (average days per month) for consistent OT rates.</p>
+                  <p className="mb-1">💡 <strong>Formula:</strong> Basic Salary / ((Shift Hours - Break Time) × {averageDaysPerMonth})</p>
+                  <p className="mb-1">📋 <strong>Breakdown:</strong></p>
+                  <ul className="ml-4 list-disc space-y-0.5">
+                    <li>Raw Shift Hours = End Time - Start Time</li>
+                    <li>Effective Shift Hours = Raw Shift Hours - Break Time ({breakTime} hours)</li>
+                    <li>OT Rate = Basic Salary ÷ (Effective Shift Hours × {averageDaysPerMonth} days)</li>
+                  </ul>
+                  <p className="mt-1">This will be calculated automatically if not provided. Using {averageDaysPerMonth} days (average days per month) and {breakTime} hours break time (configured in Salary Settings) for consistent OT rates.</p>
                 </div>
+                {isEditing && editData?.ot_charge && editData?.shift_start_time && editData?.shift_end_time && editData?.basic_salary && (
+                  <div className="mt-2 text-xs text-gray-600 bg-teal-50 p-2 rounded border border-teal-200">
+                    <p className="font-semibold mb-1">📊 Current Calculation:</p>
+                    {(() => {
+                      const rawShiftHours = (() => {
+                        const [startH, startM] = formatTimeToHHMM(editData.shift_start_time || '').split(':').map(Number);
+                        const [endH, endM] = formatTimeToHHMM(editData.shift_end_time || '').split(':').map(Number);
+                        if (isNaN(startH) || isNaN(startM) || isNaN(endH) || isNaN(endM)) return 0;
+                        let hours = (endH + endM / 60) - (startH + startM / 60);
+                        if (hours <= 0) hours += 24;
+                        return hours;
+                      })();
+                      const effectiveShiftHours = Math.max(0, rawShiftHours - breakTime);
+                      const basicSalaryNum = parseFloat((editData.basic_salary || '').replace(/,/g, ''));
+                      return (
+                        <div className="space-y-1">
+                          <p>• Raw Shift Hours: {rawShiftHours.toFixed(2)} hours (End Time - Start Time)</p>
+                          <p>• Break Time: {breakTime} hours (deducted)</p>
+                          <p>• Effective Shift Hours: {effectiveShiftHours.toFixed(2)} hours (Raw - Break)</p>
+                          <p>• OT Rate = ₹{basicSalaryNum.toLocaleString()} ÷ ({effectiveShiftHours.toFixed(2)} × {averageDaysPerMonth}) = ₹{editData.ot_charge}</p>
+                        </div>
+                      );
+                    })()}
+                  </div>
+                )}
               </div>
               <div className="col-span-2">
                 <label className="block mb-2 text-gray-700 text-sm font-medium px-1">Off Days</label>

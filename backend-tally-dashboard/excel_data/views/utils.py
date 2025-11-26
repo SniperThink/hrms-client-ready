@@ -288,24 +288,32 @@ def calculate_ot_rate(request):
         end_dt = datetime.combine(datetime.today().date(), shift_end_time)
         if end_dt <= start_dt:
             end_dt += timedelta(days=1)
-        shift_hours = Decimal(str((end_dt - start_dt).total_seconds() / 3600))
+        raw_shift_hours = Decimal(str((end_dt - start_dt).total_seconds() / 3600))
+        
+        # Subtract break time from shift hours
+        from ..utils.utils import get_break_time
+        tenant = getattr(request, 'tenant', None)
+        break_time = Decimal(str(get_break_time(tenant)))
+        shift_hours = max(Decimal('0'), raw_shift_hours - break_time)
         
         if shift_hours <= 0:
-            return Response({'error': 'Shift hours must be greater than 0'}, status=400)
+            return Response({'error': 'Shift hours (after break time deduction) must be greater than 0'}, status=400)
         
-        # Calculate OT rate using STATIC formula: basic_salary / (shift_hours × AVERAGE_DAYS_PER_MONTH)
+        # Calculate OT rate using STATIC formula: basic_salary / ((shift_hours - break_time) × AVERAGE_DAYS_PER_MONTH)
         from ..utils.utils import get_average_days_per_month
-        tenant = getattr(request, 'tenant', None)
         average_days = Decimal(str(get_average_days_per_month(tenant)))
         ot_rate = basic_salary / (shift_hours * average_days)
-        calculation = f"{basic_salary} / ({shift_hours:.2f} hours × {average_days} days) = {round(ot_rate, 2)}"
+        calculation = f"{basic_salary} / (({raw_shift_hours:.2f} - {break_time:.2f}) hours × {average_days} days) = {round(ot_rate, 2)}"
         
         return Response({
             'ot_rate': round(float(ot_rate), 2),
             'calculation': calculation,
-            'shift_hours_per_day': round(float(shift_hours), 2),
+            'shift_hours_per_day': round(float(raw_shift_hours), 2),
+            'break_time': float(break_time),
+            'effective_shift_hours': round(float(shift_hours), 2),
             'average_days_per_month': float(average_days),
-            'basic_salary': float(basic_salary)
+            'basic_salary': float(basic_salary),
+            'formula': f'OT Rate = Basic Salary ÷ ((Shift Hours - Break Time) × Average Days Per Month)'
         })
     except (ValueError, TypeError) as e:
         return Response({'error': f'Invalid input: {str(e)}'}, status=400)
@@ -315,7 +323,7 @@ def calculate_ot_rate(request):
 def get_salary_config(request):
     """
     Get salary calculation configuration values
-    Returns tenant-specific AVERAGE_DAYS_PER_MONTH for frontend use
+    Returns tenant-specific AVERAGE_DAYS_PER_MONTH and BREAK_TIME for frontend use
     """
     try:
         tenant = getattr(request, 'tenant', None)
@@ -324,10 +332,12 @@ def get_salary_config(request):
         
         # Use tenant-specific value, fallback to default if not set
         average_days = float(tenant.average_days_per_month) if tenant.average_days_per_month else 30.4
+        break_time = float(tenant.break_time) if tenant.break_time is not None else 0.5
         
         return Response({
             'average_days_per_month': average_days,
-            'description': 'Average days per month used for salary and OT rate calculations'
+            'break_time': break_time,
+            'description': 'Average days per month and break time used for salary and OT rate calculations'
         })
     except Exception as e:
         return Response({'error': f'Failed to get config: {str(e)}'}, status=500)
@@ -337,7 +347,7 @@ def get_salary_config(request):
 def update_salary_config(request):
     """
     Update salary calculation configuration values (tenant-specific)
-    Expected payload: { "average_days_per_month": 30.4 }
+    Expected payload: { "average_days_per_month": 30.4, "break_time": 0.0 }
     """
     try:
         tenant = getattr(request, 'tenant', None)
@@ -350,13 +360,23 @@ def update_salary_config(request):
         
         try:
             average_days_float = float(average_days)
-            if average_days_float <= 0 or average_days_float > 31:
-                return Response({'error': 'average_days_per_month must be between 0 and 31'}, status=400)
+            if average_days_float < 28 or average_days_float > 31:
+                return Response({'error': 'average_days_per_month must be between 28 and 31'}, status=400)
         except (ValueError, TypeError):
             return Response({'error': 'average_days_per_month must be a valid number'}, status=400)
         
+        # Handle break_time (optional, defaults to 0.0 if not provided)
+        break_time = request.data.get('break_time', 0.0)
+        try:
+            break_time_float = float(break_time)
+            if break_time_float < 0:
+                return Response({'error': 'break_time must be greater than or equal to 0'}, status=400)
+        except (ValueError, TypeError):
+            return Response({'error': 'break_time must be a valid number'}, status=400)
+        
         tenant.average_days_per_month = average_days_float
-        tenant.save(update_fields=['average_days_per_month'])
+        tenant.break_time = break_time_float
+        tenant.save(update_fields=['average_days_per_month', 'break_time'])
         
         # Clear relevant caches
         from django.core.cache import cache
@@ -372,6 +392,7 @@ def update_salary_config(request):
         return Response({
             'success': True,
             'average_days_per_month': float(tenant.average_days_per_month),
+            'break_time': float(tenant.break_time),
             'message': 'Salary configuration updated successfully'
         })
     except Exception as e:

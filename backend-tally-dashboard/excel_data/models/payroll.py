@@ -120,7 +120,7 @@ class CalculatedSalary(TenantAwareModel):
             self.salary_for_present_days = self.basic_salary
         
         # 2. Calculate OT charges using employee-specific OT rate
-        # OT rate is calculated as basic_salary / (shift_hours × working_days)
+        # OT rate is calculated as basic_salary / ((shift_hours - break_time) × AVERAGE_DAYS_PER_MONTH)
         if self.employee_ot_rate > 0:
             self.ot_charges = self.employee_ot_rate * self.ot_hours
         else:
@@ -130,7 +130,7 @@ class CalculatedSalary(TenantAwareModel):
         
         # 3. Calculate late deduction using standardized approach
         # Use OT rate per minute for consistency: late deduction per minute = OT rate per hour / 60
-        # OT rate is calculated as basic_salary / (shift_hours × working_days)
+        # OT rate is calculated as basic_salary / ((shift_hours - break_time) × AVERAGE_DAYS_PER_MONTH)
         if self.employee_ot_rate > 0:
             late_deduction_per_minute = self.employee_ot_rate / Decimal('60')
         else:

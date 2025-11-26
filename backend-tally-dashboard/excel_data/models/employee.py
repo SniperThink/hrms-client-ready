@@ -80,7 +80,7 @@ class EmployeeProfile(TenantAwareModel):
         ]
 
     def _calculate_shift_hours(self):
-        """Calculate shift duration in hours from shift_start_time to shift_end_time"""
+        """Calculate shift duration in hours from shift_start_time to shift_end_time, minus break time"""
         if not self.shift_start_time or not self.shift_end_time:
             return 0
         
@@ -94,7 +94,14 @@ class EmployeeProfile(TenantAwareModel):
         
         # Calculate difference in hours
         delta = end_dt - start_dt
-        return delta.total_seconds() / 3600  # Convert to hours
+        raw_shift_hours = delta.total_seconds() / 3600  # Convert to hours
+        
+        # Subtract break time from shift hours
+        from ..utils.utils import get_break_time
+        break_time = get_break_time(self.tenant)
+        effective_shift_hours = max(0, raw_shift_hours - break_time)
+        
+        return effective_shift_hours
     
     def _calculate_working_days_for_month(self, year=None, month=None):
         """Calculate working days for a given month based on off days"""
@@ -146,15 +153,15 @@ class EmployeeProfile(TenantAwareModel):
             full_name = f"{self.first_name} {self.last_name}"
             self.employee_id = generate_employee_id(full_name, self.tenant_id, self.department)
         
-        # Auto-calculate OT charge per hour using STATIC formula: basic_salary / (shift_hours × AVERAGE_DAYS_PER_MONTH)
-        # Formula: OT Charge per Hour = basic_salary / ((shift_end_time - shift_start_time) × AVERAGE_DAYS_PER_MONTH)
-        # Using AVERAGE_DAYS_PER_MONTH from settings for consistent OT rates across all months
+        # Auto-calculate OT charge per hour using STATIC formula: basic_salary / ((shift_hours - break_time) × AVERAGE_DAYS_PER_MONTH)
+        # Formula: OT Charge per Hour = basic_salary / ((shift_end_time - shift_start_time - break_time) × AVERAGE_DAYS_PER_MONTH)
+        # Using AVERAGE_DAYS_PER_MONTH and break_time from settings for consistent OT rates across all months
         # Only auto-calculate if OT charge is not already provided (preserves manual entries)
         if not self.ot_charge_per_hour and self.shift_start_time and self.shift_end_time and self.basic_salary:
-            # Calculate (end_time - start_time) in hours
-            shift_hours_per_day = self._calculate_shift_hours()  # This is (shift_end_time - shift_start_time)
+            # Calculate (end_time - start_time - break_time) in hours
+            shift_hours_per_day = self._calculate_shift_hours()  # This is (shift_end_time - shift_start_time - break_time)
             
-            # OT Charge per Hour = basic_salary / (shift_hours × AVERAGE_DAYS_PER_MONTH)
+            # OT Charge per Hour = basic_salary / ((shift_hours - break_time) × AVERAGE_DAYS_PER_MONTH)
             if shift_hours_per_day > 0:
                 from decimal import Decimal
                 from ..utils.utils import get_average_days_per_month
