@@ -242,8 +242,31 @@ if not DEBUG:
     SECURE_HSTS_INCLUDE_SUBDOMAINS = True
     SECURE_HSTS_PRELOAD = True
 
-# AWS Configuration (for production)
-if config('USE_S3', default=False, cast=bool):
+# Cloudflare R2 Configuration (S3-compatible storage)
+USE_R2 = config('USE_R2', default=False, cast=bool)
+if USE_R2:
+    # Cloudflare R2 Configuration (S3-compatible)
+    AWS_ACCESS_KEY_ID = config('R2_ACCESS_KEY_ID')
+    AWS_SECRET_ACCESS_KEY = config('R2_SECRET_ACCESS_KEY')
+    AWS_STORAGE_BUCKET_NAME = config('R2_BUCKET_NAME')
+    AWS_S3_ENDPOINT_URL = config('R2_ENDPOINT_URL')  # e.g., https://<account-id>.r2.cloudflarestorage.com
+    AWS_S3_REGION_NAME = 'auto'  # R2 uses 'auto' as region
+    AWS_S3_CUSTOM_DOMAIN = config('R2_CUSTOM_DOMAIN', default=None)  # Optional: custom domain for R2
+    
+    # R2-specific settings
+    AWS_S3_USE_SSL = True
+    AWS_S3_VERIFY = True
+    AWS_DEFAULT_ACL = 'private'  # Private by default for security
+    AWS_S3_FILE_OVERWRITE = False  # Don't overwrite files with same name
+    
+    # Use R2 storage for media files (attachments)
+    DEFAULT_FILE_STORAGE = 'excel_data.storage.R2Storage'
+    
+    # Static files can still use local storage or R2
+    # STATICFILES_STORAGE = 'storages.backends.s3boto3.S3Boto3Storage'  # Uncomment if needed
+
+# AWS S3 Configuration (for production - legacy)
+if config('USE_S3', default=False, cast=bool) and not USE_R2:
     # AWS S3 Configuration
     AWS_ACCESS_KEY_ID = config('AWS_ACCESS_KEY_ID')
     AWS_SECRET_ACCESS_KEY = config('AWS_SECRET_ACCESS_KEY')

@@ -10,7 +10,8 @@ import {
   CircleDollarSign, 
   Shield, 
   Settings,
-  MessageSquare
+  MessageSquare,
+  Crown
 } from 'lucide-react';
 
 interface HRSidebarProps {
@@ -23,26 +24,41 @@ const HRSidebar: React.FC<HRSidebarProps> = ({ activePage, onPageChange }) => {
   
   // Get user info from localStorage
   const user = JSON.parse(localStorage.getItem('user') || '{}');
-  const isAdmin = user?.role === 'admin' || user?.is_admin || user?.is_superuser || false;
+  const isSuperUser = user?.is_superuser || false;
+  // Regular admin (not superuser) - exclude superuser from admin check
+  const isAdmin = (user?.role === 'admin' || user?.is_admin) && !isSuperUser;
   const isHRManager = user?.role === 'hr_manager' || user?.role === 'hr-manager' || false;
   const isPayrollMaster = user?.role === 'payroll_master' || false;
   
   const navItems = [
-    { name: "Overview", icon: LayoutGrid, id: "overview", path: "/hr-management", roles: ['admin', 'payroll_master'] },
-    { name: "All Employees", icon: Users, id: "directory", path: "/hr-management/directory", roles: ['admin', 'payroll_master'] },
-    { name: "Add Employee", icon: PlusCircle, id: "add-employee", path: "/hr-management/directory/add", roles: ['admin', 'payroll_master'] },
-    { name: "Upload Data", icon: Upload, id: "data-upload", path: "/hr-management/data-upload", roles: ['admin', 'payroll_master'] },
-    { name: "Attendance Log", icon: ClipboardList, id: "attendance-log", path: "/hr-management/attendance-log", roles: ['admin', 'hr_manager', 'payroll_master'] },
-    { name: "Attendance Tracker", icon: CalendarCheck, id: "attendance-tracker", path: "/hr-management/attendance-tracker", roles: ['admin', 'hr_manager', 'payroll_master'] },
-    { name: "Payroll", icon: CircleDollarSign, id: "payroll", path: "/hr-management/payroll", roles: ['admin', 'payroll_master'] },
-    { name: "Team Management", icon: Shield, id: "team", path: "/hr-management/team", roles: ['admin'] },
-    { name: "Support", icon: MessageSquare, id: "support", path: "/hr-management/support", roles: ['admin', 'hr_manager', 'payroll_master'] },
-    { name: "Settings", icon: Settings, id: "settings", path: "/hr-management/settings", roles: ['admin', 'hr_manager', 'payroll_master'] }
+    { name: "Overview", icon: LayoutGrid, id: "overview", path: "/hr-management", roles: ['admin', 'payroll_master'], superUserOnly: false },
+    { name: "All Employees", icon: Users, id: "directory", path: "/hr-management/directory", roles: ['admin', 'payroll_master'], superUserOnly: false },
+    { name: "Add Employee", icon: PlusCircle, id: "add-employee", path: "/hr-management/directory/add", roles: ['admin', 'payroll_master'], superUserOnly: false },
+    { name: "Upload Data", icon: Upload, id: "data-upload", path: "/hr-management/data-upload", roles: ['admin', 'payroll_master'], superUserOnly: false },
+    { name: "Attendance Log", icon: ClipboardList, id: "attendance-log", path: "/hr-management/attendance-log", roles: ['admin', 'hr_manager', 'payroll_master'], superUserOnly: false },
+    { name: "Attendance Tracker", icon: CalendarCheck, id: "attendance-tracker", path: "/hr-management/attendance-tracker", roles: ['admin', 'hr_manager', 'payroll_master'], superUserOnly: false },
+    { name: "Payroll", icon: CircleDollarSign, id: "payroll", path: "/hr-management/payroll", roles: ['admin', 'payroll_master'], superUserOnly: false },
+    { name: "Team Management", icon: Shield, id: "team", path: "/hr-management/team", roles: ['admin'], superUserOnly: false },
+    { name: "Support", icon: MessageSquare, id: "support", path: "/hr-management/support", roles: ['admin', 'hr_manager', 'payroll_master'], superUserOnly: false },
+    { name: "Settings", icon: Settings, id: "settings", path: "/hr-management/settings", roles: ['admin', 'hr_manager', 'payroll_master'], superUserOnly: false },
+    { name: "Super Admin", icon: Crown, id: "super-admin", path: "/super-admin", roles: [], superUserOnly: true }
   ];
 
   // Filter items based on user role
   const itemsToShow = navItems.filter(item => {
-    if (isAdmin) return true; // Admin can see everything
+    // Super admin only items - ONLY show to superusers
+    if (item.superUserOnly) {
+      return isSuperUser;
+    }
+    
+    // Superusers ONLY see the Super Admin dashboard, not regular HR management items
+    if (isSuperUser) {
+      return false; // Superusers don't see regular HR items
+    }
+    
+    // Regular admin can see everything except super admin items
+    if (isAdmin) return true;
+    
     if (isPayrollMaster) {
       // Payroll master can see everything except Team Management
       return item.id !== 'team';

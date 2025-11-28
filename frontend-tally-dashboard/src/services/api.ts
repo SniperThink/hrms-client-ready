@@ -61,7 +61,8 @@ export const apiCall = async (
   }
 
   // Add tenant subdomain header for tenant resolution
-  if (tenant.subdomain) {
+  // Skip tenant header for super admin endpoints (they don't need tenant context)
+  if (tenant.subdomain && !endpoint.startsWith('/api/super-admin/')) {
     headers["X-Tenant-Subdomain"] = tenant.subdomain;
   }
 
@@ -134,7 +135,8 @@ export const apiUpload = async (
   }
 
   // Add tenant subdomain header for tenant resolution
-  if (tenant.subdomain) {
+  // Skip tenant header for super admin endpoints (they don't need tenant context)
+  if (tenant.subdomain && !endpoint.startsWith('/api/super-admin/')) {
     headers["X-Tenant-Subdomain"] = tenant.subdomain;
   }
 
@@ -227,6 +229,15 @@ export const API_ENDPOINTS = {
   // Tenant/Company Settings
   tenantSettings: "/api/tenant/settings/",
   tenantUsers: "/api/tenant/users/",
+
+  // Super Admin endpoints
+  superAdminStats: "/api/super-admin/stats/",
+  superAdminTenants: "/api/super-admin/tenants/",
+  superAdminTenantCredits: (tenantId: string) => `/api/super-admin/tenants/${tenantId}/credits/`,
+  superAdminSupportTickets: "/api/super-admin/support/tickets/",
+  superAdminTicketStatus: (ticketId: string) => `/api/super-admin/support/tickets/${ticketId}/status/`,
+  superAdminLoginAsTenant: (tenantId: string) => `/api/super-admin/tenants/${tenantId}/login/`,
+  superAdminRestoreSession: "/api/super-admin/restore-session/",
 
   // Legacy endpoints for backward compatibility
   get_directory_data: "/api/employees/get_directory_data/",

@@ -222,14 +222,16 @@ class SystemUserLoginView(APIView):
             )
 
         # Check if tenant is active (but not soft-deleted - soft-deleted is handled above)
-        if not tenant.is_active and not tenant.deactivated_at:
+        # Skip for superusers (they don't have tenants)
+        if tenant and not tenant.is_active and not tenant.deactivated_at:
             return Response(
                 {"error": "Company account is suspended. Please contact support."},
                 status=status.HTTP_401_UNAUTHORIZED,
             )
         
         # If tenant is inactive due to soft delete, show recovery info
-        if not tenant.is_active and tenant.deactivated_at:
+        # Skip for superusers (they don't have tenants)
+        if tenant and not tenant.is_active and tenant.deactivated_at:
             days_remaining = tenant.get_recovery_days_remaining(recovery_period_days=30)
             if days_remaining and days_remaining > 0:
                 from django.utils import timezone
@@ -1124,14 +1126,62 @@ class PublicTenantLoginView(APIView):
                 status=status.HTTP_401_UNAUTHORIZED,
             )
 
-        # Check if user has a tenant assigned
-        if not user.tenant:
+        # Check if user has a tenant assigned (skip for superusers)
+        if not user.tenant and not user.is_superuser:
             return Response(
                 {
                     "error": "User account is not associated with any company. Please contact support."
                 },
                 status=status.HTTP_401_UNAUTHORIZED,
             )
+        
+        # For superusers without tenant, skip tenant-related checks
+        if user.is_superuser and not user.tenant:
+            # Skip email verification for superusers (optional - can be enabled if needed)
+            # if not user.email_verified:
+            #     return Response(
+            #         {
+            #             "error": "Email not verified. Please check your email and click the verification link to activate your account.",
+            #             "email_verified": False,
+            #             "email": user.email,
+            #         },
+            #         status=status.HTTP_401_UNAUTHORIZED,
+            #     )
+            
+            # Check for existing active session
+            has_session, should_deny, message = SessionManager.check_existing_session(
+                user, request, force_logout_on_conflict=force_logout
+            )
+            if should_deny:
+                return Response(
+                    {"error": message, "already_logged_in": True},
+                    status=status.HTTP_409_CONFLICT,
+                )
+            
+            # Create new session
+            session_key = SessionManager.create_new_session(user, request)
+            
+            # Generate JWT tokens
+            refresh = RefreshToken.for_user(user)
+            
+            response_data = {
+                "message": "Login successful",
+                "access": str(refresh.access_token),
+                "refresh": str(refresh),
+                "session_key": session_key,
+                "user": {
+                    "id": user.id,
+                    "email": user.email,
+                    "name": f"{user.first_name} {user.last_name}".strip() or user.email,
+                    "first_name": user.first_name or "",
+                    "last_name": user.last_name or "",
+                    "role": user.role,
+                    "is_superuser": True,
+                },
+                "tenant": None,  # Superusers don't have tenants
+            }
+            
+            return Response(response_data, status=status.HTTP_200_OK)
 
         # Check if email is verified (only required for admin users, not invited users)
         if not user.email_verified and not user.is_invited:
@@ -1229,14 +1279,16 @@ class PublicTenantLoginView(APIView):
                 )
 
         # Check if tenant is active (but not soft-deleted - soft-deleted is handled above)
-        if not tenant.is_active and not tenant.deactivated_at:
+        # Skip for superusers (they don't have tenants)
+        if tenant and not tenant.is_active and not tenant.deactivated_at:
             return Response(
                 {"error": "Company account is suspended. Please contact support."},
                 status=status.HTTP_401_UNAUTHORIZED,
             )
         
         # If tenant is inactive due to soft delete, show recovery info
-        if not tenant.is_active and tenant.deactivated_at:
+        # Skip for superusers (they don't have tenants)
+        if tenant and not tenant.is_active and tenant.deactivated_at:
             days_remaining = tenant.get_recovery_days_remaining(recovery_period_days=30)
             if days_remaining and days_remaining > 0:
                 from django.utils import timezone
@@ -1270,8 +1322,8 @@ class PublicTenantLoginView(APIView):
                     status=status.HTTP_403_FORBIDDEN,
             )
 
-        # Check if tenant has credits
-        if tenant.credits <= 0:
+        # Check if tenant has credits (skip for superusers)
+        if tenant and tenant.credits <= 0:
             return Response(
                 {
                     "error": "Company account has no credits. Please contact support to add credits to your account.",
@@ -1342,12 +1394,13 @@ class PublicTenantLoginView(APIView):
                 "first_name": user.first_name or "",
                 "last_name": user.last_name or "",
                     "role": user.role,
+                    "is_superuser": user.is_superuser,
                 },
                 "tenant": {
                     "id": user.tenant.id,
                     "name": user.tenant.name,
                     "subdomain": user.tenant.subdomain,
-                },
+                } if user.tenant else None,
         }
         
         # Add recovery message if account was just recovered

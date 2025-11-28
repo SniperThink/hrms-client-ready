@@ -1,7 +1,26 @@
 from django.db import models
 from django.utils import timezone
+from django.conf import settings
+from django.core.files.storage import default_storage
+from django.utils.module_loading import import_string
 from .tenant import TenantAwareModel
 from .auth import CustomUser
+
+# Get the storage class from settings
+def get_file_storage():
+    """Get the storage backend from DEFAULT_FILE_STORAGE setting"""
+    storage_class_path = getattr(settings, 'DEFAULT_FILE_STORAGE', None)
+    if storage_class_path:
+        try:
+            storage_class = import_string(storage_class_path)
+            return storage_class()
+        except (ImportError, AttributeError) as e:
+            # Fallback to default storage if import fails
+            import logging
+            logger = logging.getLogger(__name__)
+            logger.warning(f"Failed to import storage class {storage_class_path}: {e}. Using default storage.")
+            return default_storage
+    return default_storage
 
 
 class SupportTicket(TenantAwareModel):
@@ -54,6 +73,15 @@ class SupportTicket(TenantAwareModel):
         blank=True,
         null=True,
         help_text="Admin who resolved the ticket"
+    )
+    
+    # Attachment field - use R2 storage if configured, otherwise local storage
+    attachment = models.FileField(
+        upload_to='support_tickets/attachments/%Y/%m/%d/',
+        blank=True,
+        null=True,
+        help_text="Optional attachment file for the ticket",
+        storage=get_file_storage()  # Uses DEFAULT_FILE_STORAGE from settings
     )
     
     class Meta:

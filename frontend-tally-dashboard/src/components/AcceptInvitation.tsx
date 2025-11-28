@@ -104,7 +104,10 @@ const AcceptInvitation: React.FC = () => {
         if (data.tokens && data.session_key) {
           setMessage({ type: 'success', text: 'Account created successfully! Redirecting...' });
           setTimeout(() => {
-            navigate('/hr-management');
+            // Check if user is superuser and redirect accordingly
+            const user = data.user || JSON.parse(localStorage.getItem('user') || '{}');
+            const isSuperUser = user?.is_superuser || false;
+            navigate(isSuperUser ? '/super-admin' : '/hr-management');
           }, 2000);
         } else {
           // Otherwise, redirect to login

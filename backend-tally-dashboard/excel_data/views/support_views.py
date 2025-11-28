@@ -15,8 +15,10 @@ from ..utils.utils import get_current_tenant
 
 logger = logging.getLogger(__name__)
 
-# Cache timeout for support tickets (5 minutes)
-SUPPORT_TICKETS_CACHE_TIMEOUT = 300
+# Cache timeout for support tickets
+SUPPORT_TICKETS_CACHE_TIMEOUT = 300  # 5 minutes for list views
+SUPPORT_TICKET_DETAIL_CACHE_TIMEOUT = 600  # 10 minutes for individual tickets
+SUPPORT_TICKET_SERIALIZED_CACHE_TIMEOUT = 300  # 5 minutes for serialized data
 
 
 def render_ticket_email_template(ticket, user, admin_email=None):
@@ -168,31 +170,33 @@ class SupportTicketViewSet(viewsets.ModelViewSet):
     queryset = SupportTicket.objects.all()
     
     def get_queryset(self):
-        """Filter tickets by tenant and user with caching"""
+        """Filter tickets by tenant and user with enhanced caching"""
         tenant = get_current_tenant() or self.request.tenant
         user = self.request.user
         
         if not tenant:
             return SupportTicket.objects.none()
         
-        # Build cache key based on user role
+        # Build cache key based on user role and tenant
         is_admin = user.role == 'admin' or user.is_superuser
-        cache_key = f"support_tickets_{tenant.id}_{'admin' if is_admin else f'user_{user.id}'}"
+        cache_key = f"support_tickets_queryset_{tenant.id}_{'admin' if is_admin else f'user_{user.id}'}"
         
         # Check cache
         use_cache = self.request.GET.get('no_cache', '').lower() != 'true'
         if use_cache:
-            cached_data = cache.get(cache_key)
-            if cached_data:
-                logger.info(f"📦 Cache HIT for support tickets: {cache_key}")
+            cached_queryset_ids = cache.get(cache_key)
+            if cached_queryset_ids is not None:
+                logger.info(f"📦 Cache HIT for support tickets queryset: {cache_key}")
                 # Return queryset from cached IDs
-                ticket_ids = cached_data.get('ticket_ids', [])
-                if ticket_ids:
-                    queryset = SupportTicket.objects.filter(id__in=ticket_ids).order_by('-created_at')
+                if cached_queryset_ids:
+                    queryset = SupportTicket.objects.filter(id__in=cached_queryset_ids).order_by('-created_at')
                     return queryset
+                else:
+                    # Empty list cached - return empty queryset
+                    return SupportTicket.objects.none()
         
         # Cache miss - fetch from database
-        logger.info(f"💾 Cache MISS for support tickets: {cache_key}")
+        logger.info(f"💾 Cache MISS for support tickets queryset: {cache_key}")
         start_time = time.time()
         
         # Admin users can see all tickets in their tenant
@@ -204,33 +208,37 @@ class SupportTicketViewSet(viewsets.ModelViewSet):
         
         # Cache the ticket IDs for faster retrieval
         ticket_ids = list(queryset.values_list('id', flat=True))
-        cache_data = {
-            'ticket_ids': ticket_ids,
-            'cached_at': time.time(),
-            'query_time_ms': round((time.time() - start_time) * 1000, 2)
-        }
-        cache.set(cache_key, cache_data, SUPPORT_TICKETS_CACHE_TIMEOUT)
-        logger.info(f"✅ Cached support tickets: {len(ticket_ids)} tickets in {cache_data['query_time_ms']}ms")
+        cache.set(cache_key, ticket_ids, SUPPORT_TICKETS_CACHE_TIMEOUT)
+        query_time_ms = round((time.time() - start_time) * 1000, 2)
+        logger.info(f"✅ Cached support tickets queryset: {len(ticket_ids)} tickets in {query_time_ms}ms")
         
         return queryset
     
-    def _clear_ticket_cache(self, tenant_id, user_id=None, is_admin=False):
-        """Clear cache for support tickets"""
+    def _clear_ticket_cache(self, tenant_id, user_id=None, is_admin=False, ticket_id=None):
+        """Clear cache for support tickets - enhanced version"""
         try:
-            # Clear admin cache
-            admin_cache_key = f"support_tickets_{tenant_id}_admin"
+            # Clear queryset caches
+            admin_cache_key = f"support_tickets_queryset_{tenant_id}_admin"
             cache.delete(admin_cache_key)
             
-            # Clear user-specific cache if provided
+            # Clear user-specific queryset cache if provided
             if user_id:
-                user_cache_key = f"support_tickets_{tenant_id}_user_{user_id}"
+                user_cache_key = f"support_tickets_queryset_{tenant_id}_user_{user_id}"
                 cache.delete(user_cache_key)
             
-            # If admin, clear all user caches for this tenant (pattern-based)
+            # Clear individual ticket cache if ticket_id provided
+            if ticket_id:
+                ticket_cache_key = f"support_ticket_detail_{ticket_id}"
+                cache.delete(ticket_cache_key)
+                ticket_serialized_key = f"support_ticket_serialized_{ticket_id}"
+                cache.delete(ticket_serialized_key)
+            
+            # If admin, we need to clear all user caches for this tenant
+            # Since we can't pattern match, we'll clear the admin cache which will force refresh
             if is_admin:
-                # Note: Database cache doesn't support pattern deletion
-                # We'll need to track cache keys or clear on-demand
-                logger.info(f"🗑️ Cleared support ticket cache for tenant {tenant_id}")
+                # Clear all potential user caches by clearing admin cache
+                # Individual user caches will be rebuilt on next request
+                logger.info(f"🗑️ Cleared support ticket cache for tenant {tenant_id} (admin view)")
             else:
                 logger.info(f"🗑️ Cleared support ticket cache for tenant {tenant_id}, user {user_id}")
         except Exception as e:
@@ -242,10 +250,24 @@ class SupportTicketViewSet(viewsets.ModelViewSet):
             return SupportTicketCreateSerializer
         return SupportTicketSerializer
     
+    def get_serializer_context(self):
+        """Add request to serializer context for building absolute URLs"""
+        context = super().get_serializer_context()
+        context['request'] = self.request
+        return context
+    
     def perform_create(self, serializer):
         """Create ticket and send email notifications"""
         tenant = get_current_tenant() or self.request.tenant
         user = self.request.user
+        
+        # Log file upload info for debugging
+        if 'attachment' in serializer.validated_data and serializer.validated_data['attachment']:
+            attachment = serializer.validated_data['attachment']
+            logger.info(f"Uploading attachment: {attachment.name} ({attachment.size} bytes)")
+            logger.info(f"Storage backend: {attachment.storage.__class__.__name__ if hasattr(attachment, 'storage') else 'N/A'}")
+            if hasattr(settings, 'DEFAULT_FILE_STORAGE'):
+                logger.info(f"DEFAULT_FILE_STORAGE: {settings.DEFAULT_FILE_STORAGE}")
         
         # Create ticket
         ticket = serializer.save(
@@ -253,9 +275,18 @@ class SupportTicketViewSet(viewsets.ModelViewSet):
             created_by=user
         )
         
+        # Log attachment URL after save
+        if ticket.attachment:
+            logger.info(f"Ticket #{ticket.id} attachment saved: {ticket.attachment.name}")
+            try:
+                attachment_url = ticket.attachment.url
+                logger.info(f"Attachment URL: {attachment_url}")
+            except Exception as e:
+                logger.error(f"Error getting attachment URL: {str(e)}")
+        
         # Clear cache after creating ticket
         is_admin = user.role == 'admin' or user.is_superuser
-        self._clear_ticket_cache(tenant.id, user.id, is_admin)
+        self._clear_ticket_cache(tenant.id, user.id, is_admin, ticket_id=ticket.id)
         
         # Send email only to support admin (not to ticket creator or tenant admins)
         admin_email = getattr(settings, 'SUPPORT_ADMIN_EMAIL', '')
@@ -292,7 +323,7 @@ class SupportTicketViewSet(viewsets.ModelViewSet):
         # Clear cache after resolving ticket
         tenant = get_current_tenant() or request.tenant
         if tenant:
-            self._clear_ticket_cache(tenant.id, ticket.created_by.id if ticket.created_by else None, is_admin=True)
+            self._clear_ticket_cache(tenant.id, ticket.created_by.id if ticket.created_by else None, is_admin=True, ticket_id=ticket.id)
         
         serializer = self.get_serializer(ticket)
         return Response(serializer.data)
@@ -315,7 +346,7 @@ class SupportTicketViewSet(viewsets.ModelViewSet):
         # Clear cache after closing ticket
         tenant = get_current_tenant() or request.tenant
         if tenant:
-            self._clear_ticket_cache(tenant.id, ticket.created_by.id if ticket.created_by else None, is_admin=True)
+            self._clear_ticket_cache(tenant.id, ticket.created_by.id if ticket.created_by else None, is_admin=True, ticket_id=ticket.id)
         
         serializer = self.get_serializer(ticket)
         return Response(serializer.data)
@@ -329,7 +360,7 @@ class SupportTicketViewSet(viewsets.ModelViewSet):
         user = self.request.user
         if tenant:
             is_admin = user.role == 'admin' or user.is_superuser
-            self._clear_ticket_cache(tenant.id, ticket.created_by.id if ticket.created_by else None, is_admin)
+            self._clear_ticket_cache(tenant.id, ticket.created_by.id if ticket.created_by else None, is_admin, ticket_id=ticket.id)
         
         return ticket
     
@@ -338,6 +369,7 @@ class SupportTicketViewSet(viewsets.ModelViewSet):
         tenant = get_current_tenant() or self.request.tenant
         user = self.request.user
         ticket_creator_id = instance.created_by.id if instance.created_by else None
+        ticket_id = instance.id
         
         # Delete the ticket
         instance.delete()
@@ -345,7 +377,7 @@ class SupportTicketViewSet(viewsets.ModelViewSet):
         # Clear cache after deleting ticket
         if tenant:
             is_admin = user.role == 'admin' or user.is_superuser
-            self._clear_ticket_cache(tenant.id, ticket_creator_id, is_admin)
+            self._clear_ticket_cache(tenant.id, ticket_creator_id, is_admin, ticket_id=ticket_id)
     
     @action(detail=True, methods=['patch'])
     def update_status(self, request, pk=None):
@@ -377,17 +409,68 @@ class SupportTicketViewSet(viewsets.ModelViewSet):
         # Clear cache after updating status
         tenant = get_current_tenant() or request.tenant
         if tenant:
-            self._clear_ticket_cache(tenant.id, ticket.created_by.id if ticket.created_by else None, is_admin=True)
+            self._clear_ticket_cache(tenant.id, ticket.created_by.id if ticket.created_by else None, is_admin=True, ticket_id=ticket.id)
         
         serializer = self.get_serializer(ticket)
         return Response(serializer.data)
     
+    def retrieve(self, request, *args, **kwargs):
+        """Retrieve individual ticket with caching"""
+        ticket_id = kwargs.get('pk')
+        cache_key = f"support_ticket_detail_{ticket_id}"
+        
+        # Check cache for serialized ticket data
+        use_cache = request.GET.get('no_cache', '').lower() != 'true'
+        if use_cache:
+            cached_ticket_data = cache.get(cache_key)
+            if cached_ticket_data:
+                logger.info(f"📦 Cache HIT for ticket detail: {ticket_id}")
+                return Response(cached_ticket_data)
+        
+        # Cache miss - get ticket and serialize
+        logger.info(f"💾 Cache MISS for ticket detail: {ticket_id}")
+        start_time = time.time()
+        
+        instance = self.get_object()
+        serializer = self.get_serializer(instance)
+        response_data = serializer.data
+        
+        # Cache the serialized data
+        cache.set(cache_key, response_data, SUPPORT_TICKET_DETAIL_CACHE_TIMEOUT)
+        query_time_ms = round((time.time() - start_time) * 1000, 2)
+        logger.info(f"✅ Cached ticket detail: {ticket_id} in {query_time_ms}ms")
+        
+        return Response(response_data)
+    
     def list(self, request, *args, **kwargs):
-        """List tickets with caching and performance metadata"""
+        """List tickets with enhanced caching and performance metadata"""
         start_time = time.time()
         use_cache = request.GET.get('no_cache', '').lower() != 'true'
         
-        # Get queryset (this will use cache if available)
+        tenant = get_current_tenant() or request.tenant
+        user = request.user
+        
+        # Build cache key for serialized list data
+        is_admin = user.role == 'admin' or user.is_superuser
+        list_cache_key = f"support_tickets_list_{tenant.id}_{'admin' if is_admin else f'user_{user.id}'}"
+        
+        # Check cache for serialized list
+        cached_list_data = None
+        if use_cache and tenant:
+            cached_list_data = cache.get(list_cache_key)
+            if cached_list_data:
+                logger.info(f"📦 Cache HIT for support tickets list: {list_cache_key}")
+                # Return cached serialized data
+                response = Response(cached_list_data)
+                response.data['performance'] = {
+                    'cached': True,
+                    'query_time_ms': round((time.time() - start_time) * 1000, 2),
+                    'total_tickets': len(cached_list_data) if isinstance(cached_list_data, list) else 0
+                }
+                return response
+        
+        # Cache miss - get queryset (this will use queryset cache if available)
+        logger.info(f"💾 Cache MISS for support tickets list: {list_cache_key}")
         queryset = self.filter_queryset(self.get_queryset())
         
         # Paginate if needed
@@ -395,28 +478,29 @@ class SupportTicketViewSet(viewsets.ModelViewSet):
         if page is not None:
             serializer = self.get_serializer(page, many=True)
             response = self.get_paginated_response(serializer.data)
+            # Cache paginated data structure
+            if use_cache and tenant:
+                cache.set(list_cache_key, response.data, SUPPORT_TICKETS_CACHE_TIMEOUT)
         else:
             serializer = self.get_serializer(queryset, many=True)
-            response = Response(serializer.data)
+            response_data = serializer.data
+            response = Response(response_data)
+            # Cache the list data
+            if use_cache and tenant:
+                cache.set(list_cache_key, response_data, SUPPORT_TICKETS_CACHE_TIMEOUT)
         
         # Add performance metadata
         query_time_ms = round((time.time() - start_time) * 1000, 2)
         
-        # Check if data came from cache
-        tenant = get_current_tenant() or request.tenant
-        user = request.user
-        if tenant:
-            is_admin = user.role == 'admin' or user.is_superuser
-            cache_key = f"support_tickets_{tenant.id}_{'admin' if is_admin else f'user_{user.id}'}"
-            cached_data = cache.get(cache_key) if use_cache else None
-            is_cached = cached_data is not None
-        else:
-            is_cached = False
+        # Check if queryset came from cache
+        queryset_cache_key = f"support_tickets_queryset_{tenant.id}_{'admin' if is_admin else f'user_{user.id}'}"
+        queryset_cached = cache.get(queryset_cache_key) is not None if use_cache and tenant else False
         
         # Add performance metadata to response
         if isinstance(response.data, dict):
             response.data['performance'] = {
-                'cached': is_cached,
+                'cached': queryset_cached,
+                'list_cached': cached_list_data is not None,
                 'query_time_ms': query_time_ms,
                 'total_tickets': len(serializer.data) if not page else queryset.count()
             }

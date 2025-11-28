@@ -117,8 +117,9 @@ const Login: React.FC = () => {
           setShowRecoveryModal(true);
           // Don't navigate yet - wait for modal to be closed
         } else {
-          // Navigate to HR management dashboard
-          navigate('/hr-management');
+          // Navigate based on user role - superusers go to super admin dashboard
+          const isSuperUser = response.user?.is_superuser || false;
+          navigate(isSuperUser ? '/super-admin' : '/hr-management');
         }
       } else {
         setError('Invalid login response - missing tokens');
@@ -328,7 +329,9 @@ const Login: React.FC = () => {
                 });
                 setShowRecoveryModal(true);
               } else {
-                navigate('/hr-management');
+                // Navigate based on user role - superusers go to super admin dashboard
+                const isSuperUser = response.user?.is_superuser || false;
+                navigate(isSuperUser ? '/super-admin' : '/hr-management');
               }
             }
           } catch (err: unknown) {
@@ -351,7 +354,10 @@ const Login: React.FC = () => {
         isOpen={showRecoveryModal}
         onClose={() => {
           setShowRecoveryModal(false);
-          navigate('/hr-management');
+          // Check if user is superuser and redirect accordingly
+          const user = JSON.parse(localStorage.getItem('user') || '{}');
+          const isSuperUser = user?.is_superuser || false;
+          navigate(isSuperUser ? '/super-admin' : '/hr-management');
         }}
         tenantName={recoveryData?.tenantName}
         userName={recoveryData?.userName}

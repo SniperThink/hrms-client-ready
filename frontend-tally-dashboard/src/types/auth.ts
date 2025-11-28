@@ -8,6 +8,7 @@ export interface User {
   department?: string;
   is_hr: boolean;
   is_admin: boolean;
+  is_superuser?: boolean;
   role?: string;
 }
 

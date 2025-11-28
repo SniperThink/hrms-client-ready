@@ -23,6 +23,7 @@ class TenantMiddleware(MiddlewareMixin):
         '/api/accept-invitation/',
         '/api/validate-invitation-token/',
         '/api/health/',
+        '/api/super-admin/',  # Super admin endpoints don't require tenant
         '/admin/',
         '/static/',
         '/media/',
@@ -36,6 +37,21 @@ class TenantMiddleware(MiddlewareMixin):
         # Skip tenant requirement for public endpoints
         if any(request.path.startswith(endpoint) for endpoint in self.PUBLIC_ENDPOINTS):
             request.tenant = None
+            return self.get_response(request)
+        
+        # Skip tenant check for super admin endpoints
+        if request.path.startswith('/api/super-admin/'):
+            request.tenant = None
+            from ..utils.utils import clear_current_tenant
+            clear_current_tenant()
+            return self.get_response(request)
+        
+        # Check if user is superuser - skip tenant check for superusers
+        if hasattr(request, 'user') and request.user.is_authenticated and request.user.is_superuser:
+            # Superusers can access without tenant context
+            request.tenant = None
+            from ..utils.utils import clear_current_tenant
+            clear_current_tenant()
             return self.get_response(request)
         
         # Get tenant from various sources

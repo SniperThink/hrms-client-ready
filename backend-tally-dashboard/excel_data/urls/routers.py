@@ -9,6 +9,15 @@ from ..views import (
     CacheManagementViewSet, HolidayViewSet, SupportTicketViewSet,
 )
 from ..views.tenant_views import TenantCreditsView
+from ..views.super_admin_views import (
+    SuperAdminDashboardStatsView,
+    SuperAdminTenantListView,
+    SuperAdminTenantCreditsView,
+    SuperAdminSupportTicketsView,
+    SuperAdminSupportTicketStatusView,
+    SuperAdminLoginAsTenantView,
+    SuperAdminRestoreSessionView,
+)
 
 router = DefaultRouter()
 router.register(r'tenants', TenantViewSet, basename='tenant')
@@ -51,4 +60,12 @@ urlpatterns = [
     path('excel/', include(excel_router.urls)),
     # Tenant credits endpoint
     path('tenant/credits/', TenantCreditsView.as_view(), name='tenant-credits'),
+    # Super Admin endpoints
+    path('super-admin/stats/', SuperAdminDashboardStatsView.as_view(), name='super-admin-stats'),
+    path('super-admin/tenants/', SuperAdminTenantListView.as_view(), name='super-admin-tenants'),
+    path('super-admin/tenants/<int:tenant_id>/credits/', SuperAdminTenantCreditsView.as_view(), name='super-admin-tenant-credits'),
+    path('super-admin/tenants/<int:tenant_id>/login/', SuperAdminLoginAsTenantView.as_view(), name='super-admin-login-as-tenant'),
+    path('super-admin/support/tickets/', SuperAdminSupportTicketsView.as_view(), name='super-admin-support-tickets'),
+    path('super-admin/support/tickets/<int:ticket_id>/status/', SuperAdminSupportTicketStatusView.as_view(), name='super-admin-ticket-status'),
+    path('super-admin/restore-session/', SuperAdminRestoreSessionView.as_view(), name='super-admin-restore-session'),
 ]

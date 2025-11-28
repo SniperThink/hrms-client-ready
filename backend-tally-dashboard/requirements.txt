@@ -29,6 +29,10 @@ tzdata==2025.2
 # Email Service (ZeptoMail API)
 requests==2.32.3
 
+# Cloud Storage (Cloudflare R2 / S3)
+django-storages==1.14.2
+boto3==1.35.0
+
 # Core Dependencies
 asgiref==3.10.0
 sqlparse==0.5.3

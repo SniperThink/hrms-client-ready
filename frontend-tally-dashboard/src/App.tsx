@@ -17,6 +17,7 @@ import HREmployeeDetails from './components/HREmployeeDetails';
 import HRDataUpload from './components/HRDataUpload';
 import HRUserInvitation from './components/HRUserInvitation';
 import HRSupport from './components/HRSupport';
+import SuperAdminDashboard from './components/SuperAdminDashboard';
 import Dropdown, { DropdownOption } from './components/Dropdown';
 import CustomDateInput from './components/CustomDateInput';
 import { TimePeriod, clearSalaryDataCache } from './services/salaryService';
@@ -210,6 +211,8 @@ function AppContent({ dark, setDark }: { dark: boolean; setDark: (v: boolean) =>
       setActivePage('team');
     } else if (location.pathname === '/hr-management/support') {
       setActivePage('support');
+    } else if (location.pathname === '/super-admin') {
+      setActivePage('super-admin');
     }
   }, [location.pathname]);
 
@@ -696,6 +699,8 @@ function AppContent({ dark, setDark }: { dark: boolean; setDark: (v: boolean) =>
                         <Route path="/hr-management/support" element={<HRSupport />} />
                         {/* Settings Route */}
                         <Route path="/hr-management/settings" element={<HRSettings />} />
+                        {/* Super Admin Route */}
+                        <Route path="/super-admin" element={<SuperAdminDashboard />} />
                       </Routes>
                     </div>
                   </main>

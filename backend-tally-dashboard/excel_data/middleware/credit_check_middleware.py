@@ -36,6 +36,10 @@ class AutoCreditDeductionMiddleware(MiddlewareMixin):
             if not hasattr(request, 'user') or not request.user.is_authenticated:
                 return None
             
+            # Skip credit checks for superusers
+            if request.user.is_superuser:
+                return None
+            
             # Get tenant from user
             if not hasattr(request.user, 'tenant') or not request.user.tenant:
                 return None
@@ -86,6 +90,7 @@ class CreditEnforcementMiddleware(MiddlewareMixin):
         '/api/auth/logout/',
         '/api/auth/password/',
         '/api/health/',
+        '/api/super-admin/',  # Super admin endpoints don't require credit checks
         '/static/',
         '/media/',
     ]
@@ -106,6 +111,10 @@ class CreditEnforcementMiddleware(MiddlewareMixin):
             
             # Only enforce for authenticated users
             if not hasattr(request, 'user') or not request.user.is_authenticated:
+                return None
+            
+            # Skip credit enforcement for superusers
+            if request.user.is_superuser:
                 return None
             
             # Check if user has tenant

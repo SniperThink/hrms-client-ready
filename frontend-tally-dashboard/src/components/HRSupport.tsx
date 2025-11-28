@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
-import { MessageSquare, Send, AlertCircle, CheckCircle, Clock, X } from 'lucide-react';
-import { apiCall } from '../services/api';
+import { MessageSquare, Send, AlertCircle, CheckCircle, Clock, X, Paperclip, File, Download, Loader2 } from 'lucide-react';
+import { apiCall, apiUpload } from '../services/api';
 import { logger } from '../utils/logger';
 
 interface Ticket {
@@ -11,6 +11,9 @@ interface Ticket {
   priority: 'low' | 'medium' | 'high' | 'urgent';
   created_at: string;
   updated_at: string;
+  attachment?: string;
+  attachment_url?: string;
+  admin_response?: string | null;
   created_by?: {
     id: number;
     email: string;
@@ -27,12 +30,17 @@ const HRSupport: React.FC = () => {
   const [success, setSuccess] = useState<string | null>(null);
   const [expandedTickets, setExpandedTickets] = useState<Set<number>>(new Set());
 
+  // Get user info to check if superuser
+  const user = JSON.parse(localStorage.getItem('user') || '{}');
+  const isSuperUser = user?.is_superuser || false;
+
   // Form state
   const [formData, setFormData] = useState({
     subject: '',
     description: '',
     priority: 'medium' as 'low' | 'medium' | 'high' | 'urgent'
   });
+  const [selectedFile, setSelectedFile] = useState<File | null>(null);
 
   // Fetch tickets
   const fetchTickets = async () => {
@@ -78,17 +86,31 @@ const HRSupport: React.FC = () => {
     setSuccess(null);
 
     try {
-      const response = await apiCall('/api/support/tickets/', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          subject: formData.subject.trim(),
-          description: formData.description.trim(),
-          priority: formData.priority,
-        }),
-      });
+      let response: Response;
+      
+      // If file is selected, use FormData for multipart upload
+      if (selectedFile) {
+        const formDataToSend = new FormData();
+        formDataToSend.append('subject', formData.subject.trim());
+        formDataToSend.append('description', formData.description.trim());
+        formDataToSend.append('priority', formData.priority);
+        formDataToSend.append('attachment', selectedFile);
+        
+        response = await apiUpload('/api/support/tickets/', formDataToSend);
+      } else {
+        // No file, use JSON
+        response = await apiCall('/api/support/tickets/', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            subject: formData.subject.trim(),
+            description: formData.description.trim(),
+            priority: formData.priority,
+          }),
+        });
+      }
 
       if (response.ok) {
         try {
@@ -96,6 +118,7 @@ const HRSupport: React.FC = () => {
           setTickets(prev => [newTicket, ...prev]);
           setSuccess('Ticket created successfully!');
           setFormData({ subject: '', description: '', priority: 'medium' });
+          setSelectedFile(null);
           setShowForm(false);
           
           // Refresh tickets list to get updated data
@@ -108,6 +131,7 @@ const HRSupport: React.FC = () => {
           // Even if JSON parsing fails, ticket might be created
           setSuccess('Ticket submitted! Please refresh to see it.');
           setFormData({ subject: '', description: '', priority: 'medium' });
+          setSelectedFile(null);
           setShowForm(false);
           await fetchTickets();
         }
@@ -314,12 +338,61 @@ const HRSupport: React.FC = () => {
                 </div>
               </div>
 
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">
+                  Attachment (Optional)
+                </label>
+                <div className="flex items-center gap-2">
+                  <label className={`flex items-center gap-2 px-4 py-2 border border-gray-300 rounded-lg ${submitting && selectedFile ? 'opacity-60 cursor-not-allowed' : 'cursor-pointer hover:bg-gray-50'}`}>
+                    {submitting && selectedFile ? (
+                      <Loader2 size={18} className="text-teal-600 animate-spin" />
+                    ) : (
+                      <Paperclip size={18} className="text-gray-600" />
+                    )}
+                    <span className="text-sm text-gray-700">
+                      {submitting && selectedFile ? 'Uploading...' : (selectedFile ? selectedFile.name : 'Choose File')}
+                    </span>
+                    <input
+                      type="file"
+                      className="hidden"
+                      disabled={submitting}
+                      onChange={(e) => {
+                        const file = e.target.files?.[0];
+                        if (file) {
+                          // Check file size (max 10MB)
+                          if (file.size > 10 * 1024 * 1024) {
+                            setError('File size must be less than 10MB');
+                            return;
+                          }
+                          setSelectedFile(file);
+                          setError(null);
+                        }
+                      }}
+                      accept=".pdf,.doc,.docx,.jpg,.jpeg,.png,.gif,.txt,.csv,.xlsx,.xls"
+                    />
+                  </label>
+                  {selectedFile && !submitting && (
+                    <button
+                      type="button"
+                      onClick={() => setSelectedFile(null)}
+                      className="px-3 py-2 text-sm text-red-600 hover:text-red-800"
+                    >
+                      <X size={18} />
+                    </button>
+                  )}
+                </div>
+                <p className="text-xs text-gray-500 mt-1">
+                  Supported formats: PDF, DOC, DOCX, JPG, PNG, GIF, TXT, CSV, XLSX (Max 10MB)
+                </p>
+              </div>
+
               <div className="flex justify-end gap-3">
                 <button
                   type="button"
                   onClick={() => {
                     setShowForm(false);
                     setFormData({ subject: '', description: '', priority: 'medium' });
+                    setSelectedFile(null);
                     setError(null);
                   }}
                   className="px-4 py-2 border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50"
@@ -376,6 +449,29 @@ const HRSupport: React.FC = () => {
                         {expandedTickets.has(ticket.id) ? (
                           <div>
                             <p className="whitespace-pre-wrap break-words">{ticket.description}</p>
+                            {isSuperUser && ticket.attachment_url && (
+                              <div className="mt-3 flex items-center gap-2">
+                                <File size={16} className="text-teal-600" />
+                                <a
+                                  href={ticket.attachment_url}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  className="text-teal-600 hover:text-teal-800 text-sm font-medium flex items-center gap-1"
+                                >
+                                  <Download size={14} />
+                                  View Attachment
+                                </a>
+                              </div>
+                            )}
+                            {ticket.admin_response && (
+                              <div className="mt-4 p-3 bg-teal-50 border border-teal-200 rounded-lg">
+                                <div className="flex items-center gap-2 mb-2">
+                                  <CheckCircle size={16} className="text-teal-600" />
+                                  <h4 className="font-semibold text-teal-900 text-sm">Admin Response:</h4>
+                                </div>
+                                <p className="text-sm text-gray-700 whitespace-pre-wrap break-words">{ticket.admin_response}</p>
+                              </div>
+                            )}
                             <button
                               onClick={() => {
                                 const newExpanded = new Set(expandedTickets);
@@ -392,7 +488,30 @@ const HRSupport: React.FC = () => {
                             <p className={ticket.description.length > 200 ? 'line-clamp-3' : ''}>
                               {ticket.description}
                             </p>
-                            {ticket.description.length > 200 && (
+                            {isSuperUser && ticket.attachment_url && (
+                              <div className="mt-2 flex items-center gap-2">
+                                <File size={14} className="text-teal-600" />
+                                <a
+                                  href={ticket.attachment_url}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  className="text-teal-600 hover:text-teal-800 text-xs font-medium flex items-center gap-1"
+                                >
+                                  <Download size={12} />
+                                  View Attachment
+                                </a>
+                              </div>
+                            )}
+                            {ticket.admin_response && (
+                              <div className="mt-3 p-2.5 bg-teal-50 border border-teal-200 rounded-lg">
+                                <div className="flex items-center gap-1.5 mb-1.5">
+                                  <CheckCircle size={14} className="text-teal-600" />
+                                  <h4 className="font-semibold text-teal-900 text-xs">Admin Response:</h4>
+                                </div>
+                                <p className="text-xs text-gray-700 line-clamp-2">{ticket.admin_response}</p>
+                              </div>
+                            )}
+                            {(ticket.description.length > 200 || ticket.admin_response) && (
                               <button
                                 onClick={() => {
                                   const newExpanded = new Set(expandedTickets);

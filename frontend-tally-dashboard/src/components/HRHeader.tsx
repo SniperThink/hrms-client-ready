@@ -3,6 +3,7 @@ import { useLocation } from 'react-router-dom';
 import { Search, Bell, Moon, Sun, Zap } from 'lucide-react';
 import { logout } from '../services/authService';
 import { apiGet } from '../services/api';
+import ImpersonationBanner from './ImpersonationBanner';
 
 interface CreditsResponse {
   tenant_id: number;
@@ -135,6 +136,11 @@ const HRHeader: React.FC<HRHeaderProps> = ({ pageName }) => {
         title: 'Settings', 
         subtitle: "Configure system preferences and options" 
       }
+    } else if (path.includes('/super-admin')) {
+      return { 
+        title: 'Super Admin Dashboard', 
+        subtitle: "Manage all tenants, credits, and support tickets" 
+      };
     } else {
       return { 
         title: 'Dashboard Overview', 
@@ -148,8 +154,9 @@ const HRHeader: React.FC<HRHeaderProps> = ({ pageName }) => {
     window.location.href = '/login';
   };  
 
-  // Check if we're on the overview page
+  // Check if we're on the overview page or super admin page
   const isOverviewPage = location.pathname === '/hr-management' || location.pathname === '/';
+  const isSuperAdminPage = location.pathname.includes('/super-admin');
 
   // Get the page information based on current route
   const pageInfo = getPageInfo();
@@ -160,9 +167,11 @@ const HRHeader: React.FC<HRHeaderProps> = ({ pageName }) => {
   let email = '';
   let tenantName = tenant?.name || 'Your Company';
   let initial = '';
+  let isSuperUser = false;
   try {
     user = JSON.parse(localStorage.getItem('user') || '{}');
     email = user?.email || '';
+    isSuperUser = user?.is_superuser || false;
     if (email) {
       username = email.split('@')[0];
       initial = username.charAt(0).toUpperCase();
@@ -176,6 +185,10 @@ const HRHeader: React.FC<HRHeaderProps> = ({ pageName }) => {
     }
     if (user?.tenantName) {
       tenantName = user.tenant_name;
+    }
+    // For superusers, show "Super Admin" instead of tenant name
+    if (isSuperUser) {
+      tenantName = 'Super Admin';
     }
   } catch {
     // Ignore parsing errors
@@ -217,10 +230,12 @@ const HRHeader: React.FC<HRHeaderProps> = ({ pageName }) => {
     }
   };
 
-  // Initial fetch on component mount
+  // Initial fetch on component mount (skip for superusers)
   useEffect(() => {
-    fetchCredits();
-  }, []);
+    if (!isSuperUser) {
+      fetchCredits();
+    }
+  }, [isSuperUser]);
   
   // Add a refresh function that can be called when needed
   const refreshCredits = () => {
@@ -243,11 +258,13 @@ const HRHeader: React.FC<HRHeaderProps> = ({ pageName }) => {
   }, []);
 
   return (
-    <div className="flex justify-between items-center px-6 py-4 bg-white border-b border-gray-200 shadow-sm dark:bg-gray-900 dark:border-gray-700">
+    <>
+      <ImpersonationBanner />
+      <div className="flex justify-between items-center px-6 py-4 bg-white border-b border-gray-200 shadow-sm dark:bg-gray-900 dark:border-gray-700">
       {/* Left section: Logo, Title and subtitle */}
       <div className="flex items-center gap-4">
         <div className="flex flex-col gap-1">
-          {isOverviewPage ? (
+          {isOverviewPage && !isSuperAdminPage ? (
             <>
               <h1 className="text-xl font-semibold text-black dark:text-white">Hello <span className="text-[#0B5E59] font-bold">{tenantName}</span> 👋</h1>
               <p className="text-sm text-gray-500 dark:text-gray-400">
@@ -284,8 +301,8 @@ const HRHeader: React.FC<HRHeaderProps> = ({ pageName }) => {
         
         
          <div className="flex items-center space-x-4">
-            {/* Credits Display */}
-            {remainingCredits !== null && (
+            {/* Credits Display - Hide for superusers */}
+            {!isSuperUser && remainingCredits !== null && (
               <div 
                 className={`flex items-center px-3 py-1.5 rounded-full text-sm font-medium ${
                   remainingCredits < 5 
@@ -298,12 +315,19 @@ const HRHeader: React.FC<HRHeaderProps> = ({ pageName }) => {
                     remainingCredits < 5 ? 'text-red-500' : 'text-teal-500'
                   }`} 
                 />
-                {remainingCredits} Credits
+                {remainingCredits === 1 ? '1 Credit Available' : `${remainingCredits} Credits Available`}
                 {remainingCredits < 5 && (
                   <span className="ml-2 text-xs font-normal">
                     (Expiring soon! Contact admin)
                   </span>
                 )}
+              </div>
+            )}
+            {/* Super Admin Badge */}
+            {isSuperUser && (
+              <div className="flex items-center px-3 py-1.5 rounded-full text-sm font-medium bg-purple-50 dark:bg-purple-900/30 text-purple-700 dark:text-purple-300">
+                <Zap className="w-4 h-4 mr-1.5 text-purple-500" />
+                Super Admin
               </div>
             )}
           </div>
@@ -354,6 +378,9 @@ const HRHeader: React.FC<HRHeaderProps> = ({ pageName }) => {
               <div className="p-3 border-b border-gray-200 dark:border-gray-700">
                 <p className="text-sm font-medium text-gray-900 dark:text-white">{username}</p>
                 <p className="text-xs text-gray-500 dark:text-gray-400">{email}</p>
+                {isSuperUser && (
+                  <p className="text-xs text-purple-600 dark:text-purple-400 font-medium mt-1">Super Administrator</p>
+                )}
               </div>
               <div className="py-1">
                 <button
@@ -374,6 +401,7 @@ const HRHeader: React.FC<HRHeaderProps> = ({ pageName }) => {
         </div>
       </div>
     </div>
+    </>
   );
 };
 
