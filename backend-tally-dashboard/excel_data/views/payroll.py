@@ -2808,7 +2808,7 @@ def calculate_simple_payroll_ultra_fast(request):
                 COALESCE(e.tds_percentage, 0) as tds_percentage,
                 
                 -- Shift and rates
-                es.shift_hours as shift_hours_per_day,
+                otr.shift_hours as shift_hours_per_day,
                 otr.ot_rate_per_hour as ot_rate,
                 
                 -- Attendance (with holidays added to present days)
