@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Calendar, Clock, CheckCircle, Search, Trash2, AlertTriangle, Edit, Save, X, Users, Plus, Download } from 'lucide-react';
+import { Calendar, Clock, CheckCircle, Search, Trash2, AlertTriangle, Edit, Save, X, Users, Plus, Download, IndianRupee, Timer, Receipt } from 'lucide-react';
 import { apiRequest } from '../../services/api';
 import AdvanceManager from './AdvanceManager';
 import { exportPayrollToExcel, PayrollData } from '../../utils/excelExport';
@@ -446,7 +446,7 @@ const PayrollOverview: React.FC = () => {
         </div>
 
         {/* Period Summary */}
-        <div className="grid grid-cols-1 md:grid-cols-5 gap-4">
+        <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 lg:grid-cols-4 xl:grid-cols-8 gap-4">
           <div className="bg-white p-4 rounded-lg border border-gray-200">
             <div className="flex items-center gap-2">
               <Users className="text-teal-600" size={20} />
@@ -489,6 +489,33 @@ const PayrollOverview: React.FC = () => {
               <div>
                 <p className="text-sm text-gray-600">Total Net Paid</p>
                 <p className="text-xl font-semibold text-gray-900">₹{detailData.filter(emp => emp.is_paid).reduce((sum, emp) => sum + emp.net_payable, 0).toLocaleString()}</p>
+              </div>
+            </div>
+          </div>
+          <div className="bg-white p-4 rounded-lg border border-gray-200">
+            <div className="flex items-center gap-2">
+              <IndianRupee className="text-blue-600" size={20} />
+              <div>
+                <p className="text-sm text-gray-600">Total OT Charges</p>
+                <p className="text-xl font-semibold text-gray-900">₹{(detailData?.reduce((sum, emp) => sum + (emp.ot_charges || 0), 0) || 0).toLocaleString()}</p>
+              </div>
+            </div>
+          </div>
+          <div className="bg-white p-4 rounded-lg border border-gray-200">
+            <div className="flex items-center gap-2">
+              <Timer className="text-red-600" size={20} />
+              <div>
+                <p className="text-sm text-gray-600">Total Late Deduction</p>
+                <p className="text-xl font-semibold text-gray-900">₹{(detailData?.reduce((sum, emp) => sum + (emp.late_deduction || 0), 0) || 0).toLocaleString()}</p>
+              </div>
+            </div>
+          </div>
+          <div className="bg-white p-4 rounded-lg border border-gray-200">
+            <div className="flex items-center gap-2">
+              <Receipt className="text-indigo-600" size={20} />
+              <div>
+                <p className="text-sm text-gray-600">Total TDS Amount</p>
+                <p className="text-xl font-semibold text-gray-900">₹{(detailData?.reduce((sum, emp) => sum + (emp.tds_amount || 0), 0) || 0).toLocaleString()}</p>
               </div>
             </div>
           </div>

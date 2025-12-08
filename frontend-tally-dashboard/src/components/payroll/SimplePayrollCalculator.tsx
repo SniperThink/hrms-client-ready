@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Calculator, DollarSign, CheckCircle, Users, Loader2, Plus, Download, IndianRupee } from 'lucide-react';
+import { Calculator, CheckCircle, Users, Loader2, Plus, Download, IndianRupee, Timer, Receipt } from 'lucide-react';
 import { apiCall } from '../../services/api';
 import { clearSalaryDataCache } from '../../services/salaryService';
 import AdvanceManager from './AdvanceManager';
@@ -432,7 +432,7 @@ const SimplePayrollCalculator: React.FC = () => {
 
       {/* Summary */}
       {summary && (
-        <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+        <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-7 gap-4">
           <div className="bg-white p-4 rounded-lg border border-gray-200">
             <div className="flex items-center gap-2">
               <Users className="text-teal-600" size={20} />
@@ -469,6 +469,36 @@ const SimplePayrollCalculator: React.FC = () => {
               <div>
                 <p className="text-sm text-gray-600">Total Net</p>
                 <p className="text-xl font-semibold text-gray-900">₹{summary.total_net_salary.toLocaleString()}</p>
+              </div>
+            </div>
+          </div>
+          
+          <div className="bg-white p-4 rounded-lg border border-gray-200">
+            <div className="flex items-center gap-2">
+              <IndianRupee className="text-blue-600" size={20} />
+              <div>
+                <p className="text-sm text-gray-600">Total OT Charges</p>
+                <p className="text-xl font-semibold text-gray-900">₹{(payrollData?.reduce((sum, emp) => sum + (emp.ot_charges || 0), 0) || 0).toLocaleString()}</p>
+              </div>
+            </div>
+          </div>
+          
+          <div className="bg-white p-4 rounded-lg border border-gray-200">
+            <div className="flex items-center gap-2">
+              <Timer className="text-red-600" size={20} />
+              <div>
+                <p className="text-sm text-gray-600">Total Late Deduction</p>
+                <p className="text-xl font-semibold text-gray-900">₹{(payrollData?.reduce((sum, emp) => sum + (emp.late_deduction || 0), 0) || 0).toLocaleString()}</p>
+              </div>
+            </div>
+          </div>
+          
+          <div className="bg-white p-4 rounded-lg border border-gray-200">
+            <div className="flex items-center gap-2">
+              <Receipt className="text-indigo-600" size={20} />
+              <div>
+                <p className="text-sm text-gray-600">Total TDS Amount</p>
+                <p className="text-xl font-semibold text-gray-900">₹{(payrollData?.reduce((sum, emp) => sum + (emp.tds_amount || 0), 0) || 0).toLocaleString()}</p>
               </div>
             </div>
           </div>
