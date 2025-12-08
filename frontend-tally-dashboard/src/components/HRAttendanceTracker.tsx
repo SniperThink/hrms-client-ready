@@ -29,7 +29,6 @@ interface AttendanceRecord {
   unmarked_days?: number;
   holiday_days?: number;
   weekly_penalty_days?: number;
-  sunday_bonus_days?: number;
   status?: string;
   attendance_percentage?: number;
   ot_hours: string | number;
@@ -52,7 +51,6 @@ interface AggregatedRecord {
   unmarked_days?: number;
   holiday_days?: number;
   weekly_penalty_days?: number;
-  sunday_bonus_days?: number;
   status?: string;
   attendance_percentage?: number;
   ot_hours: number;
@@ -70,7 +68,6 @@ const HRAttendanceTracker: React.FC = () => {
   const [error, setError] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
   const [weeklyAbsentPenaltyEnabled, setWeeklyAbsentPenaltyEnabled] = useState<boolean>(false);
-  const [sundayBonusEnabled, setSundayBonusEnabled] = useState<boolean>(false);
   const [filterType, setFilterType] = useState<FilterType>('custom_month');
   const [selectedDepartment, setSelectedDepartment] = useState<string>('all');
   const [departments, setDepartments] = useState<string[]>([]);
@@ -159,10 +156,8 @@ const HRAttendanceTracker: React.FC = () => {
         if (response && response.ok) {
           const data = await response.json();
           const penaltyEnabled = !!data.weekly_absent_penalty_enabled;
-          const bonusEnabled = !!data.sunday_bonus_enabled;
           setWeeklyAbsentPenaltyEnabled(penaltyEnabled);
-          setSundayBonusEnabled(bonusEnabled);
-          logger.info(`📊 Salary config loaded: penalty=${penaltyEnabled}, bonus=${bonusEnabled}`);
+          logger.info(`📊 Salary config loaded: penalty=${penaltyEnabled}`);
         }
       } catch (error) {
         logger.warn('Failed to load salary config for attendance tracker', error);
@@ -578,7 +573,6 @@ const HRAttendanceTracker: React.FC = () => {
       unmarked_days: record.unmarked_days || 0,
       holiday_days: record.holiday_days || 0,
       weekly_penalty_days: record.weekly_penalty_days || 0,  // NEW: Include penalty days
-      sunday_bonus_days: record.sunday_bonus_days || 0,  // NEW: Include bonus days
       status: record.status || record.attendance_status,
       // Handle both 'ot_hours' and 'total_ot_hours'
       ot_hours: record.ot_hours || record.total_ot_hours || 0,
@@ -603,7 +597,6 @@ const HRAttendanceTracker: React.FC = () => {
       unmarked_days: record.unmarked_days || 0,
       holiday_days: record.holiday_days || 0,
       weekly_penalty_days: record.weekly_penalty_days || 0,  // NEW: Include penalty days
-      sunday_bonus_days: record.sunday_bonus_days || 0,  // NEW: Include bonus days
       status: record.status,
     attendance_percentage: record.attendance_percentage,
     ot_hours: typeof record.ot_hours === 'string' ? parseFloat(record.ot_hours) || 0 : record.ot_hours || 0,
@@ -981,9 +974,6 @@ const HRAttendanceTracker: React.FC = () => {
                             <td className="px-4 py-3 text-sm">{unmarkedDays}</td>
                             {weeklyAbsentPenaltyEnabled && (
                               <td className="px-4 py-3 text-sm">{(record.weekly_penalty_days || 0).toFixed(1)}</td>
-                            )}
-                            {sundayBonusEnabled && (
-                              <td className="px-4 py-3 text-sm">{(record.sunday_bonus_days || 0).toFixed(1)}</td>
                             )}
                             <td className="px-4 py-3 text-sm">{(typeof record.ot_hours === 'string' ? parseFloat(record.ot_hours) || 0 : record.ot_hours || 0).toFixed(1)}</td>
                             <td className="px-4 py-3 text-sm">{record.late_minutes.toFixed(0)}</td>

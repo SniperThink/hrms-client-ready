@@ -6309,12 +6309,7 @@ class DailyAttendanceViewSet(viewsets.ModelViewSet):
         
         step_start = time.time()
         for emp_id, emp_info in employees_dict.items():
-            # Initialize calendar_days to a default value
-            calendar_days = 0
-
-            # Correct the assignment logic to avoid referencing before initialization
-            if 'effective_start' in locals() and 'end_date_obj' in locals():
-                calendar_days = (end_date_obj - effective_start).days + 1 if (end_date_obj - effective_start).days != 0 else 0
+            # Get aggregated attendance data for this employee
             data = aggregated.get(emp_id, default_data)
 
             # SMART CALCULATION: Employee-specific working days with DOJ awareness
@@ -6475,6 +6470,7 @@ class DailyAttendanceViewSet(viewsets.ModelViewSet):
             # Calculate calendar days (total days in the period including weekends)
             # CRITICAL: Calendar days should be calculated from DOJ if employee joined during the period
             doj = emp_info.get('date_of_joining')
+            calendar_days = 0  # Initialize to ensure it's always defined
             if use_daily_data:
                 if is_single_day_response:
                     # For single day: check if employee has joined by this date
@@ -6490,7 +6486,9 @@ class DailyAttendanceViewSet(viewsets.ModelViewSet):
                             calendar_days = 0  # Employee not yet joined
                         else:
                             effective_start = doj
-                    calendar_days = (end_date_obj - effective_start).days + 1 if calendar_days != 0 else 0
+                    # Only calculate calendar_days if not already set to 0 above
+                    if not (doj and doj > end_date_obj):
+                        calendar_days = (end_date_obj - effective_start).days + 1
             else:
                 # For monthly aggregation, calculate calendar days from DOJ
                 # OPTIMIZED: Use pre-calculated calendar days per month
