@@ -56,6 +56,8 @@ const HRSettings: React.FC = () => {
   const [salaryConfigLoading, setSalaryConfigLoading] = useState(false);
   const [salaryConfigError, setSalaryConfigError] = useState<string | null>(null);
   const [salaryConfigSuccess, setSalaryConfigSuccess] = useState<string | null>(null);
+  const [weeklyAbsentPenaltyEnabled, setWeeklyAbsentPenaltyEnabled] = useState<boolean>(false);
+  const [weeklyAbsentThreshold, setWeeklyAbsentThreshold] = useState<number>(4);
 
   // Fetch current user info (in case localStorage is stale)
   useEffect(() => {
@@ -220,6 +222,8 @@ const HRSettings: React.FC = () => {
         .then(data => {
           setAverageDaysPerMonth(data.average_days_per_month || 30.4);
           setBreakTime(data.break_time !== undefined ? data.break_time : 0.5);
+          setWeeklyAbsentPenaltyEnabled(!!data.weekly_absent_penalty_enabled);
+          setWeeklyAbsentThreshold(data.weekly_absent_threshold ?? 4);
         })
         .catch((err) => {
           logger.error('Error fetching salary config:', err);
@@ -392,7 +396,7 @@ const HRSettings: React.FC = () => {
         <div className="bg-white rounded-lg p-8 shadow-sm max-w-2xl mx-auto">
           <h2 className="text-xl font-bold mb-6">Salary Configuration</h2>
           <p className="text-sm text-gray-600 mb-6">
-            Configure the average days per month used for salary and overtime rate calculations.
+            Configure the average days per month used for salary and overtime rate calculations, and enable optional weekly bonus/penalty rules.
           </p>
           
           {salaryConfigError && (
@@ -418,6 +422,8 @@ const HRSettings: React.FC = () => {
                 const response = await apiPost('/api/salary-config/update/', {
                   average_days_per_month: averageDaysPerMonth,
                   break_time: breakTime,
+                  weekly_absent_penalty_enabled: weeklyAbsentPenaltyEnabled,
+                  weekly_absent_threshold: weeklyAbsentThreshold,
                 });
 
                 if (!response.ok) {
@@ -431,7 +437,9 @@ const HRSettings: React.FC = () => {
                 window.dispatchEvent(new CustomEvent('salaryConfigUpdated', { 
                   detail: { 
                     average_days_per_month: data.average_days_per_month,
-                    break_time: data.break_time 
+                    break_time: data.break_time,
+                    weekly_absent_penalty_enabled: data.weekly_absent_penalty_enabled,
+                    weekly_absent_threshold: data.weekly_absent_threshold,
                   } 
                 }));
                 setTimeout(() => setSalaryConfigSuccess(null), 3000);
@@ -508,6 +516,88 @@ const HRSettings: React.FC = () => {
                   <li>Effective Shift Hours = Raw Shift Hours - Break Time</li>
                   <li>OT Rate = Basic Salary ÷ (Effective Shift Hours × Average Days Per Month)</li>
                 </ul>
+              </div>
+            </div>
+
+            <div className="border-t border-gray-200 pt-6 mt-4">
+              <h3 className="text-lg font-semibold mb-4">Weekly Attendance Rules (Tenant Specific)</h3>
+
+              <div className="flex items-start justify-between mb-6 p-4 bg-gray-50 rounded-lg border border-gray-200">
+                <div className="flex-1 pr-4">
+                  <label className="block text-gray-700 font-medium mb-2">
+                    Weekly Absent Penalty
+                  </label>
+                  <p className="text-sm text-gray-600">
+                    If an employee is absent more than the configured days in a week, 1 penalty day is added and 1 day salary is deducted.
+                  </p>
+                </div>
+                <div className="flex items-center">
+                  <button
+                    type="button"
+                    onClick={() => !salaryConfigLoading && setWeeklyAbsentPenaltyEnabled(!weeklyAbsentPenaltyEnabled)}
+                    disabled={salaryConfigLoading}
+                    className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-teal-500 focus:ring-offset-2 ${
+                      weeklyAbsentPenaltyEnabled ? 'bg-teal-600' : 'bg-gray-300'
+                    } ${salaryConfigLoading ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer'}`}
+                  >
+                    <span
+                      className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
+                        weeklyAbsentPenaltyEnabled ? 'translate-x-6' : 'translate-x-1'
+                      }`}
+                    />
+                  </button>
+                  <span className={`ml-3 text-sm font-medium ${weeklyAbsentPenaltyEnabled ? 'text-teal-600' : 'text-gray-500'}`}>
+                    {weeklyAbsentPenaltyEnabled ? 'Enabled' : 'Disabled'}
+                  </span>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6">
+                <div>
+                  <label className="block text-gray-700 mb-2 font-medium">
+                    Absent Days Threshold (per week)
+                  </label>
+                  <input
+                    type="number"
+                    min={2}
+                    max={7}
+                    step={1}
+                    value={weeklyAbsentThreshold || ''}
+                    onChange={(e) => {
+                      const inputValue = e.target.value;
+                      // Allow empty string while typing
+                      if (inputValue === '') {
+                        setWeeklyAbsentThreshold(0); // Use 0 to represent empty, but display as blank
+                        return;
+                      }
+                      const value = parseInt(inputValue, 10);
+                      if (!isNaN(value)) {
+                        // Allow any number while typing, only clamp on blur
+                        setWeeklyAbsentThreshold(value);
+                      }
+                    }}
+                    onBlur={(e) => {
+                      const inputValue = e.target.value;
+                      if (inputValue === '' || inputValue === '0') {
+                        setWeeklyAbsentThreshold(4); // Reset to default if empty
+                        return;
+                      }
+                      const value = parseInt(inputValue, 10);
+                      if (isNaN(value) || value < 2 || value > 7) {
+                        setWeeklyAbsentThreshold(4); // Reset to default if invalid
+                      } else {
+                        // Clamp to valid range
+                        const clampedValue = Math.max(2, Math.min(7, value));
+                        setWeeklyAbsentThreshold(clampedValue);
+                      }
+                    }}
+                    className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-teal-500 focus:border-transparent"
+                    disabled={salaryConfigLoading}
+                  />
+                  <p className="mt-2 text-sm text-gray-500">
+                    Days are counted randomly (not necessarily consecutive). If absent more than this threshold in a week, 1 penalty day is added. Present threshold is automatically set to {weeklyAbsentThreshold > 0 ? (7 - weeklyAbsentThreshold) : 'N/A'} days (complement of absent threshold). Must be between 2 and 7.
+                  </p>
+                </div>
               </div>
             </div>
 

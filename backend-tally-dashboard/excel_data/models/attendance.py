@@ -129,6 +129,20 @@ class MonthlyAttendanceSummary(TenantAwareModel):
     ot_hours = models.DecimalField(max_digits=10, decimal_places=2, default=0)
     late_minutes = models.IntegerField(default=0)
 
+    # Weekly rules metrics
+    weekly_penalty_days = models.DecimalField(
+        max_digits=5,
+        decimal_places=1,
+        default=0,
+        help_text="Total penalty days added due to weekly absent rule for this period"
+    )
+    sunday_bonus_days = models.DecimalField(
+        max_digits=5,
+        decimal_places=1,
+        default=0,
+        help_text="Total bonus Sunday present days for this period"
+    )
+
     last_updated = models.DateTimeField(auto_now=True)
 
     class Meta:

@@ -221,7 +221,8 @@ class CalculatedSalaryViewSet(viewsets.ModelViewSet):
                     'id', 'payroll_period', 'payroll_period_display', 'employee_id', 'employee_name',
                     'department', 'basic_salary', 'basic_salary_per_hour', 'basic_salary_per_minute',
                     'employee_ot_rate', 'employee_tds_rate', 'total_working_days', 'present_days', 
-                    'absent_days', 'ot_hours', 'late_minutes', 'salary_for_present_days', 'ot_charges', 
+                    'absent_days', 'holiday_days', 'weekly_penalty_days',
+                    'ot_hours', 'late_minutes', 'salary_for_present_days', 'ot_charges', 
                     'late_deduction', 'incentive', 'gross_salary', 'tds_amount', 'salary_after_tds', 
                     'total_advance_balance', 'advance_deduction_amount', 'advance_deduction_editable', 
                     'remaining_advance_balance', 'net_payable', 'data_source', 'calculation_timestamp', 
@@ -1136,16 +1137,29 @@ def payroll_period_detail(request, period_id):
             if calculated_salaries.exists():
                 # Use CalculatedSalary records (they have is_paid status)
                 import calendar
+                from ..models import EmployeeProfile
+                
+                # OPTIMIZATION: Fetch all employees in one query to avoid N+1 queries
+                employee_ids = list(calculated_salaries.values_list('employee_id', flat=True).distinct())
+                employees_map = {
+                    emp.employee_id: emp 
+                    for emp in EmployeeProfile.objects.filter(
+                        tenant=tenant, 
+                        employee_id__in=employee_ids
+                    )
+                }
+                
+                # OPTIMIZATION: Calculate month_num and total_days once (same for all employees)
+                month_num = {'JANUARY': 1, 'FEBRUARY': 2, 'MARCH': 3, 'APRIL': 4, 'MAY': 5, 'JUNE': 6,
+                            'JULY': 7, 'AUGUST': 8, 'SEPTEMBER': 9, 'OCTOBER': 10, 'NOVEMBER': 11, 'DECEMBER': 12}.get(period.month.upper(), 1)
+                total_days_in_month = calendar.monthrange(period.year, month_num)[1]
                 
                 for calc in calculated_salaries.order_by('employee_name'):
-                    # Get employee to calculate off_days
-                    try:
-                        from ..models import EmployeeProfile
-                        employee = EmployeeProfile.objects.get(tenant=tenant, employee_id=calc.employee_id)
+                    # Get employee to calculate off_days (from pre-fetched map)
+                    employee = employees_map.get(calc.employee_id)
+                    if employee:
                         # Calculate off days for the month
-                        month_num = {'JANUARY': 1, 'FEBRUARY': 2, 'MARCH': 3, 'APRIL': 4, 'MAY': 5, 'JUNE': 6,
-                                    'JULY': 7, 'AUGUST': 8, 'SEPTEMBER': 9, 'OCTOBER': 10, 'NOVEMBER': 11, 'DECEMBER': 12}.get(period.month.upper(), 1)
-                        total_days = calendar.monthrange(period.year, month_num)[1]
+                        total_days = total_days_in_month
                         off_days_count = sum([
                             1 for day in range(1, total_days + 1)
                             if (
@@ -1158,14 +1172,15 @@ def payroll_period_detail(request, period_id):
                                 (calendar.weekday(period.year, month_num, day) == 6 and employee.off_sunday)
                             )
                         ])
-                        total_days_in_month = total_days
-                    except:
+                    else:
+                        # Employee not found, use defaults
                         off_days_count = 0
-                        month_num = 11  # Default
-                        total_days_in_month = calendar.monthrange(period.year, month_num)[1]
                     
+                    # Note: present_days already includes Sunday bonus days (they are marked as PRESENT)
                     # Calculate raw_present_days and extra_paid_days
-                    raw_present_days = int(float(calc.present_days) - float(calc.holiday_days) - off_days_count)
+                    # Note: present_days already excludes off_days, so we only subtract holidays
+                    present_days_value = float(calc.present_days)
+                    raw_present_days = int(present_days_value - float(calc.holiday_days))
                     working_days = int(calc.total_working_days)
                     expected_max_present = working_days - int(calc.holiday_days)
                     extra_paid_days = max(0, raw_present_days - expected_max_present) if expected_max_present > 0 else 0
@@ -1180,11 +1195,12 @@ def payroll_period_detail(request, period_id):
                         'working_days': working_days,
                         'absent_days': float(calc.absent_days),
                         'holiday_days': int(calc.holiday_days),
+                        'weekly_penalty_days': float(getattr(calc, 'weekly_penalty_days', 0)),
                         'off_days': off_days_count,
                         'raw_present_days': raw_present_days,
                         'extra_paid_days': extra_paid_days,
-                        'present_days': float(calc.present_days),
-                        'paid_days': int(calc.present_days),
+                        'present_days': present_days_value,
+                        'paid_days': int(present_days_value),
                         'ot_hours': float(calc.ot_hours),
                         'hour_rate': float(calc.basic_salary_per_hour),
                         'ot_charges': float(calc.ot_charges),
@@ -1244,6 +1260,7 @@ def payroll_period_detail(request, period_id):
                         'working_days': working_days,  # DAYS
                         'absent_days': absent_days,  # ABSENT
                         'holiday_days': 0,  # Not in Excel template
+                        'weekly_penalty_days': 0.0,  # Weekly rules not applied to pure Excel uploads
                         'off_days': 0,  # Not in Excel template
                         'raw_present_days': int(present_days),  # Same as present_days for Excel
                         'extra_paid_days': 0,  # Not tracked in Excel template
@@ -1310,8 +1327,11 @@ def payroll_period_detail(request, period_id):
                     month_num = 11  # Default
                     total_days_in_month = calendar.monthrange(period.year, month_num)[1]
                 
+                # Note: present_days already includes Sunday bonus days (they are marked as PRESENT)
                 # Calculate raw_present_days and extra_paid_days
-                raw_present_days = int(float(calc.present_days) - float(calc.holiday_days) - off_days_count)
+                # Note: present_days already excludes off_days, so we only subtract holidays
+                present_days_value = float(calc.present_days)
+                raw_present_days = int(present_days_value - float(calc.holiday_days))
                 working_days = int(calc.total_working_days)
                 expected_max_present = working_days - int(calc.holiday_days)
                 extra_paid_days = max(0, raw_present_days - expected_max_present) if expected_max_present > 0 else 0
@@ -1324,13 +1344,14 @@ def payroll_period_detail(request, period_id):
                     'basic_salary': float(calc.basic_salary),
                     'total_days': total_days_in_month,
                     'working_days': working_days,
-                    'present_days': float(calc.present_days),
+                    'present_days': present_days_value,
                     'absent_days': float(calc.absent_days),
                     'holiday_days': int(calc.holiday_days),
+                    'weekly_penalty_days': float(getattr(calc, 'weekly_penalty_days', 0)),
                     'off_days': off_days_count,
                     'raw_present_days': raw_present_days,
                     'extra_paid_days': extra_paid_days,
-                    'paid_days': int(calc.present_days),
+                    'paid_days': int(present_days_value),
                     'ot_hours': float(calc.ot_hours),
                     'ot_charges': float(calc.ot_charges),
                     'late_minutes': calc.late_minutes,
@@ -2345,11 +2366,20 @@ def calculate_simple_payroll(request):
                     if attendance_record:
                         extra_paid_days += 1
             
-            # Calculate raw_present_days (present excluding holidays and off days)
-            raw_present_days = present_days - holiday_count - off_days_count
+            # Calculate raw_present_days: present_days from attendance is actual PRESENT days count
+            # (includes working on off days like Sunday bonus). We only subtract holidays.
+            raw_present_days = max(0, present_days - holiday_count)
             
-            # Calculate paid_days (includes raw present + holidays + basic off days)
-            paid_days = raw_present_days + holiday_count + off_days_count
+            # Calculate paid_days: 
+            # - If employee worked on off days (extra_paid_days), those are already in raw_present_days
+            # - We need to add back off_days that were NOT worked
+            # Formula: raw_present_days + holidays + (off_days - off_days_worked) - penalty
+            off_days_not_worked = max(0, off_days_count - extra_paid_days)
+            paid_days = raw_present_days + holiday_count + off_days_not_worked
+            
+            # Apply weekly penalty deduction
+            weekly_penalty_days = attendance.get('weekly_penalty_days', 0)
+            paid_days = max(0.0, paid_days - weekly_penalty_days)
             
             # UPDATED: Recalculate gross salary using paid_days instead of present_days
             # This ensures employees with many off days get full salary
@@ -2790,6 +2820,32 @@ def calculate_simple_payroll_ultra_fast(request):
                 WHERE e.tenant_id = %s AND e.is_active = true
                 GROUP BY e.employee_id
             ),
+            -- Weekly absent/present counts from DailyAttendance for weekly rules
+            weekly_attendance AS (
+                SELECT
+                    da.employee_id,
+                    date_trunc('week', da.date) AS week_start,
+                    SUM(CASE WHEN da.attendance_status = 'ABSENT' THEN 1 ELSE 0 END) AS absent_days,
+                    SUM(CASE WHEN da.attendance_status IN ('PRESENT', 'PAID_LEAVE') THEN 1 ELSE 0 END) AS present_days
+                FROM excel_data_dailyattendance da
+                WHERE da.tenant_id = %s
+                    AND EXTRACT(YEAR FROM da.date) = %s
+                    AND EXTRACT(MONTH FROM da.date) = %s
+                GROUP BY da.employee_id, date_trunc('week', da.date)
+            ),
+            -- Weekly rules (penalty only - Sunday bonus handled by marking Sunday as PRESENT)
+            weekly_rules AS (
+                SELECT
+                    employee_id,
+                    SUM(
+                        CASE 
+                            WHEN %s::boolean IS TRUE AND absent_days > %s 
+                            THEN 1 ELSE 0 
+                        END
+                    ) AS weekly_penalty_days
+                FROM weekly_attendance
+                GROUP BY employee_id
+            ),
             -- Total advances (all pending)
             total_advances AS (
                 SELECT 
@@ -2819,6 +2875,7 @@ def calculate_simple_payroll_ultra_fast(request):
                 att.ot_hours,
                 att.late_minutes,
                 att.uploaded_working_days,
+                COALESCE(wr.weekly_penalty_days, 0) AS weekly_penalty_days,
                 
                 -- Pre-calculated charges
                 att.ot_hours * otr.ot_rate_per_hour as ot_charges,
@@ -2832,6 +2889,7 @@ def calculate_simple_payroll_ultra_fast(request):
             INNER JOIN ot_rates otr ON e.employee_id = otr.employee_id
             INNER JOIN attendance_summary att ON e.employee_id = att.employee_id
             LEFT JOIN employee_holidays eh ON e.employee_id = eh.employee_id
+            LEFT JOIN weekly_rules wr ON e.employee_id = wr.employee_id
             LEFT JOIN total_advances ta ON e.employee_id = ta.employee_id
             
             WHERE e.tenant_id = %s 
@@ -2842,11 +2900,17 @@ def calculate_simple_payroll_ultra_fast(request):
             from ..utils.utils import get_average_days_per_month, get_break_time
             average_days = get_average_days_per_month(tenant)
             break_time = get_break_time(tenant)
+            weekly_absent_enabled = getattr(tenant, 'weekly_absent_penalty_enabled', False)
+            weekly_absent_threshold = getattr(tenant, 'weekly_absent_threshold', 4) or 4
+            # Sunday bonus handled separately by marking Sunday as PRESENT (not in SQL)
             params = [
                 tenant.id,  # employee_shifts
-                break_time, break_time, average_days, break_time, average_days, tenant.id,  # ot_rates (break_time appears 4 times, average_days 2 times)
+                break_time, break_time, average_days, break_time, average_days, tenant.id,  # ot_rates
                 tenant.id, year, month_num,  # attendance_summary
                 year, month_num, tenant.id,  # employee_holidays
+                tenant.id,  # weekly_attendance tenant
+                year, month_num,  # weekly_attendance year/month
+                weekly_absent_enabled, weekly_absent_threshold,  # weekly_rules absent (only penalty)
                 tenant.id,  # total_advances
                 tenant.id   # main WHERE
             ]
@@ -2886,15 +2950,25 @@ def calculate_simple_payroll_ultra_fast(request):
             # Get holiday count from SQL and off days count from Python calculation
             holiday_count = int(data['holiday_days'] or 0)
             off_days_count = employee_off_days_map.get(employee_id, 0)
+            weekly_penalty_days = float(data.get('weekly_penalty_days') or 0)
+            
+            # Note: Sunday bonus days are already included in raw_present_days/present_days
+            # because they are marked as PRESENT in DailyAttendance automatically
             
             # FIXED: Calculate extra paid days (days employee worked on their configured off days)
             # If raw_present_days exceeds (working_days - holiday_count), it means they worked on off days
             expected_max_present = employee_working_days - holiday_count
             extra_paid_days = max(0, int(raw_present_days) - expected_max_present) if expected_max_present > 0 else 0
             
-            # FIXED: Calculate paid_days = raw_present_days + holidays + basic_off_days
-            # This ensures employees with many off days still get full salary
-            paid_days = raw_present_days + holiday_count + off_days_count
+            # FIXED: Calculate paid_days = raw_present_days + holidays + (off_days - off_days_worked)
+            # If employee worked on off days (extra_paid_days), those are already in raw_present_days
+            # We only add off_days that were NOT worked
+            # Then apply weekly rules:
+            # - weekly_penalty_days: subtract from paid days (1 day salary deduction per penalized week)
+            # - Sunday bonus: already included in raw_present_days (Sundays are marked as PRESENT)
+            off_days_not_worked = max(0, off_days_count - extra_paid_days)
+            paid_days = raw_present_days + holiday_count + off_days_not_worked
+            paid_days = max(0.0, paid_days - weekly_penalty_days)
             
             # Calculate gross salary using tenant-specific AVERAGE_DAYS_PER_MONTH
             from ..utils.utils import get_average_days_per_month
@@ -2927,11 +3001,12 @@ def calculate_simple_payroll_ultra_fast(request):
                 'working_days': employee_working_days,
                 'raw_present_days': int(raw_present_days),  # Present without holidays
                 'extra_paid_days': extra_paid_days,  # Days worked on configured off days
-                'paid_days': int(paid_days),  # Present + holidays + basic off days
-                'present_days': int(paid_days),  # For backward compatibility (now same as paid_days)
-                'absent_days': int(data['absent_days'] or 0),
+                'paid_days': int(paid_days),  # Present + holidays + basic off days +/- weekly rules
+                'present_days': int(raw_present_days + holiday_count),  # Actual present days (raw + holidays)
+                'absent_days': int((data['absent_days'] or 0) + weekly_penalty_days),
                 'off_days': off_days_count,  # Add off days count
                 'holiday_days': holiday_count,
+                'weekly_penalty_days': weekly_penalty_days,
                 'ot_hours': float(data['ot_hours'] or 0),
                 'late_minutes': int(data['late_minutes'] or 0),
                 'gross_salary': round(gross_salary, 2),
@@ -3008,7 +3083,7 @@ def save_payroll_period_direct(request):
     
     try:
         from time import perf_counter
-        from django.db import transaction
+        from django.db import transaction, connection
         t0 = perf_counter()
         tenant = getattr(request, 'tenant', None)
         if not tenant:
@@ -3016,6 +3091,24 @@ def save_payroll_period_direct(request):
         
         from ..models import PayrollPeriod, CalculatedSalary
         import calendar
+        
+        # SAFETY PATCH: Ensure legacy DB columns for penalty/bonus days never block inserts
+        # Some databases might still have an old NOT NULL column "penalty_days" that is not
+        # mapped in the current Django model. We normalize it to 0 and set a default.
+        try:
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    "ALTER TABLE excel_data_calculatedsalary "
+                    "ALTER COLUMN penalty_days SET DEFAULT 0"
+                )
+                cursor.execute(
+                    "UPDATE excel_data_calculatedsalary "
+                    "SET penalty_days = 0 "
+                    "WHERE penalty_days IS NULL"
+                )
+        except Exception as _e:
+            # Best-effort safeguard; log but don't break normal flow
+            logger.warning(f"[save_payroll_period_direct] Skipping penalty_days safety patch: {_e}")
         
         # Get request data and clean null bytes
         year = request.data.get('year')
@@ -3078,6 +3171,20 @@ def save_payroll_period_direct(request):
             to_create: list[CalculatedSalary] = []
             to_update: list[CalculatedSalary] = []
 
+            # OPTIMIZATION: Pre-fetch all employees in one query to avoid N+1 queries
+            from ..models import EmployeeProfile
+            all_emp_ids = [entry.get('employee_id') for entry in payroll_entries]
+            employees_map = {
+                emp.employee_id: emp 
+                for emp in EmployeeProfile.objects.filter(
+                    tenant=tenant, 
+                    employee_id__in=all_emp_ids
+                )
+            }
+            from ..utils.utils import get_break_time, get_average_days_per_month
+            break_time = get_break_time(tenant)
+            average_days = get_average_days_per_month(tenant)  # Calculate once (tenant-specific)
+
             # Build new/updated objects
             build_start = perf_counter()
             for entry in payroll_entries:
@@ -3085,44 +3192,92 @@ def save_payroll_period_direct(request):
                 payload_emp_ids.append(emp_id)
 
                 # Compute fields once
-                base_salary = entry.get('base_salary', 0)
+                base_salary = Decimal(str(entry.get('base_salary', 0)))
                 working_days = entry.get('working_days', 0)
-                present_days = entry.get('present_days', 0)
-                absent_days = entry.get('absent_days', 0)
-                ot_hours = entry.get('ot_hours', 0)
+                present_days = Decimal(str(entry.get('present_days', 0)))
+                absent_days = Decimal(str(entry.get('absent_days', 0)))
+                holiday_days = entry.get('holiday_days', 0)
+                weekly_penalty_days_raw = entry.get('weekly_penalty_days', 0)
+                weekly_penalty_days = Decimal(str(weekly_penalty_days_raw))
+                
+                # Debug logging for penalty days
+                if weekly_penalty_days > 0 or weekly_penalty_days_raw != 0:
+                    logger.info(f"[save_payroll_period_direct] Employee {emp_id}: weekly_penalty_days from payload = {weekly_penalty_days_raw} (converted to {weekly_penalty_days})")
+                ot_hours = Decimal(str(entry.get('ot_hours', 0)))
                 late_minutes = entry.get('late_minutes', 0)
-                gross_salary = entry.get('gross_salary', 0)
-                ot_charges = entry.get('ot_charges', 0)
-                late_deduction = entry.get('late_deduction', 0)
-                tds_amount = entry.get('tds_amount', 0)
-                total_advance_balance = entry.get('total_advance_balance', 0)
-                advance_deduction = entry.get('advance_deduction', 0)
-                remaining_balance = entry.get('remaining_balance', 0)
-                net_salary = entry.get('net_salary', 0)
-                tds_percentage = entry.get('tds_percentage', 0)
+                gross_salary = Decimal(str(entry.get('gross_salary', 0)))
+                ot_charges = Decimal(str(entry.get('ot_charges', 0)))
+                late_deduction = Decimal(str(entry.get('late_deduction', 0)))
+                tds_amount = Decimal(str(entry.get('tds_amount', 0)))
+                total_advance_balance = Decimal(str(entry.get('total_advance_balance', 0)))
+                advance_deduction = Decimal(str(entry.get('advance_deduction', 0)))
+                remaining_balance = Decimal(str(entry.get('remaining_balance', 0)))
+                net_salary = Decimal(str(entry.get('net_salary', 0)))
+                tds_percentage = Decimal(str(entry.get('tds_percentage', 0)))
+                ot_rate = Decimal(str(entry.get('ot_rate', 0)))
                 is_paid = entry.get('is_paid', False)
+                
+                # Calculate salary_for_present_days correctly (base salary for present days only, without OT/late)
+                daily_rate = base_salary / Decimal(str(average_days))
+                salary_for_present_days = daily_rate * present_days
+                
+                # Calculate basic_salary_per_hour and basic_salary_per_minute
+                # Get employee shift hours for accurate calculation (from pre-fetched map)
+                employee = employees_map.get(emp_id)
+                if employee:
+                    # Calculate shift hours
+                    if employee.shift_start_time and employee.shift_end_time:
+                        from datetime import datetime, timedelta
+                        start = datetime.combine(datetime.today(), employee.shift_start_time)
+                        end = datetime.combine(datetime.today(), employee.shift_end_time)
+                        if end <= start:
+                            end += timedelta(days=1)
+                        shift_hours = (end - start).total_seconds() / 3600.0
+                        effective_shift_hours = max(0, shift_hours - break_time)
+                    else:
+                        effective_shift_hours = 8.0 - break_time  # Default 8 hours minus break
+                    
+                    if effective_shift_hours > 0:
+                        basic_salary_per_hour = base_salary / (Decimal(str(effective_shift_hours)) * Decimal(str(average_days)))
+                        basic_salary_per_minute = basic_salary_per_hour / Decimal('60')
+                    else:
+                        basic_salary_per_hour = Decimal('0')
+                        basic_salary_per_minute = Decimal('0')
+                    
+                    # Use the OT rate from calculation (or calculate if not provided)
+                    if ot_rate > 0:
+                        employee_ot_rate = ot_rate
+                    else:
+                        employee_ot_rate = basic_salary_per_hour
+                else:
+                    # Employee not found in pre-fetched map
+                    basic_salary_per_hour = Decimal('0')
+                    basic_salary_per_minute = Decimal('0')
+                    employee_ot_rate = ot_rate if ot_rate > 0 else Decimal('0')
 
                 if emp_id in existing_map:
                     cs = existing_map[emp_id]
                     cs.employee_name = entry.get('employee_name')
                     cs.department = entry.get('department')
                     cs.basic_salary = base_salary
-                    cs.basic_salary_per_hour = 0
-                    cs.basic_salary_per_minute = 0
-                    cs.employee_ot_rate = 0
+                    cs.basic_salary_per_hour = basic_salary_per_hour
+                    cs.basic_salary_per_minute = basic_salary_per_minute
+                    cs.employee_ot_rate = employee_ot_rate
                     cs.employee_tds_rate = tds_percentage
                     cs.total_working_days = working_days
                     cs.present_days = present_days
                     cs.absent_days = absent_days
+                    cs.holiday_days = holiday_days
+                    cs.weekly_penalty_days = weekly_penalty_days
                     cs.ot_hours = ot_hours
                     cs.late_minutes = late_minutes
-                    cs.salary_for_present_days = gross_salary
+                    cs.salary_for_present_days = salary_for_present_days
                     cs.ot_charges = ot_charges
                     cs.late_deduction = late_deduction
-                    cs.incentive = 0
-                    cs.gross_salary = gross_salary + ot_charges - late_deduction
+                    cs.incentive = Decimal('0')
+                    cs.gross_salary = gross_salary  # Already calculated correctly in frontend
                     cs.tds_amount = tds_amount
-                    cs.salary_after_tds = gross_salary + ot_charges - late_deduction - tds_amount
+                    cs.salary_after_tds = gross_salary - tds_amount
                     cs.total_advance_balance = total_advance_balance
                     cs.advance_deduction_amount = advance_deduction
                     cs.advance_deduction_editable = True
@@ -3139,22 +3294,24 @@ def save_payroll_period_direct(request):
                         employee_name=entry.get('employee_name'),
                         department=entry.get('department'),
                         basic_salary=base_salary,
-                        basic_salary_per_hour=0,
-                        basic_salary_per_minute=0,
-                        employee_ot_rate=0,
+                        basic_salary_per_hour=basic_salary_per_hour,
+                        basic_salary_per_minute=basic_salary_per_minute,
+                        employee_ot_rate=employee_ot_rate,
                         employee_tds_rate=tds_percentage,
                         total_working_days=working_days,
                         present_days=present_days,
                         absent_days=absent_days,
+                        holiday_days=holiday_days,
+                        weekly_penalty_days=weekly_penalty_days,
                         ot_hours=ot_hours,
                         late_minutes=late_minutes,
-                        salary_for_present_days=gross_salary,
+                        salary_for_present_days=salary_for_present_days,
                         ot_charges=ot_charges,
                         late_deduction=late_deduction,
-                        incentive=0,
-                        gross_salary=gross_salary + ot_charges - late_deduction,
+                        incentive=Decimal('0'),
+                        gross_salary=gross_salary,  # Already calculated correctly in frontend
                         tds_amount=tds_amount,
-                        salary_after_tds=gross_salary + ot_charges - late_deduction - tds_amount,
+                        salary_after_tds=gross_salary - tds_amount,
                         total_advance_balance=total_advance_balance,
                         advance_deduction_amount=advance_deduction,
                         advance_deduction_editable=True,
@@ -3189,9 +3346,10 @@ def save_payroll_period_direct(request):
                     fields=[
                         'employee_name','department','basic_salary','basic_salary_per_hour','basic_salary_per_minute',
                         'employee_ot_rate','employee_tds_rate','total_working_days','present_days','absent_days',
-                        'ot_hours','late_minutes','salary_for_present_days','ot_charges','late_deduction','incentive',
-                        'gross_salary','tds_amount','salary_after_tds','total_advance_balance','advance_deduction_amount',
-                        'advance_deduction_editable','remaining_advance_balance','net_payable','data_source','is_paid'
+                        'holiday_days','weekly_penalty_days','ot_hours','late_minutes','salary_for_present_days',
+                        'ot_charges','late_deduction','incentive','gross_salary','tds_amount','salary_after_tds',
+                        'total_advance_balance','advance_deduction_amount','advance_deduction_editable',
+                        'remaining_advance_balance','net_payable','data_source','is_paid'
                     ],
                     batch_size=1000
                 )

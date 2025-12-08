@@ -562,6 +562,8 @@ class SalaryCalculationService:
                 'total_working_days': attendance_data['total_working_days'],
                 'present_days': attendance_data['present_days'],
                 'absent_days': attendance_data['absent_days'],
+                'holiday_days': attendance_data.get('holiday_days', 0),
+                'weekly_penalty_days': attendance_data.get('weekly_penalty_days', Decimal('0')),
                 'ot_hours': attendance_data['ot_hours'],
                 'late_minutes': attendance_data['late_minutes'],
                 'total_advance_balance': advance_balance,
@@ -584,6 +586,92 @@ class SalaryCalculationService:
                 calculated_salary._skip_auto_calc = True
             calculated_salary.save()
             return calculated_salary
+    
+    @staticmethod
+    def _compute_weekly_penalty_and_bonus(employee: 'EmployeeProfile', year: int, month: str) -> dict:
+        """
+        Compute weekly absent penalty days for a month using DailyAttendance.
+        
+        Rules (tenant specific):
+        - If an employee in a week is ABSENT more than N days (default 4), add 1 penalty day.
+        
+        Note: Sunday bonus is handled separately by marking Sunday as PRESENT in DailyAttendance.
+        This function ONLY aggregates penalty counts for payroll; it does NOT modify DailyAttendance.
+        """
+        from datetime import date, timedelta
+        import calendar
+        from ..models import DailyAttendance
+        
+        tenant = getattr(employee, 'tenant', None)
+        if not tenant:
+            return {
+                'weekly_penalty_days': Decimal('0'),
+            }
+        
+        # Read tenant-level config with sane fallbacks
+        absent_enabled = getattr(tenant, 'weekly_absent_penalty_enabled', False)
+        absent_threshold = getattr(tenant, 'weekly_absent_threshold', 4) or 4
+        
+        if not absent_enabled:
+            return {
+                'weekly_penalty_days': Decimal('0'),
+            }
+        
+        month_num = SalaryCalculationService._get_month_number(month)
+        total_days = calendar.monthrange(year, month_num)[1]
+        month_start = date(year, month_num, 1)
+        month_end = date(year, month_num, total_days)
+        
+        # Fetch all DailyAttendance rows for this employee/month once
+        daily_qs = DailyAttendance.objects.filter(
+            tenant=tenant,
+            employee_id=employee.employee_id,
+            date__gte=month_start,
+            date__lte=month_end,
+        ).only('date', 'attendance_status')
+        
+        if not daily_qs.exists():
+            return {
+                'weekly_penalty_days': Decimal('0'),
+            }
+        
+        # Build map date -> status for quick lookup
+        status_by_date = {rec.date: rec.attendance_status for rec in daily_qs}
+        
+        weekly_penalty_days = 0
+        
+        # Iterate over calendar weeks in the month using monthcalendar
+        month_calendar = calendar.monthcalendar(year, month_num)
+        for week in month_calendar:
+            # week is [Mon, Tue, Wed, Thu, Fri, Sat, Sun]
+            # Build list of actual dates for this week within the month
+            week_dates = []
+            for idx, day in enumerate(week):
+                if day == 0:
+                    continue  # day from previous/next month
+                week_dates.append(date(year, month_num, day))
+            
+            if not week_dates:
+                continue
+            
+            # Count ABSENT days in this week for penalty calculation
+            absent_count = 0
+            for d in week_dates:
+                status = status_by_date.get(d)
+                if status == 'ABSENT':
+                    absent_count += 1
+            
+            # Apply absent penalty rule: if absent meets or exceeds threshold, add penalty
+            # Threshold 4 means: 4+ absences = penalty (so use >=)
+            if absent_enabled and absent_count >= absent_threshold:
+                weekly_penalty_days += 1
+            
+            # Note: Sunday bonus is handled separately by mark_sunday_bonus_background
+            # which marks Sunday as PRESENT when threshold is met
+        
+        return {
+            'weekly_penalty_days': Decimal(str(weekly_penalty_days)),
+        }
     
     @staticmethod
     def _get_attendance_data(employee: EmployeeProfile, year: int, month: str, force_calculate_partial: bool = False) -> dict:
@@ -623,6 +711,8 @@ class SalaryCalculationService:
                 'ot_hours': salary_record.ot,
                 'late_minutes': salary_record.late,
                 'holiday_days': holiday_count,  # Track holiday count separately
+                # Weekly rules are not applied for uploaded salary data
+                'weekly_penalty_days': Decimal('0'),
             }
         
         # Next try the pre-aggregated MonthlyAttendanceSummary (fast path)
@@ -662,13 +752,27 @@ class SalaryCalculationService:
             )
             holiday_count = len(holiday_dates)
 
+            weekly_stats = SalaryCalculationService._compute_weekly_penalty_and_bonus(
+                employee, year, month
+            )
+            
+            present_days = Decimal(str(summary.present_days)) + Decimal(str(holiday_count))
+            absent_days = Decimal(str(explicit_absent_count))
+            
+            # Apply weekly absent penalty to present/absent days if enabled
+            penalty_days = weekly_stats['weekly_penalty_days']
+            if penalty_days > 0:
+                present_days = max(Decimal('0'), present_days - penalty_days)
+                absent_days = absent_days + penalty_days
+
             return {
                 'total_working_days': employee_working_days,
-                'present_days': Decimal(str(summary.present_days)) + Decimal(str(holiday_count)),  # Add holidays as present
-                'absent_days': Decimal(str(explicit_absent_count)),  # Only explicit absences
+                'present_days': present_days,   # Includes holidays minus any penalty_days
+                'absent_days': absent_days,    # Explicit absences + penalty_days
                 'ot_hours': summary.ot_hours,
                 'late_minutes': summary.late_minutes,
                 'holiday_days': holiday_count,  # Track holiday count separately
+                'weekly_penalty_days': weekly_stats['weekly_penalty_days'],
             }
         
         # If MonthlyAttendanceSummary doesn't have data, try the Attendance model (monthly summary format)
@@ -700,13 +804,26 @@ class SalaryCalculationService:
             )
             holiday_count = len(holiday_dates)
 
+            weekly_stats = SalaryCalculationService._compute_weekly_penalty_and_bonus(
+                employee, year, month
+            )
+            
+            present_days = Decimal(str(attendance_record.present_days)) + Decimal(str(holiday_count))
+            absent_days = Decimal(str(attendance_record.absent_days))
+            
+            penalty_days = weekly_stats['weekly_penalty_days']
+            if penalty_days > 0:
+                present_days = max(Decimal('0'), present_days - penalty_days)
+                absent_days = absent_days + penalty_days
+
             return {
                 'total_working_days': employee_working_days,
-                'present_days': Decimal(str(attendance_record.present_days)) + Decimal(str(holiday_count)),  # Add holidays
-                'absent_days': Decimal(str(attendance_record.absent_days)),
+                'present_days': present_days,  # Includes holidays minus any penalty_days
+                'absent_days': absent_days,    # Uploaded absent + penalty_days
                 'ot_hours': attendance_record.ot_hours,
                 'late_minutes': attendance_record.late_minutes,
                 'holiday_days': holiday_count,  # Track holiday count separately
+                'weekly_penalty_days': weekly_stats['weekly_penalty_days'],
             }
         
         # Otherwise, fall back to on-the-fly aggregation of DailyAttendance
@@ -771,13 +888,26 @@ class SalaryCalculationService:
             )
             holiday_count = len(holiday_dates)
 
+            weekly_stats = SalaryCalculationService._compute_weekly_penalty_and_bonus(
+                employee, year, month
+            )
+            
+            present_days = Decimal(str(total_present)) + Decimal(str(holiday_count))
+            absent_days = Decimal(str(explicit_absent))
+            
+            penalty_days = weekly_stats['weekly_penalty_days']
+            if penalty_days > 0:
+                present_days = max(Decimal('0'), present_days - penalty_days)
+                absent_days = absent_days + penalty_days
+            
             return {
                 'total_working_days': employee_working_days,
-                'present_days': Decimal(str(total_present)) + Decimal(str(holiday_count)),  # Add holidays as present
-                'absent_days': Decimal(str(explicit_absent)),  # Only explicit absences
+                'present_days': present_days,      # Includes holidays minus any penalty_days
+                'absent_days': absent_days,        # Explicit absences + penalty_days
                 'ot_hours': aggregates["total_ot"] or Decimal('0'),
                 'late_minutes': aggregates["total_late"] or 0,
-                'holiday_days': holiday_count,  # Track holiday count separately
+                'holiday_days': holiday_count,     # Track holiday count separately
+                'weekly_penalty_days': weekly_stats['weekly_penalty_days'],
             }
         
         # Default values if no data found - assume no attendance logged
@@ -801,6 +931,8 @@ class SalaryCalculationService:
             'ot_hours': Decimal('0'),
             'late_minutes': 0,
             'holiday_days': holiday_count,  # Track holiday count separately
+            # No weekly rules when there is no detailed attendance
+            'weekly_penalty_days': Decimal('0'),
         }
     
     @staticmethod

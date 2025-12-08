@@ -114,7 +114,9 @@ def sync_attendance_from_daily(sender, instance, **kwargs):
         # Create or update monthly Attendance record
         attendance_date = date(year, month, 1)  # First day of the month
         
-        Attendance.objects.update_or_create(
+        # Create or update monthly Attendance record
+        # Handle legacy penalty_days and bonus_sundays fields that may exist in DB but not in model
+        attendance_obj, created = Attendance.objects.update_or_create(
             tenant=tenant,
             employee_id=employee_id,
             date=attendance_date,
@@ -129,10 +131,32 @@ def sync_attendance_from_daily(sender, instance, **kwargs):
                 'late_minutes': late_minutes,
             }
         )
+        
+        # Set penalty_days and bonus_sundays if the columns exist in DB (legacy fields)
+        try:
+            from django.db import connection
+            with connection.cursor() as cursor:
+                cursor.execute("""
+                    UPDATE excel_data_attendance 
+                    SET penalty_days = COALESCE(penalty_days, 0),
+                        bonus_sundays = COALESCE(bonus_sundays, 0)
+                    WHERE id = %s AND (penalty_days IS NULL OR bonus_sundays IS NULL)
+                """, [attendance_obj.id])
+        except Exception:
+            # Columns don't exist or update failed - ignore
+            pass
 
         import logging
         logger = logging.getLogger(__name__)
         logger.info(f"✅ SIGNAL COMPLETED: Updated monthly Attendance for {employee_id} - {year}-{month:02d}: {present_days} present days")
+        
+        # BACKGROUND THREAD: Check and mark Sunday bonus if threshold is met
+        try:
+            from excel_data.tasks import mark_sunday_bonus_background
+            logger.info(f"🔄 [Signal] Triggering Sunday bonus check for {employee_id} on {instance.date}")
+            mark_sunday_bonus_background(tenant.id, employee_id, instance.date)
+        except Exception as e:
+            logger.error(f"❌ [Signal] Failed to trigger Sunday bonus background task: {e}", exc_info=True)
         
         # CACHE INVALIDATION: Clear relevant caches to prevent stale data
         from django.core.cache import cache
@@ -294,6 +318,35 @@ def update_monthly_attendance_summary(sender, instance, **kwargs):
         ot_hours = aggregate_vals["ot_sum"] or Decimal("0")
         late_minutes = aggregate_vals["late_sum"] or 0
 
+        # Calculate weekly penalty and Sunday bonus days
+        weekly_penalty_days = Decimal("0")
+        # Sunday bonus handled separately by marking Sunday as PRESENT (not tracked here)
+        try:
+            from excel_data.services.salary_service import SalaryCalculationService
+            # Convert month number (1-12) to month name (JAN, FEB, etc.)
+            month_names = ['JAN', 'FEB', 'MAR', 'APR', 'MAY', 'JUN', 'JUL', 'AUG', 'SEP', 'OCT', 'NOV', 'DEC']
+            month_name = month_names[month - 1] if 1 <= month <= 12 else 'JAN'
+            
+            # Get employee object
+            employee = EmployeeProfile.objects.get(tenant=tenant, employee_id=employee_id, is_active=True)
+            
+            # Check if penalty feature is enabled
+            absent_enabled = getattr(tenant, 'weekly_absent_penalty_enabled', False)
+            
+            if absent_enabled:
+                weekly_stats = SalaryCalculationService._compute_weekly_penalty_and_bonus(
+                    employee, year, month_name
+                )
+                weekly_penalty_days = weekly_stats.get('weekly_penalty_days', Decimal("0"))
+                
+                import logging
+                logger = logging.getLogger(__name__)
+                if weekly_penalty_days > 0:
+                    logger.info(f"📊 Calculated penalty for {employee_id} ({year}-{month:02d}): penalty={weekly_penalty_days}")
+        except Exception as e:
+            import logging
+            logging.getLogger(__name__).error(f"❌ Failed to calculate weekly penalty for {employee_id} ({year}-{month:02d}): {e}", exc_info=True)
+
         # Upsert summary
         MonthlyAttendanceSummary.objects.update_or_create(
             tenant=tenant,
@@ -304,6 +357,8 @@ def update_monthly_attendance_summary(sender, instance, **kwargs):
                 "present_days": Decimal(str(total_present)),
                 "ot_hours": ot_hours,
                 "late_minutes": late_minutes,
+                "weekly_penalty_days": weekly_penalty_days,
+                # Sunday bonus handled separately by marking Sunday as PRESENT
             },
         )
     except Exception as exc:

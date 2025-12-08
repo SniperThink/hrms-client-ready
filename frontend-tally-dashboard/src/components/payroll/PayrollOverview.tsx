@@ -41,6 +41,8 @@ interface PayrollDetailEntry {
   present_days: number;  // Total paid days (includes holidays)
   holiday_days?: number;  // Number of paid holidays
   off_days?: number;  // Off days for the employee
+  weekly_penalty_days?: number; // Weekly absent penalty days
+  sunday_bonus_days?: number;   // Bonus Sundays counted as present
   absent_days: number;
   ot_hours: number;
   late_minutes: number;
@@ -91,6 +93,15 @@ interface PayrollOverviewData {
   total_periods: number;
 }
 
+interface SalaryConfig {
+  average_days_per_month: number;
+  break_time: number;
+  weekly_absent_penalty_enabled: boolean;
+  weekly_absent_threshold: number;
+  sunday_bonus_enabled: boolean;
+  sunday_bonus_threshold: number;
+}
+
 const PayrollOverview: React.FC = () => {
   const [overviewData, setOverviewData] = useState<PayrollOverviewData | null>(null);
   const [loading, setLoading] = useState(true);
@@ -111,9 +122,27 @@ const PayrollOverview: React.FC = () => {
   const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false);
   const [savingChanges, setSavingChanges] = useState(false);
   const [showAdvanceModal, setShowAdvanceModal] = useState(false);
+  const [salaryConfig, setSalaryConfig] = useState<SalaryConfig | null>(null);
 
   useEffect(() => {
     loadPayrollOverview();
+    // Load tenant salary/weekly rules config once
+    (async () => {
+      try {
+        const config = await apiRequest('/api/salary-config/');
+        if (typeof config !== 'object' || config === null) throw new Error('Invalid salary config response');
+        setSalaryConfig({
+          average_days_per_month: (config as any).average_days_per_month,
+          break_time: (config as any).break_time,
+          weekly_absent_penalty_enabled: !!(config as any).weekly_absent_penalty_enabled,
+          weekly_absent_threshold: (config as any).weekly_absent_threshold ?? 4,
+          sunday_bonus_enabled: !!(config as any).sunday_bonus_enabled,
+          sunday_bonus_threshold: (config as any).sunday_bonus_threshold ?? 4,
+        });
+      } catch (err) {
+        logger.warn('Failed to load salary config for payroll overview, using defaults');
+      }
+    })();
   }, []);
 
   const loadPayrollOverview = async () => {
@@ -516,6 +545,11 @@ const PayrollOverview: React.FC = () => {
                     <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Present</th>
                     <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Absent</th>
                     <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Paid Days</th>
+                    {salaryConfig?.weekly_absent_penalty_enabled && (
+                      <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                        Penalty Days
+                      </th>
+                    )}
                     <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">OT Hours</th>
                     <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">OT Charges</th>
                     <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Late (Min)</th>
@@ -565,6 +599,11 @@ const PayrollOverview: React.FC = () => {
                       <td className="px-4 py-4 whitespace-nowrap text-sm text-gray-900">
                         {entry.paid_days || entry.present_days || 0}
                       </td>
+                      {salaryConfig?.weekly_absent_penalty_enabled && (
+                        <td className="px-4 py-4 whitespace-nowrap text-sm text-gray-900">
+                          {entry.weekly_penalty_days ?? 0}
+                        </td>
+                      )}
                       <td className="px-4 py-4 whitespace-nowrap text-sm text-gray-900">{entry.ot_hours || 0}</td>
                       <td className="px-4 py-4 whitespace-nowrap text-sm text-gray-900">₹{(entry.ot_charges || 0).toLocaleString()}</td>
                       <td className="px-4 py-4 whitespace-nowrap text-sm text-gray-900">{entry.late_minutes || 0}</td>

@@ -480,7 +480,7 @@ def run_bulk_aggregation(tenant, attendance_date):
                 logger.info(f"Employee {emp_id}: days_in_month={days_in_month}, records_count={records_count}, present={data.get('present_days', 0)}, absent={data.get('absent_days', 0)}, off={data.get('off_days_marked', 0)}, off_days_count={off_days_count}, unmarked={unmarked_days}")
                 
                 # Create monthly attendance record
-                attendance_records.append(Attendance(
+                attendance_record = Attendance(
                     tenant=tenant,
                     employee_id=emp_id,
                     name=data['employee_name'],
@@ -493,7 +493,8 @@ def run_bulk_aggregation(tenant, attendance_date):
                     unmarked_days=unmarked_days,
                     ot_hours=data['ot_hours'],
                     late_minutes=data['late_minutes']
-                ))
+                )
+                attendance_records.append(attendance_record)
                 
             except Exception as e:
                 error_msg = f"Error processing employee {emp_id}: {str(e)}"
@@ -540,9 +541,48 @@ def run_bulk_aggregation(tenant, attendance_date):
                 
                 # Bulk create new records
                 if records_to_create:
-                    Attendance.objects.bulk_create(records_to_create, batch_size=100)
-                    created_count = len(records_to_create)
-                    logger.info(f"✅ BACKGROUND AGGREGATION: Created {created_count} new attendance records")
+                    # Use raw SQL to handle legacy penalty_days and bonus_sundays columns
+                    try:
+                        from django.db import connection
+                        from django.utils import timezone
+                        with connection.cursor() as cursor:
+                            # Build parameterized query - 17 fields including penalty_days and bonus_sundays
+                            placeholders = ', '.join(['%s'] * 17)
+                            value_placeholders = ', '.join([f'({placeholders})'] * len(records_to_create))
+                            
+                            sql = f"""
+                                INSERT INTO excel_data_attendance 
+                                (tenant_id, employee_id, name, department, date, calendar_days, total_working_days, 
+                                 present_days, absent_days, unmarked_days, holiday_days, ot_hours, late_minutes, 
+                                 created_at, updated_at, penalty_days, bonus_sundays)
+                                VALUES {value_placeholders}
+                                ON CONFLICT (tenant_id, employee_id, date) DO NOTHING
+                            """
+                            
+                            params = []
+                            now = timezone.now()
+                            for record in records_to_create:
+                                params.extend([
+                                    record.tenant.id, record.employee_id, record.name, record.department,
+                                    record.date, record.calendar_days, record.total_working_days,
+                                    record.present_days, record.absent_days, record.unmarked_days,
+                                    0, float(record.ot_hours), record.late_minutes, now, now, 
+                                    0, 0  # penalty_days=0, bonus_sundays=0
+                                ])
+                            
+                            cursor.execute(sql, params)
+                            created_count = cursor.rowcount
+                            logger.info(f"✅ BACKGROUND AGGREGATION: Created {created_count} new attendance records (with legacy fields)")
+                    except Exception as e:
+                        # Fallback to regular bulk_create if raw SQL fails
+                        logger.warning(f"Raw SQL insert failed, using bulk_create: {e}")
+                        try:
+                            Attendance.objects.bulk_create(records_to_create, batch_size=100)
+                            created_count = len(records_to_create)
+                            logger.info(f"✅ BACKGROUND AGGREGATION: Created {created_count} new attendance records (fallback)")
+                        except Exception as e2:
+                            logger.error(f"❌ Both raw SQL and bulk_create failed: {e2}")
+                            created_count = 0
                 
                 # Bulk update existing records (now with primary keys)
                 if records_to_update:

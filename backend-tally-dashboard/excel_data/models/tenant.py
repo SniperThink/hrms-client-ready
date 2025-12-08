@@ -61,6 +61,24 @@ class Tenant(models.Model):
         help_text="Break time in hours to be deducted from shift hours for OT calculations (default: 0.5 hours = 30 minutes)"
     )
     
+    # Weekly bonus/penalty attendance rules (tenant specific)
+    weekly_absent_penalty_enabled = models.BooleanField(
+        default=False,
+        help_text="Enable weekly absent penalty rule (if absent more than N days in a week, add 1 penalty day)"
+    )
+    weekly_absent_threshold = models.IntegerField(
+        default=4,
+        help_text="Number of absent days in a week after which 1 penalty day is added (default: 4)"
+    )
+    sunday_bonus_enabled = models.BooleanField(
+        default=False,
+        help_text="Enable Sunday bonus rule (if present more than N days in a week, upcoming Sunday is treated as bonus present day even if off day)"
+    )
+    sunday_bonus_threshold = models.IntegerField(
+        default=4,
+        help_text="Number of present days in a week after which upcoming Sunday is treated as bonus present day (default: 4)"
+    )
+    
     class Meta:
         app_label = 'excel_data'
         verbose_name = _('tenant')

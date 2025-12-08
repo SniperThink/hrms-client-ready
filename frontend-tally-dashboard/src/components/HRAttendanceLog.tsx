@@ -61,6 +61,7 @@ interface AttendanceEntry {
   ot_hours: number;
   late_minutes: number;
   has_off_day: boolean;
+  sunday_bonus?: boolean; // Indicates this present day is a Sunday bonus
   weeklyAttendance: { [day: string]: boolean }; // Example: { M: true, T: false, W: true, ... }
   _shiftStart?: string;
   _shiftEnd?: string;
@@ -676,6 +677,7 @@ const HRAttendanceLog: React.FC = () => {
       ot_hours: emp.ot_hours || 0,
       late_minutes: emp.late_minutes || 0,
       has_off_day: emp.has_off_day || false,
+      sunday_bonus: (emp as any).sunday_bonus || false,
       weeklyAttendance: {}, // Initialize as empty, will be populated by backend
       _shiftStart: emp.shift_start_time || '09:00',
       _shiftEnd: emp.shift_end_time || '18:00'
@@ -1472,6 +1474,11 @@ const HRAttendanceLog: React.FC = () => {
                               {hasOffDay && entry.status === 'present' && (
                                 <span className="text-xs text-orange-600 font-medium mb-1">⚠️ Off Day - Extra Pay</span>
                               )}
+                              {entry.sunday_bonus && entry.status === 'present' && (
+                                <span className="text-xs text-teal-700 font-semibold mb-1">
+                                  Sunday bonus (auto-marked present due to weekly performance)
+                                </span>
+                              )}
                               <div className="flex gap-2">
                                 <button
                                   onClick={() => {
@@ -1571,6 +1578,7 @@ const HRAttendanceLog: React.FC = () => {
                               const weeklyData = entry?.weeklyAttendance || {};
                               const dayValue = weeklyData[day];
                               const isPresent = dayValue === true;
+                              const isAbsent = dayValue === false;
                               
                               return (
                                 <span
@@ -1578,9 +1586,15 @@ const HRAttendanceLog: React.FC = () => {
                                   className={`px-2 py-1 rounded text-xs font-medium border ${
                                     isPresent
                                       ? 'bg-teal-100 text-teal-800 border-teal-700'
+                                      : isAbsent
+                                      ? 'bg-red-100 text-red-800 border-red-300'
                                       : 'bg-gray-100 text-gray-600 border-gray-300'
                                   }`}
-                                  title={isPresent ? 'Present' : 'Absent/Unmarked'}
+                                  title={
+                                    isPresent ? 'Present' : 
+                                    isAbsent ? 'Absent' : 
+                                    'Unmarked'
+                                  }
                                 >
                                   {day}
                                 </span>

@@ -27,9 +27,11 @@ interface PayrollEntry {
   raw_present_days?: number;  // Present days without holidays
   paid_days?: number;  // Present days + holidays
   present_days: number;
+  holiday_days?: number;          // Paid holidays
+  weekly_penalty_days?: number;   // Weekly absent penalty days
+  sunday_bonus_days?: number;     // Bonus Sundays counted as present
   absent_days: number;
-  off_days?: number; // Off days for the employee
-  holiday_days?: number; // Add holidays support
+  off_days?: number;              // Off days for the employee
   ot_hours: number;
   late_minutes: number;
   gross_salary: number;
@@ -60,6 +62,8 @@ const SimplePayrollCalculator: React.FC = () => {
   const [selectedPeriod, setSelectedPeriod] = useState<AttendancePeriod | null>(null);
   const [payrollData, setPayrollData] = useState<PayrollEntry[]>([]);
   const [averageDaysPerMonth, setAverageDaysPerMonth] = useState<number>(30.4); // Default fallback
+  const [weeklyAbsentPenaltyEnabled, setWeeklyAbsentPenaltyEnabled] = useState<boolean>(false);
+  const [sundayBonusEnabled, setSundayBonusEnabled] = useState<boolean>(false);
   const [summary, setSummary] = useState<PayrollSummary | null>(null);
   const [loading, setLoading] = useState(false);
   const [calculating, setCalculating] = useState(false);
@@ -77,6 +81,8 @@ const SimplePayrollCalculator: React.FC = () => {
           if (data && data.average_days_per_month) {
             setAverageDaysPerMonth(data.average_days_per_month);
           }
+          setWeeklyAbsentPenaltyEnabled(!!data.weekly_absent_penalty_enabled);
+          setSundayBonusEnabled(!!data.sunday_bonus_enabled);
         }
       } catch (error) {
         // Use default value if fetch fails
@@ -103,6 +109,9 @@ const SimplePayrollCalculator: React.FC = () => {
       present_days: entry.present_days,
       absent_days: entry.absent_days,
       off_days: entry.off_days,
+      holiday_days: entry.holiday_days ?? 0,
+      weekly_penalty_days: entry.weekly_penalty_days ?? 0,
+      sunday_bonus_days: entry.sunday_bonus_days ?? 0,
       ot_hours: entry.ot_hours,
       late_minutes: entry.late_minutes,
       gross_salary: entry.gross_salary,
@@ -291,6 +300,8 @@ const SimplePayrollCalculator: React.FC = () => {
           working_days: entry.working_days,
           present_days: entry.present_days,
           absent_days: entry.absent_days,
+          holiday_days: entry.holiday_days || 0,
+          weekly_penalty_days: entry.weekly_penalty_days || 0,
           ot_hours: entry.ot_hours,
           late_minutes: entry.late_minutes,
           gross_salary: entry.gross_salary,
@@ -512,6 +523,11 @@ const SimplePayrollCalculator: React.FC = () => {
                   <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Present</th>
                   <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Absent</th>
                   <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Paid Days</th>
+                  {weeklyAbsentPenaltyEnabled && (
+                    <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                      Penalty Days
+                    </th>
+                  )}
                   <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">OT Hours</th>
                   <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">OT Charges</th>
                   <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Late (Min)</th>
@@ -548,7 +564,11 @@ const SimplePayrollCalculator: React.FC = () => {
                     <td className="px-4 py-4 whitespace-nowrap text-sm text-gray-900">
                       {entry.paid_days || entry.present_days}
                     </td>
-                    
+                    {weeklyAbsentPenaltyEnabled && (
+                      <td className="px-4 py-4 whitespace-nowrap text-sm text-gray-900">
+                        {entry.weekly_penalty_days ?? 0}
+                      </td>
+                    )}
                     <td className="px-4 py-4 whitespace-nowrap text-sm text-gray-900">{entry.ot_hours}</td>
                     <td className="px-4 py-4 whitespace-nowrap text-sm text-gray-900">₹{(entry.ot_charges || 0).toLocaleString()}</td>
                     <td className="px-4 py-4 whitespace-nowrap text-sm text-gray-900">{entry.late_minutes || 0}</td>

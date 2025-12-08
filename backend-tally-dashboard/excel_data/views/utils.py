@@ -330,13 +330,24 @@ def get_salary_config(request):
         if not tenant:
             return Response({'error': 'No tenant found'}, status=400)
         
-        # Use tenant-specific value, fallback to default if not set
-        average_days = float(tenant.average_days_per_month) if tenant.average_days_per_month else 30.4
-        break_time = float(tenant.break_time) if tenant.break_time is not None else 0.5
+        # Use tenant-specific values, fallback to defaults if not set
+        average_days = float(getattr(tenant, 'average_days_per_month', 30.4) or 30.4)
+        break_time = float(getattr(tenant, 'break_time', 0.5) if tenant.break_time is not None else 0.5)
+        
+        # Weekly rules configuration (tenant-specific, with sane defaults)
+        weekly_absent_penalty_enabled = getattr(tenant, 'weekly_absent_penalty_enabled', False)
+        weekly_absent_threshold = getattr(tenant, 'weekly_absent_threshold', 4) or 4
+        sunday_bonus_enabled = getattr(tenant, 'sunday_bonus_enabled', False)
+        # Present threshold is complement of absent threshold: 7 - absent_threshold
+        sunday_bonus_threshold = 7 - weekly_absent_threshold
         
         return Response({
             'average_days_per_month': average_days,
             'break_time': break_time,
+            'weekly_absent_penalty_enabled': bool(weekly_absent_penalty_enabled),
+            'weekly_absent_threshold': int(weekly_absent_threshold),
+            'sunday_bonus_enabled': bool(sunday_bonus_enabled),
+            'sunday_bonus_threshold': int(sunday_bonus_threshold),  # Complement of absent threshold
             'description': 'Average days per month and break time used for salary and OT rate calculations'
         })
     except Exception as e:
@@ -374,9 +385,41 @@ def update_salary_config(request):
         except (ValueError, TypeError):
             return Response({'error': 'break_time must be a valid number'}, status=400)
         
+        # Weekly rules configuration (all optional; use existing/defaults if not provided)
+        weekly_absent_penalty_enabled = request.data.get('weekly_absent_penalty_enabled', getattr(tenant, 'weekly_absent_penalty_enabled', False))
+        weekly_absent_threshold = request.data.get('weekly_absent_threshold', getattr(tenant, 'weekly_absent_threshold', 4))
+        sunday_bonus_enabled = request.data.get('sunday_bonus_enabled', getattr(tenant, 'sunday_bonus_enabled', False))
+        # Sunday bonus threshold is automatically calculated as complement: 7 - weekly_absent_threshold
+        # No need to read it from request data
+        
+        try:
+            weekly_absent_penalty_enabled = bool(weekly_absent_penalty_enabled)
+            weekly_absent_threshold = int(weekly_absent_threshold)
+            if weekly_absent_threshold < 2 or weekly_absent_threshold > 7:
+                return Response({'error': 'weekly_absent_threshold must be between 2 and 7 (since present threshold = 7 - absent_threshold)'}, status=400)
+        except (ValueError, TypeError):
+            return Response({'error': 'weekly_absent_threshold must be a valid integer'}, status=400)
+        
+        try:
+            sunday_bonus_enabled = bool(sunday_bonus_enabled)
+        except (ValueError, TypeError):
+            return Response({'error': 'sunday_bonus_enabled must be a valid boolean'}, status=400)
+        
         tenant.average_days_per_month = average_days_float
         tenant.break_time = break_time_float
-        tenant.save(update_fields=['average_days_per_month', 'break_time'])
+        tenant.weekly_absent_penalty_enabled = weekly_absent_penalty_enabled
+        tenant.weekly_absent_threshold = weekly_absent_threshold
+        tenant.sunday_bonus_enabled = sunday_bonus_enabled
+        # Sunday bonus threshold is automatically calculated as complement: 7 - weekly_absent_threshold
+        # We keep the field in DB for backward compatibility but don't update it
+        tenant.save(update_fields=[
+            'average_days_per_month',
+            'break_time',
+            'weekly_absent_penalty_enabled',
+            'weekly_absent_threshold',
+            'sunday_bonus_enabled',
+            # 'sunday_bonus_threshold',  # Not saved separately, calculated as 7 - weekly_absent_threshold
+        ])
         
         # Clear relevant caches
         from django.core.cache import cache
@@ -393,6 +436,10 @@ def update_salary_config(request):
             'success': True,
             'average_days_per_month': float(tenant.average_days_per_month),
             'break_time': float(tenant.break_time),
+            'weekly_absent_penalty_enabled': bool(tenant.weekly_absent_penalty_enabled),
+            'weekly_absent_threshold': int(tenant.weekly_absent_threshold),
+            'sunday_bonus_enabled': bool(tenant.sunday_bonus_enabled),
+            'sunday_bonus_threshold': int(7 - tenant.weekly_absent_threshold),  # Complement of absent threshold
             'message': 'Salary configuration updated successfully'
         })
     except Exception as e:
@@ -577,6 +624,8 @@ def bulk_update_attendance(request):
         skipped_count = 0
         skipped_employees = []  # Track skipped employees with reasons
         errors = []
+        # Track which employees had attendance marked for Sunday bonus check
+        employees_to_check_sunday_bonus = set()
         
         # PERFORMANCE OPTIMIZATION: Add timing and batch size optimization
         import time
@@ -673,6 +722,9 @@ def bulk_update_attendance(request):
                         setattr(existing_record, key, value)
                     records_to_update.append(existing_record)
                     updated_count += 1
+                    # Track for Sunday bonus check if status is PRESENT or PAID_LEAVE
+                    if attendance_status in ['PRESENT', 'PAID_LEAVE']:
+                        employees_to_check_sunday_bonus.add((employee_id, attendance_date))
                 else:
                     # Create new record
                     new_record = DailyAttendance(
@@ -683,6 +735,9 @@ def bulk_update_attendance(request):
                     )
                     records_to_create.append(new_record)
                     created_count += 1
+                    # Track for Sunday bonus check if status is PRESENT or PAID_LEAVE
+                    if attendance_status in ['PRESENT', 'PAID_LEAVE']:
+                        employees_to_check_sunday_bonus.add((employee_id, attendance_date))
                     
             except Exception as e:
                 errors.append(f"Error processing employee {record.get('employee_id', 'unknown')}: {str(e)}")
@@ -727,6 +782,17 @@ def bulk_update_attendance(request):
         
         db_operation_time = time.time() - db_start_time
         logger.info(f"OPTIMIZED: Core DB operations completed in {db_operation_time:.3f}s")
+        
+        # BACKGROUND THREAD: Trigger Sunday bonus check for employees with present/paid_leave attendance
+        # Note: bulk_create/bulk_update don't trigger signals, so we manually trigger here
+        if employees_to_check_sunday_bonus:
+            try:
+                from excel_data.tasks import mark_sunday_bonus_background
+                logger.info(f"🔄 [Bulk] Triggering Sunday bonus check for {len(employees_to_check_sunday_bonus)} employees")
+                for employee_id, attendance_date in employees_to_check_sunday_bonus:
+                    mark_sunday_bonus_background(tenant.id, employee_id, attendance_date)
+            except Exception as e:
+                logger.error(f"❌ [Bulk] Failed to trigger Sunday bonus background tasks: {e}", exc_info=True)
         
         # LIGHTNING FAST: Skip monthly summary recalculation for bulk uploads
         # Instead, defer this to a background task or make it optional
@@ -947,6 +1013,105 @@ def bulk_update_attendance(request):
         return Response({"error": "Failed to update attendance"}, status=500)
 
 # Clean replacement for the update_monthly_summaries_parallel function
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def recalculate_penalty_bonus_days(request):
+    """
+    Recalculate weekly penalty and bonus days for MonthlyAttendanceSummary records.
+    Useful when features are enabled after data already exists.
+    
+    Expected payload (all optional):
+    {
+        "year": 2025,
+        "month": 12,
+        "employee_id": "EMP-001"  # Optional: recalculate for specific employee only
+    }
+    """
+    try:
+        tenant = getattr(request, 'tenant', None)
+        if not tenant:
+            return Response({'error': 'No tenant found'}, status=400)
+        
+        year = request.data.get('year')
+        month = request.data.get('month')
+        employee_id = request.data.get('employee_id')
+        
+        from excel_data.models import MonthlyAttendanceSummary, EmployeeProfile
+        from excel_data.services.salary_service import SalaryCalculationService
+        from decimal import Decimal
+        
+        # Build query
+        queryset = MonthlyAttendanceSummary.objects.filter(tenant=tenant)
+        
+        if year:
+            queryset = queryset.filter(year=year)
+        if month:
+            queryset = queryset.filter(month=month)
+        if employee_id:
+            queryset = queryset.filter(employee_id=employee_id)
+        
+        total = queryset.count()
+        if total == 0:
+            return Response({
+                'success': True,
+                'message': 'No records found to recalculate',
+                'updated_count': 0
+            })
+        
+        month_names = ['JAN', 'FEB', 'MAR', 'APR', 'MAY', 'JUN', 'JUL', 'AUG', 'SEP', 'OCT', 'NOV', 'DEC']
+        updated_count = 0
+        error_count = 0
+        
+        for summary in queryset.select_related('tenant'):
+            try:
+                # Get employee
+                try:
+                    employee = EmployeeProfile.objects.get(
+                        tenant=summary.tenant,
+                        employee_id=summary.employee_id,
+                        is_active=True
+                    )
+                except EmployeeProfile.DoesNotExist:
+                    continue
+                
+                # Check if features are enabled
+                absent_enabled = getattr(summary.tenant, 'weekly_absent_penalty_enabled', False)
+                bonus_enabled = getattr(summary.tenant, 'sunday_bonus_enabled', False)
+                
+                if not absent_enabled and not bonus_enabled:
+                    continue
+                
+                # Calculate penalty/bonus
+                month_name = month_names[summary.month - 1] if 1 <= summary.month <= 12 else 'JAN'
+                weekly_stats = SalaryCalculationService._compute_weekly_penalty_and_bonus(
+                    employee, summary.year, month_name
+                )
+                
+                new_penalty = weekly_stats.get('weekly_penalty_days', Decimal("0"))
+                
+                summary.weekly_penalty_days = new_penalty
+                # Sunday bonus handled separately by marking Sunday as PRESENT (no field update needed)
+                summary.save(update_fields=['weekly_penalty_days'])
+                updated_count += 1
+                
+            except Exception as e:
+                error_count += 1
+                import logging
+                logging.getLogger(__name__).error(f'Error recalculating penalty/bonus: {e}', exc_info=True)
+        
+        return Response({
+            'success': True,
+            'message': f'Recalculated {updated_count} records, {error_count} errors',
+            'updated_count': updated_count,
+            'error_count': error_count,
+            'total_records': total
+        })
+        
+    except Exception as e:
+        import logging
+        logging.getLogger(__name__).error(f'Error in recalculate_penalty_bonus_days: {e}', exc_info=True)
+        return Response({'error': f'Failed to recalculate: {str(e)}'}, status=500)
 
 @api_view(['POST'])
 @permission_classes([IsAuthenticated])
@@ -1318,7 +1483,7 @@ def get_eligible_employees_for_date(request):
         # OPTIMIZATION 4: Single bulk query for all attendance records  
         employee_ids = [emp.employee_id for emp in eligible_employees_query]
         
-        # Bulk fetch attendance records in one query
+        # Bulk fetch attendance records in one query (for the selected date)
         attendance_records = DailyAttendance.objects.filter(
             tenant=tenant,
             date=target_date,
@@ -1338,6 +1503,35 @@ def get_eligible_employees_for_date(request):
             }
             for record in attendance_records
         }
+        
+        # Sunday bonus logic: if target date is Sunday and tenant has sunday_bonus_enabled,
+        # check previous week's attendance (Mon-Sat) for each employee and mark
+        # eligible Sunday as bonus present even if it's an off day.
+        sunday_bonus_map = {}
+        sunday_bonus_enabled = getattr(tenant, 'sunday_bonus_enabled', False)
+        sunday_bonus_threshold = getattr(tenant, 'sunday_bonus_threshold', 4) or 4
+        
+        if sunday_bonus_enabled and day_of_week == 6 and employee_ids:
+            from datetime import timedelta
+            week_start = target_date - timedelta(days=6)  # Previous Monday (for Sun)
+            week_end = target_date - timedelta(days=1)    # Up to Saturday
+            
+            week_attendance_qs = DailyAttendance.objects.filter(
+                tenant=tenant,
+                employee_id__in=employee_ids,
+                date__gte=week_start,
+                date__lte=week_end
+            ).only('employee_id', 'attendance_status')
+            
+            # Aggregate present count per employee for the week
+            present_counts = {}
+            for rec in week_attendance_qs:
+                if rec.attendance_status in ['PRESENT', 'PAID_LEAVE']:
+                    present_counts[rec.employee_id] = present_counts.get(rec.employee_id, 0) + 1
+            
+            for emp_id, count in present_counts.items():
+                if count >= sunday_bonus_threshold:
+                    sunday_bonus_map[emp_id] = True
         
         # Check if employee has off day for the selected date
         def has_off_day_for_date(employee, day_of_week):
@@ -1360,9 +1554,47 @@ def get_eligible_employees_for_date(request):
             current_attendance = attendance_lookup.get(employee.employee_id, {})
             
             # Quick status determination
-            # If employee has off day, set status to 'off' regardless of attendance
-            # This ensures off-day employees are always shown as "OFF DAY" in the frontend
-            if has_off:
+            # If employee has off day, set status to 'off' regardless of attendance,
+            # UNLESS this is a Sunday bonus day where we intentionally treat them as present.
+            is_sunday_bonus = bool(sunday_bonus_map.get(employee.employee_id, False)) if day_of_week == 6 else False
+            
+            # Also check if attendance record exists and was marked as PRESENT on Sunday (could be from background thread)
+            # If it's Sunday and status is PRESENT, check if it meets Sunday bonus criteria
+            if day_of_week == 6 and current_attendance and current_attendance['status'] == 'PRESENT':
+                # If Sunday bonus is enabled and we haven't already determined it's a bonus,
+                # check if the previous week's attendance meets the threshold
+                if sunday_bonus_enabled and not is_sunday_bonus:
+                    from datetime import timedelta
+                    week_start = target_date - timedelta(days=6)  # Previous Monday
+                    week_end = target_date - timedelta(days=1)    # Up to Saturday
+                    
+                    # Count present days in previous week (Mon-Sat)
+                    week_attendance = DailyAttendance.objects.filter(
+                        tenant=tenant,
+                        employee_id=employee.employee_id,
+                        date__gte=week_start,
+                        date__lte=week_end
+                    ).only('attendance_status')
+                    
+                    present_count = sum(1 for rec in week_attendance 
+                                      if rec.attendance_status in ['PRESENT', 'PAID_LEAVE'])
+                    
+                    # Calculate present threshold (complement of absent threshold)
+                    weekly_absent_threshold = getattr(tenant, 'weekly_absent_threshold', 4) or 4
+                    present_threshold = 7 - weekly_absent_threshold
+                    
+                    # If present count meets or exceeds threshold, this Sunday is a bonus
+                    if present_count >= present_threshold:
+                        is_sunday_bonus = True
+                elif not is_sunday_bonus:
+                    # If Sunday bonus is not enabled but it's Sunday and marked as PRESENT,
+                    # it might have been marked manually, so don't treat as bonus
+                    is_sunday_bonus = False
+            
+            if has_off and is_sunday_bonus:
+                # Override OFF to PRESENT for Sunday bonus
+                default_status = 'present'
+            elif has_off:
                 default_status = 'off'
             elif current_attendance:
                 default_status = 'present' if current_attendance['status'] in ['PRESENT', 'PAID_LEAVE'] else 'absent'
@@ -1383,7 +1615,8 @@ def get_eligible_employees_for_date(request):
                 'has_off_day': has_off,  # Add flag to indicate off day
                 'current_attendance': current_attendance,
                 'ot_hours': current_attendance.get('ot_hours', 0),
-                'late_minutes': current_attendance.get('late_minutes', 0)
+                'late_minutes': current_attendance.get('late_minutes', 0),
+                'sunday_bonus': is_sunday_bonus,
             })
         
         # PROGRESSIVE LOADING METADATA

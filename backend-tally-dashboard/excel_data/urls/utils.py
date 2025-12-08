@@ -4,7 +4,8 @@ from ..views import (
     dashboard_stats, cleanup_salary_data, health_check, get_dropdown_options,
     calculate_ot_rate, attendance_status, bulk_update_attendance,
     update_monthly_summaries_parallel, get_eligible_employees_for_date,
-    CleanupTokensView, get_salary_config, update_salary_config
+    CleanupTokensView, get_salary_config, update_salary_config,
+    recalculate_penalty_bonus_days
 )
 
 urlpatterns = [
@@ -18,5 +19,6 @@ urlpatterns = [
     path('attendance-status/', attendance_status, name='attendance-status'),
     path('bulk-update-attendance/', bulk_update_attendance, name='bulk-update-attendance'),
     path('update-monthly-summaries/', update_monthly_summaries_parallel, name='update-monthly-summaries'),
+    path('recalculate-penalty-bonus/', recalculate_penalty_bonus_days, name='recalculate-penalty-bonus'),
     path('eligible-employees/', get_eligible_employees_for_date, name='eligible-employees'),
 ]

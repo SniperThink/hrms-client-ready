@@ -5007,13 +5007,13 @@ class AttendanceViewSet(viewsets.ReadOnlyModelViewSet):
             weekly_attendance[employee_id] = {
                 'name': name,
                 'weeklyAttendance': {
-                    'M': False,
-                    'Tu': False,
-                    'W': False,
-                    'Th': False,
-                    'F': False,
-                    'Sa': False,
-                    'Su': False
+                    'M': None,
+                    'Tu': None,
+                    'W': None,
+                    'Th': None,
+                    'F': None,
+                    'Sa': None,
+                    'Su': None
                 }
             }
         
@@ -5047,9 +5047,14 @@ class AttendanceViewSet(viewsets.ReadOnlyModelViewSet):
             day_abbrev = day_abbrev_map.get(day_name, day_name[:2])  # Use unique abbreviation
             status = getattr(record, 'attendance_status', None) or getattr(record, 'status', None)
             
-            # Set to True if present, paid_leave, or half_day
-            if status and status.lower() in ['present', 'paid_leave', 'half_day']:
-                weekly_attendance[employee_id]['weeklyAttendance'][day_abbrev] = True
+            # Set status: True for present, False for absent, null/undefined for unmarked
+            if status:
+                status_upper = status.upper()
+                if status_upper in ['PRESENT', 'PAID_LEAVE', 'HALF_DAY']:
+                    weekly_attendance[employee_id]['weeklyAttendance'][day_abbrev] = True
+                elif status_upper == 'ABSENT':
+                    weekly_attendance[employee_id]['weeklyAttendance'][day_abbrev] = False
+                # UNMARKED or other statuses remain as null/undefined (not set)
 
         # Cache the result for 1 hour (cache per day)
         # Cache will be invalidated when attendance is updated for this date
@@ -5159,13 +5164,13 @@ class DailyAttendanceViewSet(viewsets.ModelViewSet):
             weekly_attendance[employee_id] = {
                 'name': name,
                 'weeklyAttendance': {
-                    'M': False,
-                    'Tu': False,
-                    'W': False,
-                    'Th': False,
-                    'F': False,
-                    'Sa': False,
-                    'Su': False
+                    'M': None,
+                    'Tu': None,
+                    'W': None,
+                    'Th': None,
+                    'F': None,
+                    'Sa': None,
+                    'Su': None
                 }
             }
         
@@ -5199,9 +5204,14 @@ class DailyAttendanceViewSet(viewsets.ModelViewSet):
             day_abbrev = day_abbrev_map.get(day_name, day_name[:2])  # Use unique abbreviation
             status = getattr(record, 'attendance_status', None) or getattr(record, 'status', None)
             
-            # Set to True if present, paid_leave, or half_day
-            if status and status.lower() in ['present', 'paid_leave', 'half_day']:
-                weekly_attendance[employee_id]['weeklyAttendance'][day_abbrev] = True
+            # Set status: True for present, False for absent, null/undefined for unmarked
+            if status:
+                status_upper = status.upper()
+                if status_upper in ['PRESENT', 'PAID_LEAVE', 'HALF_DAY']:
+                    weekly_attendance[employee_id]['weeklyAttendance'][day_abbrev] = True
+                elif status_upper == 'ABSENT':
+                    weekly_attendance[employee_id]['weeklyAttendance'][day_abbrev] = False
+                # UNMARKED or other statuses remain as null/undefined (not set)
 
         # Cache the result for 1 hour (cache per day)
         # Cache will be invalidated when attendance is updated for this date
@@ -5603,7 +5613,7 @@ class DailyAttendanceViewSet(viewsets.ModelViewSet):
         # Aggregate attendance
         # --------------------------------------------------
         step_start = time.time()
-        aggregated = defaultdict(lambda: {'present_days': 0.0, 'absent_days': 0.0, 'unmarked_days': 0.0, 'ot_hours': 0.0, 'late_minutes': 0, 'holiday_days': 0, 'data_sources': [], 'records_count': 0})
+        aggregated = defaultdict(lambda: {'present_days': 0.0, 'absent_days': 0.0, 'unmarked_days': 0.0, 'ot_hours': 0.0, 'late_minutes': 0, 'holiday_days': 0, 'weekly_penalty_days': 0.0, 'data_sources': [], 'records_count': 0})
         total_working_days = 0  # Used later for absent calculation
 
         if use_daily_data:
@@ -5711,6 +5721,67 @@ class DailyAttendanceViewSet(viewsets.ModelViewSet):
                     
             timing_breakdown['daily_data_processing_ms'] = round((time.time() - process_start) * 1000, 2)
             timing_breakdown['daily_attendance_count'] = len(aggregated)
+
+            # STEP 1.5: Get weekly penalty and bonus days from MonthlyAttendanceSummary for the date range
+            # This ensures penalty/bonus days are included even when using daily data
+            from datetime import date as _date
+            import calendar
+            monthly_summary_penalty_start = time.time()
+            months_in_range = set()
+            current = start_date_obj
+            while current <= end_date_obj:
+                months_in_range.add((current.year, current.month))
+                # Move to next month
+                if current.month == 12:
+                    current = _date(current.year + 1, 1, 1)
+                else:
+                    current = _date(current.year, current.month + 1, 1)
+            
+            if months_in_range:
+                # Build OR filter for all months in range
+                month_filter = Q()
+                for y, m in months_in_range:
+                    month_filter |= Q(year=y, month=m)
+                
+                # Aggregate penalty/bonus days by employee_id (sum across all months in range)
+                # IMPORTANT: Query ALL employees in MonthlyAttendanceSummary, not just those in aggregated
+                # This ensures we get penalty/bonus days even if employee has no DailyAttendance in range
+                from django.db.models import Sum
+                monthly_penalty_qs = MonthlyAttendanceSummary.objects.filter(
+                    tenant=tenant
+                ).filter(month_filter).values('employee_id').annotate(
+                    total_penalty=Sum('weekly_penalty_days')
+                )
+                
+                # Debug: Log query details
+                logger.debug(f"📊 Querying MonthlyAttendanceSummary for months {months_in_range}")
+                logger.debug(f"📊 Month filter: {month_filter}")
+                
+                # Debug: Log query results
+                penalty_records_count = 0
+                total_records_found = 0
+                for record in monthly_penalty_qs:
+                    total_records_found += 1
+                    emp_id = record['employee_id']
+                    # Ensure employee is in aggregated dict (create if not exists)
+                    if emp_id not in aggregated:
+                        aggregated[emp_id] = {'present_days': 0.0, 'absent_days': 0.0, 'unmarked_days': 0.0, 'ot_hours': 0.0, 'late_minutes': 0, 'holiday_days': 0, 'weekly_penalty_days': 0.0, 'data_sources': [], 'records_count': 0}
+                    
+                    agg_data = aggregated[emp_id]
+                    penalty_val = float(record.get('total_penalty') or 0)
+                    agg_data['weekly_penalty_days'] += penalty_val
+                    if penalty_val > 0:
+                        penalty_records_count += 1
+                        logger.info(f"📊 Added penalty for {emp_id}: penalty={penalty_val}")
+                    else:
+                        logger.debug(f"📊 Found record for {emp_id} but values are 0: penalty={penalty_val}")
+                
+                if penalty_records_count > 0:
+                    logger.info(f"📊 Found {penalty_records_count} employees with penalty days in MonthlyAttendanceSummary (out of {total_records_found} total records)")
+                else:
+                    logger.warning(f"📊 No penalty days found in MonthlyAttendanceSummary for months {months_in_range}. Found {total_records_found} MonthlyAttendanceSummary records but all had 0 values.")
+            
+            timing_breakdown['monthly_penalty_query_ms'] = round((time.time() - monthly_summary_penalty_start) * 1000, 2)
 
             # STEP 2: Also check Attendance model (Excel uploads) for the date range
             # This handles cases where some months have Excel data and others have logged data
@@ -5904,7 +5975,7 @@ class DailyAttendanceViewSet(viewsets.ModelViewSet):
             
             monthly_summary_qs = MonthlyAttendanceSummary.objects.filter(
                 tenant=tenant
-            ).filter(monthly_summary_filter).values('employee_id', 'year', 'month', 'present_days', 'ot_hours', 'late_minutes')
+            ).filter(monthly_summary_filter).values('employee_id', 'year', 'month', 'present_days', 'ot_hours', 'late_minutes', 'weekly_penalty_days')
             
             # Create a set to track which (employee_id, year, month) combinations we got from MonthlyAttendanceSummary
             summary_keys = set()
@@ -5922,6 +5993,8 @@ class DailyAttendanceViewSet(viewsets.ModelViewSet):
                     agg_data['present_days'] += float(record['present_days'])
                     agg_data['ot_hours'] += float(record['ot_hours'])
                     agg_data['late_minutes'] += record['late_minutes']
+                    agg_data['weekly_penalty_days'] += float(record.get('weekly_penalty_days') or 0)
+                    # Sunday bonus already included in present_days (Sundays are marked as PRESENT)
                     # Track that this employee has attendance log data
                     if 'attendance_log' not in agg_data['data_sources']:
                         agg_data['data_sources'].append('attendance_log')
@@ -6062,6 +6135,10 @@ class DailyAttendanceViewSet(viewsets.ModelViewSet):
             # This is handled per employee in the final response building
             total_working_days = 0  # Will be calculated per employee
 
+        # Note: Penalty/bonus days are read from MonthlyAttendanceSummary only (not CalculatedSalary)
+        # This is done in the MonthlyAttendanceSummary query above for stored sources
+        # and in the custom date range section above for daily data
+
         timing_breakdown['total_aggregation_ms'] = round((time.time() - step_start) * 1000, 2)
 
         # --------------------------------------------------
@@ -6071,7 +6148,7 @@ class DailyAttendanceViewSet(viewsets.ModelViewSet):
         attendance_records = []
         
         # OPTIMIZATION: Pre-calculate common values to avoid repeated operations
-        default_data = {'present_days': 0.0, 'absent_days': 0.0, 'unmarked_days': 0.0, 'ot_hours': 0.0, 'late_minutes': 0, 'holiday_days': 0, 'data_sources': [], 'records_count': 0}
+        default_data = {'present_days': 0.0, 'absent_days': 0.0, 'unmarked_days': 0.0, 'ot_hours': 0.0, 'late_minutes': 0, 'holiday_days': 0, 'weekly_penalty_days': 0.0, 'data_sources': [], 'records_count': 0}
         
         # Preload Excel Attendance working days for selected months for all employees (fast path)
         attendance_working_days_by_emp_month = {}
@@ -6455,6 +6532,22 @@ class DailyAttendanceViewSet(viewsets.ModelViewSet):
                     # Calculate: working days that have no attendance record
                     unmarked_days_value = max(0, net_working_days - data['present_days'] - data['absent_days'])
             
+            # Calculate penalty days: Get existing weekly penalty days from aggregated data
+            weekly_penalty_days = float(data.get('weekly_penalty_days', 0) or 0)
+            
+            # NEW: Add penalty day if absent_days >= threshold (similar to bonus days)
+            # This is in addition to weekly penalty days
+            try:
+                absent_penalty_enabled = getattr(tenant, 'weekly_absent_penalty_enabled', False)
+                absent_threshold = getattr(tenant, 'weekly_absent_threshold', 4) or 4
+                
+                if absent_penalty_enabled and absent_days >= absent_threshold:
+                    # Add 1 penalty day if absent days meet or exceed threshold
+                    weekly_penalty_days += 1.0
+                    logger.debug(f"📊 Added penalty day for {emp_id}: absent_days={absent_days} >= threshold={absent_threshold}")
+            except Exception as e:
+                logger.warning(f"Error checking absent penalty threshold for {emp_id}: {e}")
+            
             attendance_records.append({
                 'id': record_id,
                 'employee_id': emp_id,
@@ -6474,6 +6567,8 @@ class DailyAttendanceViewSet(viewsets.ModelViewSet):
                 'unmarked_days': round(unmarked_days_value, 1),
                 'total_working_days': net_working_days,  # Net working days (after holidays)
                 'holiday_days': holiday_count,
+                'weekly_penalty_days': round(weekly_penalty_days, 1),
+                # Sunday bonus already included in present_days (Sundays are marked as PRESENT)
                 'attendance_percentage': round(attendance_percentage, 1),
                 'total_ot_hours': round(data['ot_hours'], 2),
                 'total_late_minutes': data['late_minutes'],

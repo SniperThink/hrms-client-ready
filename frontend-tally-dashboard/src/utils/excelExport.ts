@@ -35,6 +35,9 @@ export interface PayrollData {
   present_days: number;
   absent_days: number;
   off_days?: number; // Off days for the employee
+  holiday_days?: number; // Paid holidays in the period
+  weekly_penalty_days?: number; // Weekly absent penalty days applied
+  sunday_bonus_days?: number;   // Bonus Sundays counted as present
   ot_hours: number;
   late_minutes: number;
   gross_salary: number;
@@ -138,6 +141,8 @@ export const exportPayrollToExcel = (data: PayrollData[], fileName: string = 'pa
     'Present Days',
     'Absent Days',
     'Off Days',
+    'Holiday Days',
+    'Penalty Days',
     'OT Hours',
     'OT Charges',
     'Late Minutes',
@@ -168,6 +173,8 @@ export const exportPayrollToExcel = (data: PayrollData[], fileName: string = 'pa
       item.present_days,
       item.absent_days,
       item.off_days || 0, // Off days
+      item.holiday_days ?? 0,
+      item.weekly_penalty_days ?? 0,
       item.ot_hours,
       item.ot_charges,
       item.late_minutes,
@@ -199,6 +206,9 @@ export const exportPayrollToExcel = (data: PayrollData[], fileName: string = 'pa
     { wch: 12 }, // Present Days
     { wch: 12 }, // Absent Days
     { wch: 10 }, // Off Days
+    { wch: 12 }, // Holiday Days
+    { wch: 16 }, // Weekly Penalty Days
+    { wch: 16 }, // Sunday Bonus Days
     { wch: 10 }, // OT Hours
     { wch: 12 }, // OT Charges
     { wch: 12 }, // Late Minutes

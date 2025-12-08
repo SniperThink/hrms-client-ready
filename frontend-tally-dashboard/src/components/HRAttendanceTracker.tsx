@@ -28,6 +28,8 @@ interface AttendanceRecord {
   absent_days: number;
   unmarked_days?: number;
   holiday_days?: number;
+  weekly_penalty_days?: number;
+  sunday_bonus_days?: number;
   status?: string;
   attendance_percentage?: number;
   ot_hours: string | number;
@@ -49,6 +51,8 @@ interface AggregatedRecord {
   absent_days: number;
   unmarked_days?: number;
   holiday_days?: number;
+  weekly_penalty_days?: number;
+  sunday_bonus_days?: number;
   status?: string;
   attendance_percentage?: number;
   ot_hours: number;
@@ -65,6 +69,8 @@ const HRAttendanceTracker: React.FC = () => {
   const [loadingMore, setLoadingMore] = useState<boolean>(false);
   const [error, setError] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
+  const [weeklyAbsentPenaltyEnabled, setWeeklyAbsentPenaltyEnabled] = useState<boolean>(false);
+  const [sundayBonusEnabled, setSundayBonusEnabled] = useState<boolean>(false);
   const [filterType, setFilterType] = useState<FilterType>('custom_month');
   const [selectedDepartment, setSelectedDepartment] = useState<string>('all');
   const [departments, setDepartments] = useState<string[]>([]);
@@ -143,6 +149,26 @@ const HRAttendanceTracker: React.FC = () => {
       }
     };
     loadDepartments();
+  }, []);
+
+  // Fetch salary config to determine if penalty/bonus columns should be shown
+  useEffect(() => {
+    const loadSalaryConfig = async () => {
+      try {
+        const response = await apiCall('/api/salary-config/', { method: 'GET' });
+        if (response && response.ok) {
+          const data = await response.json();
+          const penaltyEnabled = !!data.weekly_absent_penalty_enabled;
+          const bonusEnabled = !!data.sunday_bonus_enabled;
+          setWeeklyAbsentPenaltyEnabled(penaltyEnabled);
+          setSundayBonusEnabled(bonusEnabled);
+          logger.info(`📊 Salary config loaded: penalty=${penaltyEnabled}, bonus=${bonusEnabled}`);
+        }
+      } catch (error) {
+        logger.warn('Failed to load salary config for attendance tracker', error);
+      }
+    };
+    loadSalaryConfig();
   }, []);
 
   // Function to get unique months from data
@@ -255,6 +281,13 @@ const HRAttendanceTracker: React.FC = () => {
       }
       
       const newRecords = apiResponse.results || [];
+      
+      // Debug: Check for penalty/bonus days in the response
+      const recordsWithPenalty = newRecords.filter((r: any) => r.weekly_penalty_days > 0);
+      if (recordsWithPenalty.length > 0) {
+        logger.info(`📊 Found ${recordsWithPenalty.length} records with penalty days`);
+      }
+      
       const transformedData: AttendanceRecord[] = transformStandardToAttendanceRecords(newRecords);
       
       // Check if backend served from cache
@@ -544,6 +577,8 @@ const HRAttendanceTracker: React.FC = () => {
       absent_days: record.absent_days || 0,
       unmarked_days: record.unmarked_days || 0,
       holiday_days: record.holiday_days || 0,
+      weekly_penalty_days: record.weekly_penalty_days || 0,  // NEW: Include penalty days
+      sunday_bonus_days: record.sunday_bonus_days || 0,  // NEW: Include bonus days
       status: record.status || record.attendance_status,
       // Handle both 'ot_hours' and 'total_ot_hours'
       ot_hours: record.ot_hours || record.total_ot_hours || 0,
@@ -567,6 +602,8 @@ const HRAttendanceTracker: React.FC = () => {
       absent_days: record.absent_days,
       unmarked_days: record.unmarked_days || 0,
       holiday_days: record.holiday_days || 0,
+      weekly_penalty_days: record.weekly_penalty_days || 0,  // NEW: Include penalty days
+      sunday_bonus_days: record.sunday_bonus_days || 0,  // NEW: Include bonus days
       status: record.status,
     attendance_percentage: record.attendance_percentage,
     ot_hours: typeof record.ot_hours === 'string' ? parseFloat(record.ot_hours) || 0 : record.ot_hours || 0,
@@ -810,7 +847,7 @@ const HRAttendanceTracker: React.FC = () => {
             </div>
             <div className="bg-white shadow rounded-lg p-4 text-center">
               <div className="text-sm text-gray-500">Average Present %</div>
-              <div className="text-2xl font-semibold text-[#0B5E59]">{`${avgPresentPerc.toFixed(1)}%`}</div>
+              <div className="text-2xl font-semibold text-[#0B5E59]">{`${avgPresentPerc.toFixed(1)}% ≈ ${totalEmployees > 0 ? ((avgPresentPerc / 100) * (totalWorkingDaysAgg / totalEmployees)).toFixed(1) : 0} days`}</div>
             </div>
           </>
         )}
@@ -847,6 +884,9 @@ const HRAttendanceTracker: React.FC = () => {
                       <th className="text-left text-sm font-medium text-gray-600 px-4 py-3 bg-gray-50">Present Days</th>
                       <th className="text-left text-sm font-medium text-gray-600 px-4 py-3 bg-gray-50">Absent Days</th>
                       <th className="text-left text-sm font-medium text-gray-600 px-4 py-3 bg-gray-50">Unmarked Days</th>
+                      {weeklyAbsentPenaltyEnabled && (
+                        <th className="text-left text-sm font-medium text-gray-600 px-4 py-3 bg-gray-50">Penalty Days</th>
+                      )}
                       <th className="text-left text-sm font-medium text-gray-600 px-4 py-3 bg-gray-50">OT Hours</th>
                       <th className="text-left text-sm font-medium text-gray-600 px-4 py-3 bg-gray-50">Late Minutes</th>
                       <th className="text-left text-sm font-medium text-gray-600 px-4 py-3 bg-gray-50">Attendance %</th>
@@ -857,7 +897,7 @@ const HRAttendanceTracker: React.FC = () => {
               <tbody className="divide-y divide-gray-100">
                 {finalData.length === 0 ? (
                   <tr>
-                    <td colSpan={filterType === 'one_day' ? 6 : 14} className="px-4 py-6 text-center text-gray-500">
+                    <td colSpan={filterType === 'one_day' ? 6 : (14 + (weeklyAbsentPenaltyEnabled ? 1 : 0))} className="px-4 py-6 text-center text-gray-500">
                       {filterType === 'one_day' 
                         ? 'No attendance records found for the selected date.' 
                         : attendanceStatus?.is_active 
@@ -939,6 +979,12 @@ const HRAttendanceTracker: React.FC = () => {
                             <td className="px-4 py-3 text-sm">{record.present_days.toFixed(1)}</td>
                             <td className="px-4 py-3 text-sm">{absentDays.toFixed(1)}</td>
                             <td className="px-4 py-3 text-sm">{unmarkedDays}</td>
+                            {weeklyAbsentPenaltyEnabled && (
+                              <td className="px-4 py-3 text-sm">{(record.weekly_penalty_days || 0).toFixed(1)}</td>
+                            )}
+                            {sundayBonusEnabled && (
+                              <td className="px-4 py-3 text-sm">{(record.sunday_bonus_days || 0).toFixed(1)}</td>
+                            )}
                             <td className="px-4 py-3 text-sm">{(typeof record.ot_hours === 'string' ? parseFloat(record.ot_hours) || 0 : record.ot_hours || 0).toFixed(1)}</td>
                             <td className="px-4 py-3 text-sm">{record.late_minutes.toFixed(0)}</td>
                             <td className="px-4 py-3 text-sm">
