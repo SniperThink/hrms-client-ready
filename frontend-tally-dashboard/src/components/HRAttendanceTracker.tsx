@@ -29,6 +29,7 @@ interface AttendanceRecord {
   unmarked_days?: number;
   holiday_days?: number;
   weekly_penalty_days?: number;
+  employee_weekly_rules_enabled?: boolean;
   status?: string;
   attendance_percentage?: number;
   ot_hours: string | number;
@@ -51,6 +52,7 @@ interface AggregatedRecord {
   unmarked_days?: number;
   holiday_days?: number;
   weekly_penalty_days?: number;
+  employee_weekly_rules_enabled?: boolean;
   status?: string;
   attendance_percentage?: number;
   ot_hours: number;
@@ -973,7 +975,9 @@ const HRAttendanceTracker: React.FC = () => {
                             <td className="px-4 py-3 text-sm">{absentDays.toFixed(1)}</td>
                             <td className="px-4 py-3 text-sm">{unmarkedDays}</td>
                             {weeklyAbsentPenaltyEnabled && (
-                              <td className="px-4 py-3 text-sm">{(record.weekly_penalty_days || 0).toFixed(1)}</td>
+                              <td className="px-4 py-3 text-sm">
+                                {(record as any).employee_weekly_rules_enabled === false ? 'NA' : (record.weekly_penalty_days || 0).toFixed(1)}
+                              </td>
                             )}
                             <td className="px-4 py-3 text-sm">{(typeof record.ot_hours === 'string' ? parseFloat(record.ot_hours) || 0 : record.ot_hours || 0).toFixed(1)}</td>
                             <td className="px-4 py-3 text-sm">{record.late_minutes.toFixed(0)}</td>

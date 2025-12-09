@@ -55,7 +55,7 @@ class EmployeeProfileSerializer(serializers.ModelSerializer):
             'shift_start_time', 'shift_end_time', 'date_of_birth', 'marital_status',
             'gender', 'nationality', 'address', 'city', 'state', 'tds_percentage',
             'ot_charge_per_hour', 'off_monday', 'off_tuesday', 'off_wednesday',
-            'off_thursday', 'off_friday', 'off_saturday', 'off_sunday',
+            'off_thursday', 'off_friday', 'off_saturday', 'off_sunday', 'weekly_rules_enabled',
             'created_at', 'updated_at'
         ]
         read_only_fields = ['employee_id', 'created_at', 'updated_at']
@@ -128,7 +128,7 @@ class EmployeeFormSerializer(serializers.ModelSerializer):
             'location_branch', 'shift_start_time', 'shift_end_time', 
             'basic_salary', 'tds_percentage', 'ot_charge_per_hour', 'ot_calculation',
             'off_monday', 'off_tuesday', 'off_wednesday', 'off_thursday',
-            'off_friday', 'off_saturday', 'off_sunday', 'is_active'
+            'off_friday', 'off_saturday', 'off_sunday', 'weekly_rules_enabled', 'is_active'
         ]
         
     def get_ot_calculation(self, obj):

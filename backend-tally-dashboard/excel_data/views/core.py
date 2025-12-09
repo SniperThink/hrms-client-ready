@@ -5590,12 +5590,12 @@ class DailyAttendanceViewSet(viewsets.ModelViewSet):
                 'employee_id', 'first_name', 'last_name', 'department', 'designation',
                 'date_of_joining', 'shift_start_time', 'shift_end_time',
                 'off_monday', 'off_tuesday', 'off_wednesday', 'off_thursday', 
-                'off_friday', 'off_saturday', 'off_sunday'
+                'off_friday', 'off_saturday', 'off_sunday', 'weekly_rules_enabled'
             ).values(
                 'employee_id', 'first_name', 'last_name', 'department', 'designation',
                 'date_of_joining', 'shift_start_time', 'shift_end_time',
                 'off_monday', 'off_tuesday', 'off_wednesday', 'off_thursday', 
-                'off_friday', 'off_saturday', 'off_sunday'
+                'off_friday', 'off_saturday', 'off_sunday', 'weekly_rules_enabled'
             )
             
             employees_dict = {emp['employee_id']: emp for emp in employees_qs}
@@ -6566,6 +6566,7 @@ class DailyAttendanceViewSet(viewsets.ModelViewSet):
                 'total_working_days': net_working_days,  # Net working days (after holidays)
                 'holiday_days': holiday_count,
                 'weekly_penalty_days': round(weekly_penalty_days, 1),
+                'employee_weekly_rules_enabled': employees_dict.get(emp_id, {}).get('weekly_rules_enabled', True) if emp_id in employees_dict else True,
                 # Sunday bonus already included in present_days (Sundays are marked as PRESENT)
                 'attendance_percentage': round(attendance_percentage, 1),
                 'total_ot_hours': round(data['ot_hours'], 2),

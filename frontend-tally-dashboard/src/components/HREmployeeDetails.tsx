@@ -60,6 +60,8 @@ interface EmployeeProfileData {
   off_friday?: boolean;
   off_saturday?: boolean;
   off_sunday?: boolean;
+  is_active?: boolean;
+  weekly_rules_enabled?: boolean;
 }
 
 const EMPLOYMENT_TYPE_MAP: Record<string, string> = {
@@ -98,6 +100,7 @@ const HREmployeeDetails: React.FC = () => {
   const [attendanceRecords, setAttendanceRecords] = useState<AttendanceRecord[]>([]);
   const [averageDaysPerMonth, setAverageDaysPerMonth] = useState<number>(30.4); // Default fallback
   const [breakTime, setBreakTime] = useState<number>(0.5); // Default fallback (30 minutes)
+  const [tenantWeeklyRulesEnabled, setTenantWeeklyRulesEnabled] = useState<boolean>(false);
   const [loading, setLoading] = useState(true);
   const [initialLoad, setInitialLoad] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -162,7 +165,7 @@ const HREmployeeDetails: React.FC = () => {
   // Function to load salary config (can be called multiple times)
   const loadSalaryConfig = async () => {
     try {
-      const data = await apiRequest('/api/salary-config/', { method: 'GET' }) as { average_days_per_month?: number; break_time?: number };
+      const data = await apiRequest('/api/salary-config/', { method: 'GET' }) as { average_days_per_month?: number; break_time?: number; weekly_absent_penalty_enabled?: boolean };
       logger.info('📊 Salary config loaded:', data);
       if (data && data.average_days_per_month !== undefined) {
         logger.info('✅ Setting averageDaysPerMonth to:', data.average_days_per_month);
@@ -177,6 +180,9 @@ const HREmployeeDetails: React.FC = () => {
       } else {
         logger.warn('⚠️ break_time not found, using default 0.5');
         setBreakTime(0.5); // Default to 30 minutes
+      }
+      if (data && data.weekly_absent_penalty_enabled !== undefined) {
+        setTenantWeeklyRulesEnabled(!!data.weekly_absent_penalty_enabled);
       }
     } catch (error) {
       // Use default value if fetch fails
@@ -614,9 +620,9 @@ const HREmployeeDetails: React.FC = () => {
         newValue = formatTimeToHHMM(newValue as string);
         oldValue = formatTimeToHHMM(oldValue as string);
       }
-      // Handle boolean fields differently (off_days)
+      // Handle boolean fields differently (off_days, weekly_rules_enabled, is_active)
       // For booleans, we need to include both true and false values
-      if (k.startsWith('off_')) {
+      if (k.startsWith('off_') || k === 'weekly_rules_enabled' || k === 'is_active') {
         // Check if value changed (handle both true and false explicitly)
         if (newValue !== oldValue && typeof newValue === 'boolean') {
           (updatedFields as Record<string, unknown>)[k] = newValue;
@@ -1466,6 +1472,38 @@ const HREmployeeDetails: React.FC = () => {
                   })}
                 </div>
               </div>
+              {tenantWeeklyRulesEnabled && (
+                <div className="col-span-2 mt-4">
+                  <div className="flex items-center">
+                    <input
+                      type="checkbox"
+                      id="weekly_rules_enabled"
+                      name="weekly_rules_enabled"
+                      checked={isEditing 
+                        ? (editData?.weekly_rules_enabled !== undefined 
+                            ? editData.weekly_rules_enabled 
+                            : (employeeData?.weekly_rules_enabled ?? true))
+                        : (employeeData?.weekly_rules_enabled ?? true)}
+                      onChange={(e) => {
+                        if (isEditing) {
+                          setEditData(prev => ({ ...prev, weekly_rules_enabled: e.target.checked }));
+                        }
+                      }}
+                      disabled={!isEditing}
+                      className={`h-4 w-4 text-teal-600 border-gray-300 rounded focus:ring-teal-500 ${
+                        isEditing 
+                          ? 'cursor-pointer' 
+                          : 'cursor-not-allowed opacity-50'
+                      }`}
+                    />
+                    <label htmlFor="weekly_rules_enabled" className={`ml-2 text-sm ${
+                      isEditing ? 'text-gray-700 cursor-pointer' : 'text-gray-500 cursor-not-allowed'
+                    }`}>
+                      Enable Weekly Rules (for penalty days calculation)
+                    </label>
+                  </div>
+                </div>
+              )}
             </div>
           )}
 

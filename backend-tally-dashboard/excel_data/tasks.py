@@ -148,9 +148,16 @@ def cleanup_old_chart_data(days=90):
 
 def mark_sunday_bonus_background(tenant_id, employee_id, attendance_date):
     """
-    Background thread function to automatically mark upcoming Sunday as present
-    if employee meets weekly present threshold.
+    Background thread function to automatically mark employee's first configured off day 
+    (including Sunday if configured) as present if employee meets weekly present threshold.
     
+    Logic:
+    - Checks present days Mon-Sat in the week
+    - If threshold is met, finds the first configured off day (Mon-Sun, including Sunday if configured)
+    - Marks that off day as PRESENT (bonus)
+    - If no off days configured, skips marking
+    
+    If employee has multiple off days in the week, marks the first off day.
     This runs in a separate thread so it doesn't block the main request.
     """
     import threading
@@ -167,14 +174,14 @@ def mark_sunday_bonus_background(tenant_id, employee_id, attendance_date):
             from django.db import transaction
             from django.db import connection
             
-            logger.info(f"🔄 [Background] Starting Sunday bonus check for {employee_id} on {attendance_date}")
+            logger.info(f"🔄 [Background] Starting off day bonus check for {employee_id} on {attendance_date}")
             
             tenant = Tenant.objects.get(id=tenant_id)
             
-            # Check if Sunday bonus is enabled
+            # Check if Sunday bonus is enabled (settings name kept for backward compatibility)
             sunday_bonus_enabled = getattr(tenant, 'sunday_bonus_enabled', False)
             if not sunday_bonus_enabled:
-                logger.debug(f"⏭️ [Background] Sunday bonus disabled for tenant {tenant_id}")
+                logger.debug(f"⏭️ [Background] Off day bonus disabled for tenant {tenant_id}")
                 return
             
             # Get absent threshold and calculate present threshold (complement)
@@ -219,21 +226,42 @@ def mark_sunday_bonus_background(tenant_id, employee_id, attendance_date):
             
             logger.info(f"📊 [Background] Employee {employee_id}: {present_count} present days in week Mon-Sat (threshold: {present_threshold})")
             
-            # If present count meets or exceeds threshold, mark upcoming Sunday as present
+            # If present count meets or exceeds threshold, mark employee's configured off day as present
             if present_count >= present_threshold:
-                upcoming_sunday = week_end  # Sunday of this week
+                # Find employee's off days configuration
+                off_days_map = {
+                    0: employee.off_monday,    # Monday
+                    1: employee.off_tuesday,   # Tuesday
+                    2: employee.off_wednesday, # Wednesday
+                    3: employee.off_thursday,  # Thursday
+                    4: employee.off_friday,    # Friday
+                    5: employee.off_saturday,  # Saturday
+                    6: employee.off_sunday,    # Sunday
+                }
                 
-                # Check if Sunday is in the future or today
+                # Find the first configured off day in this week (Monday to Sunday - includes Sunday if configured)
+                # Loop through all 7 days, find first off day that's today or future
                 today = date.today()
-                if upcoming_sunday >= today:
-                    # Always mark Sunday as PRESENT when threshold is met, regardless of:
-                    # - Whether it's an off day or not
-                    # - What the existing status is (will override ABSENT, OFF, UNMARKED, etc.)
-                    # - Only skip if already marked as PRESENT
+                target_off_day = None
+                for day_offset in range(7):  # Check all 7 days (0=Mon, 6=Sun)
+                    check_date = week_start + timedelta(days=day_offset)
+                    weekday = check_date.weekday()  # 0=Monday, 6=Sunday
+                    
+                    # Check if this day is configured as an off day for the employee
+                    if off_days_map.get(weekday, False):
+                        # Only mark if it's today or in the future (don't mark past dates)
+                        if check_date >= today:
+                            target_off_day = check_date
+                            day_name = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'][weekday]
+                            logger.debug(f"📅 [Background] Found first off day: {day_name} {check_date} (weekday: {weekday})")
+                            break  # Use the first off day found
+                
+                if target_off_day:
+                    # Check existing attendance record
                     existing = DailyAttendance.objects.filter(
                         tenant=tenant,
                         employee_id=employee_id,
-                        date=upcoming_sunday
+                        date=target_off_day
                     ).first()
                     
                     # Only skip if already marked as PRESENT, otherwise always mark as PRESENT
@@ -242,31 +270,38 @@ def mark_sunday_bonus_background(tenant_id, employee_id, attendance_date):
                             DailyAttendance.objects.update_or_create(
                                 tenant=tenant,
                                 employee_id=employee_id,
-                                date=upcoming_sunday,
+                                date=target_off_day,
                                 defaults={
                                     'employee_name': f"{employee.first_name} {employee.last_name}".strip(),
                                     'department': employee.department or 'General',
                                     'designation': employee.designation or '',
                                     'employment_type': employee.employment_type or 'FULL_TIME',
-                                    'attendance_status': 'PRESENT',  # Always mark as PRESENT for Sunday bonus
+                                    'attendance_status': 'PRESENT',  # Mark as PRESENT for bonus
                                     'ot_hours': 0,
                                     'late_minutes': 0,
                                 }
                             )
+                        
+                        day_name = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'][target_off_day.weekday()]
                         logger.info(
-                            f"✅ [Background] Marked Sunday {upcoming_sunday} as PRESENT (bonus) "
+                            f"✅ [Background] Marked {day_name} {target_off_day} as PRESENT (bonus) "
                             f"for {employee_id} - {present_count} present days in week (threshold: {present_threshold})"
                             f" - Overriding existing status: {existing.attendance_status if existing else 'None'}"
                         )
                     else:
-                        logger.debug(f"⏭️ [Background] Sunday {upcoming_sunday} already marked as PRESENT, skipping")
+                        logger.debug(f"⏭️ [Background] Off day {target_off_day} already marked as PRESENT, skipping")
                 else:
-                    logger.debug(f"⏭️ [Background] Sunday {upcoming_sunday} is in the past, skipping")
+                    # No off days configured or no future off days found - skip bonus marking
+                    configured_off_days = [day for day, is_off in off_days_map.items() if is_off]
+                    if not configured_off_days:
+                        logger.debug(f"⏭️ [Background] No off days configured for {employee_id}, skipping bonus marking")
+                    else:
+                        logger.debug(f"⏭️ [Background] No future off days found in this week for {employee_id}, skipping bonus marking")
             else:
                 logger.debug(f"⏭️ [Background] Present count ({present_count}) < threshold ({present_threshold}), no bonus")
             
         except Exception as e:
-            logger.error(f"❌ [Background] Failed to mark Sunday bonus for {employee_id}: {e}", exc_info=True)
+            logger.error(f"❌ [Background] Failed to mark off day bonus for {employee_id}: {e}", exc_info=True)
         finally:
             # Close database connection when thread finishes
             connection.close()
@@ -274,5 +309,5 @@ def mark_sunday_bonus_background(tenant_id, employee_id, attendance_date):
     # Run in background thread
     thread = threading.Thread(target=_mark_sunday_bonus, daemon=True)
     thread.start()
-    logger.debug(f"🚀 [Background] Started thread for Sunday bonus check: {employee_id}")
+    logger.debug(f"🚀 [Background] Started thread for off day bonus check: {employee_id}")
 

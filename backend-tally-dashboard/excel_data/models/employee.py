@@ -66,6 +66,13 @@ class EmployeeProfile(TenantAwareModel):
     # Date when the employee was marked inactive
     inactive_marked_at = models.DateField(blank=True, null=True)
     ot_charge_per_hour = models.DecimalField(max_digits=10, decimal_places=2, blank=True, null=True)
+    
+    # Weekly rules - employee-specific override
+    # Only applicable if tenant weekly_absent_penalty_enabled is True
+    weekly_rules_enabled = models.BooleanField(
+        default=True,
+        help_text="Enable weekly penalty rules for this employee (only applicable if tenant weekly rules are enabled)"
+    )
 
     class Meta:
         app_label = 'excel_data'

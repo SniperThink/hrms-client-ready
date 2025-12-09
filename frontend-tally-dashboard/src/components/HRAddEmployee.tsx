@@ -48,6 +48,7 @@ interface EmployeeFormState {
 
   // Employee Status
   is_active: boolean;
+  weekly_rules_enabled: boolean;
 }
 
 
@@ -62,6 +63,7 @@ const HRAddEmployee: React.FC = () => {
   const [isOTChargeManuallyEdited, setIsOTChargeManuallyEdited] = useState<boolean>(false);
   const [averageDaysPerMonth, setAverageDaysPerMonth] = useState<number>(30.4); // Default fallback
   const [breakTime, setBreakTime] = useState<number>(0.5); // Default fallback (30 minutes)
+  const [tenantWeeklyRulesEnabled, setTenantWeeklyRulesEnabled] = useState<boolean>(false);
 
   // Dropdown options state
   const [dropdownOptions, setDropdownOptions] = useState({
@@ -218,6 +220,7 @@ const HRAddEmployee: React.FC = () => {
 
     // Employee Status
     is_active: true,
+    weekly_rules_enabled: true, // Default to true
   });
 
 
@@ -235,6 +238,10 @@ const HRAddEmployee: React.FC = () => {
             setBreakTime(data.break_time);
           } else {
             setBreakTime(0.5); // Default to 30 minutes if not provided
+          }
+          // Check if tenant weekly rules are enabled
+          if (data && data.weekly_absent_penalty_enabled !== undefined) {
+            setTenantWeeklyRulesEnabled(!!data.weekly_absent_penalty_enabled);
           }
         }
       } catch (error) {
@@ -750,7 +757,8 @@ const HRAddEmployee: React.FC = () => {
         off_friday: formData.off_friday,
         off_saturday: formData.off_saturday,
         off_sunday: formData.off_sunday,
-        is_active: formData.is_active
+        is_active: formData.is_active,
+        weekly_rules_enabled: formData.weekly_rules_enabled
       };
 
       // Make the API call to your backend endpoint using apiCall for authentication
@@ -1310,7 +1318,7 @@ const HRAddEmployee: React.FC = () => {
             </div>
             <div className="col-span-2">
               <label className="block text-sm text-gray-600 mb-2">Employee Status</label>
-              <div className="flex items-center">
+              <div className="flex items-center mb-3">
                 <input
                   type="checkbox"
                   id="is_active"
@@ -1323,6 +1331,21 @@ const HRAddEmployee: React.FC = () => {
                   Active Employee (checked = active, unchecked = inactive)
                 </label>
               </div>
+              {tenantWeeklyRulesEnabled && (
+                <div className="flex items-center">
+                  <input
+                    type="checkbox"
+                    id="weekly_rules_enabled"
+                    name="weekly_rules_enabled"
+                    checked={formData.weekly_rules_enabled !== undefined ? formData.weekly_rules_enabled : true}
+                    onChange={(e) => setFormData(prev => ({ ...prev, weekly_rules_enabled: e.target.checked }))}
+                    className="h-4 w-4 text-teal-600 border-gray-300 rounded focus:ring-teal-500"
+                  />
+                  <label htmlFor="weekly_rules_enabled" className="ml-2 text-sm text-gray-600">
+                    Enable Weekly Rules (for penalty days calculation)
+                  </label>
+                </div>
+              )}
             </div>
           </div>
         )}

@@ -1348,6 +1348,7 @@ def payroll_period_detail(request, period_id):
                     'absent_days': float(calc.absent_days),
                     'holiday_days': int(calc.holiday_days),
                     'weekly_penalty_days': float(getattr(calc, 'weekly_penalty_days', 0)),
+                    'employee_weekly_rules_enabled': getattr(employee, 'weekly_rules_enabled', True),
                     'off_days': off_days_count,
                     'raw_present_days': raw_present_days,
                     'extra_paid_days': extra_paid_days,
@@ -2834,17 +2835,22 @@ def calculate_simple_payroll_ultra_fast(request):
                 GROUP BY da.employee_id, date_trunc('week', da.date)
             ),
             -- Weekly rules (penalty only - Sunday bonus handled by marking Sunday as PRESENT)
+            -- Apply penalty only if BOTH tenant weekly rules AND employee weekly rules are enabled
             weekly_rules AS (
                 SELECT
-                    employee_id,
+                    wa.employee_id,
                     SUM(
                         CASE 
-                            WHEN %s::boolean IS TRUE AND absent_days > %s 
+                            WHEN %s::boolean IS TRUE 
+                                AND e.weekly_rules_enabled IS TRUE
+                                AND wa.absent_days > %s 
                             THEN 1 ELSE 0 
                         END
                     ) AS weekly_penalty_days
-                FROM weekly_attendance
-                GROUP BY employee_id
+                FROM weekly_attendance wa
+                INNER JOIN excel_data_employeeprofile e ON wa.employee_id = e.employee_id
+                WHERE e.tenant_id = %s
+                GROUP BY wa.employee_id
             ),
             -- Total advances (all pending)
             total_advances AS (
@@ -2876,6 +2882,7 @@ def calculate_simple_payroll_ultra_fast(request):
                 att.late_minutes,
                 att.uploaded_working_days,
                 COALESCE(wr.weekly_penalty_days, 0) AS weekly_penalty_days,
+                e.weekly_rules_enabled AS employee_weekly_rules_enabled,
                 
                 -- Pre-calculated charges
                 att.ot_hours * otr.ot_rate_per_hour as ot_charges,
@@ -2910,7 +2917,7 @@ def calculate_simple_payroll_ultra_fast(request):
                 year, month_num, tenant.id,  # employee_holidays
                 tenant.id,  # weekly_attendance tenant
                 year, month_num,  # weekly_attendance year/month
-                weekly_absent_enabled, weekly_absent_threshold,  # weekly_rules absent (only penalty)
+                weekly_absent_enabled, weekly_absent_threshold, tenant.id,  # weekly_rules (enabled, threshold, tenant filter)
                 tenant.id,  # total_advances
                 tenant.id   # main WHERE
             ]
@@ -3007,6 +3014,7 @@ def calculate_simple_payroll_ultra_fast(request):
                 'off_days': off_days_count,  # Add off days count
                 'holiday_days': holiday_count,
                 'weekly_penalty_days': weekly_penalty_days,
+                'employee_weekly_rules_enabled': bool(data.get('employee_weekly_rules_enabled', True)),
                 'ot_hours': float(data['ot_hours'] or 0),
                 'late_minutes': int(data['late_minutes'] or 0),
                 'gross_salary': round(gross_salary, 2),

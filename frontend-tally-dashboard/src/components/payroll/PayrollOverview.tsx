@@ -628,7 +628,7 @@ const PayrollOverview: React.FC = () => {
                       </td>
                       {salaryConfig?.weekly_absent_penalty_enabled && (
                         <td className="px-4 py-4 whitespace-nowrap text-sm text-gray-900">
-                          {entry.weekly_penalty_days ?? 0}
+                          {entry.employee_weekly_rules_enabled === false ? 'NA' : (entry.weekly_penalty_days ?? 0)}
                         </td>
                       )}
                       <td className="px-4 py-4 whitespace-nowrap text-sm text-gray-900">{entry.ot_hours || 0}</td>

@@ -609,8 +609,14 @@ class SalaryCalculationService:
             }
         
         # Read tenant-level config with sane fallbacks
-        absent_enabled = getattr(tenant, 'weekly_absent_penalty_enabled', False)
+        tenant_absent_enabled = getattr(tenant, 'weekly_absent_penalty_enabled', False)
         absent_threshold = getattr(tenant, 'weekly_absent_threshold', 4) or 4
+        
+        # Check employee-level override - only apply if tenant weekly rules are enabled
+        employee_weekly_rules_enabled = getattr(employee, 'weekly_rules_enabled', True)
+        
+        # Weekly rules apply only if BOTH tenant and employee have it enabled
+        absent_enabled = tenant_absent_enabled and employee_weekly_rules_enabled
         
         if not absent_enabled:
             return {
