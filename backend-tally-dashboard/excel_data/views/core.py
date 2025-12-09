@@ -4993,6 +4993,26 @@ class AttendanceViewSet(viewsets.ReadOnlyModelViewSet):
             ).only('employee_id', 'first_name', 'last_name')
             employees_dict = {emp.employee_id: emp for emp in employees_qs}
         
+        # Get employee off day configurations for detecting auto-marked bonus days
+        employee_off_days = {}
+        if active_employee_ids:
+            employees_config = EmployeeProfile.objects.filter(
+                tenant=tenant,
+                employee_id__in=active_employee_ids,
+                is_active=True
+            ).only('employee_id', 'off_monday', 'off_tuesday', 'off_wednesday', 
+                   'off_thursday', 'off_friday', 'off_saturday', 'off_sunday')
+            for emp in employees_config:
+                employee_off_days[emp.employee_id] = {
+                    0: emp.off_monday,     # Monday
+                    1: emp.off_tuesday,    # Tuesday
+                    2: emp.off_wednesday,  # Wednesday
+                    3: emp.off_thursday,   # Thursday
+                    4: emp.off_friday,     # Friday
+                    5: emp.off_saturday,   # Saturday
+                    6: emp.off_sunday,     # Sunday
+                }
+        
         # Initialize weekly_attendance for all active employees with all 7 days
         weekly_attendance = {}
         for employee_id in active_employee_ids:
@@ -5007,6 +5027,15 @@ class AttendanceViewSet(viewsets.ReadOnlyModelViewSet):
             weekly_attendance[employee_id] = {
                 'name': name,
                 'weeklyAttendance': {
+                    'M': None,
+                    'Tu': None,
+                    'W': None,
+                    'Th': None,
+                    'F': None,
+                    'Sa': None,
+                    'Su': None
+                },
+                'autoMarkedReasons': {
                     'M': None,
                     'Tu': None,
                     'W': None,
@@ -5033,13 +5062,22 @@ class AttendanceViewSet(viewsets.ReadOnlyModelViewSet):
                 weekly_attendance[employee_id] = {
                     'name': name or str(employee_id),
                     'weeklyAttendance': {
-                        'M': False,
-                        'Tu': False,
-                        'W': False,
-                        'Th': False,
-                        'F': False,
-                        'Sa': False,
-                        'Su': False
+                        'M': None,
+                        'Tu': None,
+                        'W': None,
+                        'Th': None,
+                        'F': None,
+                        'Sa': None,
+                        'Su': None
+                    },
+                    'autoMarkedReasons': {
+                        'M': None,
+                        'Tu': None,
+                        'W': None,
+                        'Th': None,
+                        'F': None,
+                        'Sa': None,
+                        'Su': None
                     }
                 }
 
@@ -5047,11 +5085,26 @@ class AttendanceViewSet(viewsets.ReadOnlyModelViewSet):
             day_abbrev = day_abbrev_map.get(day_name, day_name[:2])  # Use unique abbreviation
             status = getattr(record, 'attendance_status', None) or getattr(record, 'status', None)
             
+            # Check if this is an auto-marked bonus day
+            # Auto-marked days are: PRESENT status on an off day (configured as off for the employee)
+            is_auto_marked = False
+            auto_mark_reason = None
+            if status and status.upper() == 'PRESENT':
+                # Check if this date is an off day for this employee
+                weekday = record.date.weekday()  # 0=Monday, 6=Sunday
+                emp_off_days = employee_off_days.get(employee_id, {})
+                if emp_off_days.get(weekday, False):
+                    # This is an off day that's marked as PRESENT - likely auto-marked as bonus
+                    is_auto_marked = True
+                    auto_mark_reason = "Automatically marked as present due to meeting weekly attendance threshold"
+            
             # Set status: True for present, False for absent, null/undefined for unmarked
             if status:
                 status_upper = status.upper()
                 if status_upper in ['PRESENT', 'PAID_LEAVE', 'HALF_DAY']:
                     weekly_attendance[employee_id]['weeklyAttendance'][day_abbrev] = True
+                    if is_auto_marked:
+                        weekly_attendance[employee_id]['autoMarkedReasons'][day_abbrev] = auto_mark_reason
                 elif status_upper == 'ABSENT':
                     weekly_attendance[employee_id]['weeklyAttendance'][day_abbrev] = False
                 # UNMARKED or other statuses remain as null/undefined (not set)

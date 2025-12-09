@@ -219,7 +219,7 @@ class CalculatedSalaryViewSet(viewsets.ModelViewSet):
                 model = CalculatedSalary
                 fields = [
                     'id', 'payroll_period', 'payroll_period_display', 'employee_id', 'employee_name',
-                    'department', 'basic_salary', 'basic_salary_per_hour', 'basic_salary_per_minute',
+                    'department', 'basic_salary', 'basic_salary_per_hour',
                     'employee_ot_rate', 'employee_tds_rate', 'total_working_days', 'present_days', 
                     'absent_days', 'holiday_days', 'weekly_penalty_days',
                     'ot_hours', 'late_minutes', 'salary_for_present_days', 'ot_charges', 
@@ -3229,7 +3229,7 @@ def save_payroll_period_direct(request):
                 daily_rate = base_salary / Decimal(str(average_days))
                 salary_for_present_days = daily_rate * present_days
                 
-                # Calculate basic_salary_per_hour and basic_salary_per_minute
+                # Calculate basic_salary_per_hour
                 # Get employee shift hours for accurate calculation (from pre-fetched map)
                 employee = employees_map.get(emp_id)
                 if employee:
@@ -3247,10 +3247,8 @@ def save_payroll_period_direct(request):
                     
                     if effective_shift_hours > 0:
                         basic_salary_per_hour = base_salary / (Decimal(str(effective_shift_hours)) * Decimal(str(average_days)))
-                        basic_salary_per_minute = basic_salary_per_hour / Decimal('60')
                     else:
                         basic_salary_per_hour = Decimal('0')
-                        basic_salary_per_minute = Decimal('0')
                     
                     # Use the OT rate from calculation (or calculate if not provided)
                     if ot_rate > 0:
@@ -3260,7 +3258,6 @@ def save_payroll_period_direct(request):
                 else:
                     # Employee not found in pre-fetched map
                     basic_salary_per_hour = Decimal('0')
-                    basic_salary_per_minute = Decimal('0')
                     employee_ot_rate = ot_rate if ot_rate > 0 else Decimal('0')
 
                 if emp_id in existing_map:
@@ -3269,7 +3266,6 @@ def save_payroll_period_direct(request):
                     cs.department = entry.get('department')
                     cs.basic_salary = base_salary
                     cs.basic_salary_per_hour = basic_salary_per_hour
-                    cs.basic_salary_per_minute = basic_salary_per_minute
                     cs.employee_ot_rate = employee_ot_rate
                     cs.employee_tds_rate = tds_percentage
                     cs.total_working_days = working_days
@@ -3303,7 +3299,6 @@ def save_payroll_period_direct(request):
                         department=entry.get('department'),
                         basic_salary=base_salary,
                         basic_salary_per_hour=basic_salary_per_hour,
-                        basic_salary_per_minute=basic_salary_per_minute,
                         employee_ot_rate=employee_ot_rate,
                         employee_tds_rate=tds_percentage,
                         total_working_days=working_days,
@@ -3352,7 +3347,7 @@ def save_payroll_period_direct(request):
                 CalculatedSalary.objects.bulk_update(
                     to_update,
                     fields=[
-                        'employee_name','department','basic_salary','basic_salary_per_hour','basic_salary_per_minute',
+                        'employee_name','department','basic_salary','basic_salary_per_hour',
                         'employee_ot_rate','employee_tds_rate','total_working_days','present_days','absent_days',
                         'holiday_days','weekly_penalty_days','ot_hours','late_minutes','salary_for_present_days',
                         'ot_charges','late_deduction','incentive','gross_salary','tds_amount','salary_after_tds',

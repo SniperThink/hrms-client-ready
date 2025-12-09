@@ -42,7 +42,6 @@ interface PayrollDetailEntry {
   holiday_days?: number;  // Number of paid holidays
   off_days?: number;  // Off days for the employee
   weekly_penalty_days?: number; // Weekly absent penalty days
-  sunday_bonus_days?: number;   // Bonus Sundays counted as present
   absent_days: number;
   ot_hours: number;
   late_minutes: number;
@@ -458,37 +457,10 @@ const PayrollOverview: React.FC = () => {
           </div>
           <div className="bg-white p-4 rounded-lg border border-gray-200">
             <div className="flex items-center gap-2">
-              <CheckCircle className="text-teal-600" size={20} />
-              <div>
-                <p className="text-sm text-gray-600">Total Employees Paid</p>
-                <p className="text-xl font-semibold text-gray-900">{selectedPeriod.paid_employees}</p>
-              </div>
-            </div>
-          </div>
-          <div className="bg-white p-4 rounded-lg border border-gray-200">
-            <div className="flex items-center gap-2">
               <Clock className="text-orange-600" size={20} />
               <div>
                 <p className="text-sm text-gray-600">Pending</p>
                 <p className="text-xl font-semibold text-gray-900">{selectedPeriod.pending_employees}</p>
-              </div>
-            </div>
-          </div>
-          <div className="bg-white p-4 rounded-lg border border-gray-200">
-            <div className="flex items-center gap-2">
-              <span className="text-purple-600 text-xl font-bold">₹</span>
-              <div>
-                <p className="text-sm text-gray-600">Total Net Payable</p>
-                <p className="text-xl font-semibold text-gray-900">₹{selectedPeriod.total_net_salary.toLocaleString()}</p>
-              </div>
-            </div>
-          </div>
-          <div className="bg-white p-4 rounded-lg border border-gray-200">
-            <div className="flex items-center gap-2">
-              <CheckCircle className="text-green-600" size={20} />
-              <div>
-                <p className="text-sm text-gray-600">Total Net Paid</p>
-                <p className="text-xl font-semibold text-gray-900">₹{detailData.filter(emp => emp.is_paid).reduce((sum, emp) => sum + emp.net_payable, 0).toLocaleString()}</p>
               </div>
             </div>
           </div>
@@ -516,6 +488,33 @@ const PayrollOverview: React.FC = () => {
               <div>
                 <p className="text-sm text-gray-600">Total TDS Amount</p>
                 <p className="text-xl font-semibold text-gray-900">₹{(detailData?.reduce((sum, emp) => sum + (emp.tds_amount || 0), 0) || 0).toLocaleString()}</p>
+              </div>
+            </div>
+          </div>
+          <div className="bg-white p-4 rounded-lg border border-gray-200">
+            <div className="flex items-center gap-2">
+              <span className="text-purple-600 text-xl font-bold">₹</span>
+              <div>
+                <p className="text-sm text-gray-600">Total Net Payable</p>
+                <p className="text-xl font-semibold text-gray-900">₹{selectedPeriod.total_net_salary.toLocaleString()}</p>
+              </div>
+            </div>
+          </div>
+          <div className="bg-white p-4 rounded-lg border border-gray-200">
+            <div className="flex items-center gap-2">
+              <CheckCircle className="text-teal-600" size={20} />
+              <div>
+                <p className="text-sm text-gray-600">Total Employees Paid</p>
+                <p className="text-xl font-semibold text-gray-900">{selectedPeriod.paid_employees}</p>
+              </div>
+            </div>
+          </div>
+          <div className="bg-white p-4 rounded-lg border border-gray-200">
+            <div className="flex items-center gap-2">
+              <CheckCircle className="text-green-600" size={20} />
+              <div>
+                <p className="text-sm text-gray-600">Total Net Paid</p>
+                <p className="text-xl font-semibold text-gray-900">₹{detailData.filter(emp => emp.is_paid).reduce((sum, emp) => sum + emp.net_payable, 0).toLocaleString()}</p>
               </div>
             </div>
           </div>
@@ -628,7 +627,7 @@ const PayrollOverview: React.FC = () => {
                       </td>
                       {salaryConfig?.weekly_absent_penalty_enabled && (
                         <td className="px-4 py-4 whitespace-nowrap text-sm text-gray-900">
-                          {entry.employee_weekly_rules_enabled === false ? 'NA' : (entry.weekly_penalty_days ?? 0)}
+                          {(entry as any).employee_weekly_rules_enabled === false ? 'NA' : (entry.weekly_penalty_days ?? 0)}
                         </td>
                       )}
                       <td className="px-4 py-4 whitespace-nowrap text-sm text-gray-900">{entry.ot_hours || 0}</td>

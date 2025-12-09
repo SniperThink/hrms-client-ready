@@ -467,7 +467,6 @@ class SalaryCalculationService:
                 'department': uploaded_salary.department or 'General',
                 'basic_salary': uploaded_salary.salary or Decimal('0'),
                 'basic_salary_per_hour': uploaded_salary.hour_rs or Decimal('0'),
-                'basic_salary_per_minute': uploaded_salary.charge or Decimal('0'),
                 'employee_ot_rate': uploaded_salary.hour_rs or Decimal('0'),
                 'employee_tds_rate': uploaded_salary.tds or Decimal('0'),
                 'total_working_days': int((uploaded_salary.days or 0) + (uploaded_salary.absent or 0)),
@@ -533,7 +532,6 @@ class SalaryCalculationService:
             minutes_per_day = shift_hours_per_day * Decimal('60')
             
             basic_salary_per_hour = basic_salary / (working_days * shift_hours_per_day) if working_days > 0 and shift_hours_per_day > 0 else Decimal('0')
-            basic_salary_per_minute = basic_salary / (working_days * minutes_per_day) if working_days > 0 and minutes_per_day > 0 else Decimal('0')
             
             # STATIC OT rate calculation: basic_salary / ((shift_hours - break_time) × AVERAGE_DAYS_PER_MONTH)
             # Using tenant-specific AVERAGE_DAYS_PER_MONTH for consistent OT rates across all months
@@ -556,7 +554,6 @@ class SalaryCalculationService:
                 'department': employee.department or 'General',
                 'basic_salary': basic_salary,
                 'basic_salary_per_hour': basic_salary_per_hour,
-                'basic_salary_per_minute': basic_salary_per_minute,
                 'employee_ot_rate': ot_rate_per_hour,
                 'employee_tds_rate': employee_tds_rate,
                 'total_working_days': attendance_data['total_working_days'],

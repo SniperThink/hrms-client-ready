@@ -45,7 +45,6 @@ class CalculatedSalary(TenantAwareModel):
     # Base salary information
     basic_salary = models.DecimalField(max_digits=12, decimal_places=2)
     basic_salary_per_hour = models.DecimalField(max_digits=10, decimal_places=2)
-    basic_salary_per_minute = models.DecimalField(max_digits=10, decimal_places=2)
     
     # Employee-specific rates
     employee_ot_rate = models.DecimalField(max_digits=10, decimal_places=2, default=0, help_text="Employee's OT rate per hour")
@@ -62,12 +61,6 @@ class CalculatedSalary(TenantAwareModel):
         decimal_places=1,
         default=0,
         help_text="Total penalty days added due to weekly absent rule for this period"
-    )
-    sunday_bonus_days = models.DecimalField(
-        max_digits=5,
-        decimal_places=1,
-        default=0,
-        help_text="Total bonus Sunday present days for this period"
     )
     ot_hours = models.DecimalField(max_digits=10, decimal_places=2, default=0)
     late_minutes = models.IntegerField(default=0)

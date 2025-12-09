@@ -37,7 +37,6 @@ export interface PayrollData {
   off_days?: number; // Off days for the employee
   holiday_days?: number; // Paid holidays in the period
   weekly_penalty_days?: number; // Weekly absent penalty days applied
-  sunday_bonus_days?: number;   // Bonus Sundays counted as present
   ot_hours: number;
   late_minutes: number;
   gross_salary: number;

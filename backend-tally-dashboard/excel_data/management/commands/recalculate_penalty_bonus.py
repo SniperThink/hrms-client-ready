@@ -96,27 +96,24 @@ class Command(BaseCommand):
                 )
 
                 new_penalty = weekly_stats.get('weekly_penalty_days', Decimal("0"))
-                new_bonus = weekly_stats.get('sunday_bonus_days', Decimal("0"))
 
                 old_penalty = getattr(summary, 'weekly_penalty_days', Decimal("0"))
-                old_bonus = getattr(summary, 'sunday_bonus_days', Decimal("0"))
 
-                if new_penalty != old_penalty or new_bonus != old_bonus:
+                if new_penalty != old_penalty:
                     if not dry_run:
                         summary.weekly_penalty_days = new_penalty
-                        summary.sunday_bonus_days = new_bonus
-                        summary.save(update_fields=['weekly_penalty_days', 'sunday_bonus_days'])
+                        summary.save(update_fields=['weekly_penalty_days'])
                     
                     self.stdout.write(
                         f'Updated {summary.employee_id} ({summary.year}-{summary.month:02d}): '
-                        f'penalty {old_penalty} -> {new_penalty}, bonus {old_bonus} -> {new_bonus}'
+                        f'penalty {old_penalty} -> {new_penalty}'
                     )
                     updated_count += 1
                 else:
-                    if new_penalty > 0 or new_bonus > 0:
+                    if new_penalty > 0:
                         self.stdout.write(
                             f'No change for {summary.employee_id} ({summary.year}-{summary.month:02d}): '
-                            f'penalty={new_penalty}, bonus={new_bonus}'
+                            f'penalty={new_penalty}'
                         )
 
             except Exception as e:

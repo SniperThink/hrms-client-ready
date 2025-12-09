@@ -60,23 +60,20 @@ class Command(BaseCommand):
         
         total_records = qs.count()
         records_with_penalty = qs.filter(weekly_penalty_days__gt=0).count()
-        records_with_bonus = qs.filter(sunday_bonus_days__gt=0).count()
         
         self.stdout.write(f"\nMonthlyAttendanceSummary for {year}-{month:02d}:")
         self.stdout.write(f"  Total records: {total_records}")
         self.stdout.write(f"  Records with penalty_days > 0: {records_with_penalty}")
-        self.stdout.write(f"  Records with bonus_days > 0: {records_with_bonus}")
         
-        if records_with_penalty > 0 or records_with_bonus > 0:
+        if records_with_penalty > 0:
             self.stdout.write(f"\n{'='*80}")
-            self.stdout.write("Records with penalty/bonus days:")
+            self.stdout.write("Records with penalty days:")
             self.stdout.write(f"{'='*80}")
             for record in qs.filter(
-                models.Q(weekly_penalty_days__gt=0) | models.Q(sunday_bonus_days__gt=0)
+                models.Q(weekly_penalty_days__gt=0)
             )[:20]:  # Show first 20
                 self.stdout.write(
-                    f"  {record.employee_id}: penalty={record.weekly_penalty_days}, "
-                    f"bonus={record.sunday_bonus_days}"
+                    f"  {record.employee_id}: penalty={record.weekly_penalty_days}"
                 )
         
         # Check a few sample employees
@@ -86,12 +83,12 @@ class Command(BaseCommand):
         for record in qs[:10]:
             self.stdout.write(
                 f"  {record.employee_id}: penalty={record.weekly_penalty_days}, "
-                f"bonus={record.sunday_bonus_days}, present={record.present_days}"
+                f"present={record.present_days}"
             )
         
         # Check if features are enabled but no data
-        if (tenant.weekly_absent_penalty_enabled or tenant.sunday_bonus_enabled) and total_records > 0:
-            if records_with_penalty == 0 and records_with_bonus == 0:
+        if tenant.weekly_absent_penalty_enabled and total_records > 0:
+            if records_with_penalty == 0:
                 self.stdout.write(
                     self.style.WARNING(
                         f"\n⚠️  WARNING: Features are enabled but no penalty/bonus days found!"

@@ -1,5 +1,5 @@
-import React, { useState, useEffect } from 'react';
-import { Save, Search, UserCheck, UserX, Loader2, AlertCircle, Calendar } from 'lucide-react';
+import React, { useState, useEffect, useCallback } from 'react';
+import { Save, Search, UserCheck, UserX, Loader2, AlertCircle, Calendar, Info } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { apiCall } from '../services/api';
 import DatePicker from './DatePicker';
@@ -63,6 +63,7 @@ interface AttendanceEntry {
   has_off_day: boolean;
   sunday_bonus?: boolean; // Indicates this present day is a Sunday bonus
   weeklyAttendance: { [day: string]: boolean }; // Example: { M: true, T: false, W: true, ... }
+  autoMarkedReasons?: { [day: string]: string | null }; // Reasons for auto-marked days
   _shiftStart?: string;
   _shiftEnd?: string;
   _prevClockIn?: string;
@@ -204,37 +205,7 @@ const HRAttendanceLog: React.FC = () => {
   }, []);
 
   // Listen for data changes and invalidate cache
-  useEffect(() => {
-    const handleDataChange = () => {
-      logger.info( '🔄 Data change detected, invalidating cache');
-      invalidateCache();
-    };
-
-    const handleHolidayChange = () => {
-      logger.info( '🔄 Holiday change detected, invalidating holiday cache');
-      invalidateHolidayCache();
-    };
-
-    const handleEmployeeStatusChange = () => {
-      logger.info( '🔄 Employee status change detected, invalidating cache');
-      invalidateCache();
-    };
-
-    // Listen for custom events that indicate data changes
-    window.addEventListener('dataUploaded', handleDataChange);
-    window.addEventListener('employeeAdded', handleDataChange);
-    window.addEventListener('attendanceUpdated', handleDataChange);
-    window.addEventListener('holidayUpdated', handleHolidayChange);
-    window.addEventListener('employeeStatusChanged', handleEmployeeStatusChange);
-
-    return () => {
-      window.removeEventListener('dataUploaded', handleDataChange);
-      window.removeEventListener('employeeAdded', handleDataChange);
-      window.removeEventListener('attendanceUpdated', handleDataChange);
-      window.removeEventListener('holidayUpdated', handleHolidayChange);
-      window.removeEventListener('employeeStatusChanged', handleEmployeeStatusChange);
-    };
-  }, []);
+  // Note: This useEffect is moved after fetchWeeklyAttendance definition to avoid hoisting issues
 
   // Debug attendance dates state
   useEffect(() => {
@@ -816,6 +787,15 @@ const HRAttendanceLog: React.FC = () => {
         window.dispatchEvent(new CustomEvent('attendanceUpdated', { detail: { timestamp: Date.now() } }));
         window.dispatchEvent(new CustomEvent('refreshEmployeeData'));
 
+        // Refresh weekly attendance after a delay to allow background bonus day marking to complete
+        // The bonus day marking happens in a background thread, so we wait 2 seconds before refreshing
+        setTimeout(() => {
+          if (selectedDate) {
+            logger.info(`🔄 Refreshing weekly attendance after delay for date: ${selectedDate}`);
+            fetchWeeklyAttendance(selectedDate);
+          }
+        }, 2000); // 2 second delay to allow background thread to complete
+
         // ⚡ BACKGROUND: Start async summary update (don't wait for this)
         apiCall('/api/update-monthly-summaries/', {
           method: 'POST',
@@ -1045,7 +1025,7 @@ const HRAttendanceLog: React.FC = () => {
   };
 
   // Add a function to fetch weekly attendance for the selected day
-  const fetchWeeklyAttendance = async (date: string) => {
+  const fetchWeeklyAttendance = useCallback(async (date: string) => {
     try {
       logger.info(`📅 Fetching weekly attendance for date: ${date}`);
       const response = await apiCall(`/api/attendance/weekly/?date=${date}`);
@@ -1056,9 +1036,11 @@ const HRAttendanceLog: React.FC = () => {
         // Log a sample of the data to verify structure
         const sampleEmployeeIds = Object.keys(data).slice(0, 2);
         if (sampleEmployeeIds.length > 0) {
+          const sampleEmp = data[sampleEmployeeIds[0]];
           logger.info('📋 Sample employee data:', {
             employeeId: sampleEmployeeIds[0],
-            data: data[sampleEmployeeIds[0]]
+            weeklyAttendance: sampleEmp.weeklyAttendance,
+            autoMarkedReasons: sampleEmp.autoMarkedReasons
           });
         }
         
@@ -1073,10 +1055,11 @@ const HRAttendanceLog: React.FC = () => {
             if (updatedEntries.has(employeeId)) {
               const existingEntry = updatedEntries.get(employeeId);
               if (existingEntry) {
-                // Merge weekly attendance data
+                // Merge weekly attendance data and auto-marked reasons
                 updatedEntries.set(employeeId, {
                   ...existingEntry,
                   weeklyAttendance: employeeData.weeklyAttendance || {},
+                  autoMarkedReasons: employeeData.autoMarkedReasons || {},
                 });
                 updatedCount++;
               }
@@ -1094,6 +1077,7 @@ const HRAttendanceLog: React.FC = () => {
                 late_minutes: 0,
                 has_off_day: false,
                 weeklyAttendance: employeeData.weeklyAttendance || {},
+                autoMarkedReasons: employeeData.autoMarkedReasons || {},
               });
             }
           });
@@ -1107,7 +1091,7 @@ const HRAttendanceLog: React.FC = () => {
     } catch (error) {
       logger.error('❌ Error fetching weekly attendance:', error);
     }
-  };
+  }, []);
 
   // Call fetchWeeklyAttendance when the selected date changes or when employees are loaded
   useEffect(() => {
@@ -1576,14 +1560,22 @@ const HRAttendanceLog: React.FC = () => {
                           <div className="flex gap-1">
                             {['M', 'Tu', 'W', 'Th', 'F', 'Sa', 'Su'].map((day) => {
                               const weeklyData = entry?.weeklyAttendance || {};
+                              const autoMarkedReasons = entry?.autoMarkedReasons || {};
                               const dayValue = weeklyData[day];
                               const isPresent = dayValue === true;
                               const isAbsent = dayValue === false;
+                              const autoMarkReason = autoMarkedReasons[day];
+                              const isAutoMarked = !!autoMarkReason && autoMarkReason !== null && autoMarkReason !== undefined;
+                              
+                              // Debug log for auto-marked days
+                              if (isAutoMarked) {
+                                logger.debug(`🔵 Auto-marked day detected: ${entry?.employee_id} - ${day} - Reason: ${autoMarkReason}`);
+                              }
                               
                               return (
                                 <span
                                   key={day}
-                                  className={`px-2 py-1 rounded text-xs font-medium border ${
+                                  className={`inline-flex items-center gap-1 px-2 py-1 rounded text-xs font-medium border ${
                                     isPresent
                                       ? 'bg-teal-100 text-teal-800 border-teal-700'
                                       : isAbsent
@@ -1591,12 +1583,21 @@ const HRAttendanceLog: React.FC = () => {
                                       : 'bg-gray-100 text-gray-600 border-gray-300'
                                   }`}
                                   title={
+                                    isAutoMarked ? autoMarkReason :
                                     isPresent ? 'Present' : 
                                     isAbsent ? 'Absent' : 
                                     'Unmarked'
                                   }
                                 >
                                   {day}
+                                  {isAutoMarked && (
+                                    <span title={autoMarkReason}>
+                                      <Info 
+                                        size={12} 
+                                        className="text-teal-600 cursor-help flex-shrink-0" 
+                                      />
+                                    </span>
+                                  )}
                                 </span>
                               );
                             })}

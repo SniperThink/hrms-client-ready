@@ -240,8 +240,8 @@ def mark_sunday_bonus_background(tenant_id, employee_id, attendance_date):
                 }
                 
                 # Find the first configured off day in this week (Monday to Sunday - includes Sunday if configured)
-                # Loop through all 7 days, find first off day that's today or future
-                today = date.today()
+                # Loop through all 7 days, find first off day in the week
+                # Allow marking past dates within the same week (week of attendance_date)
                 target_off_day = None
                 for day_offset in range(7):  # Check all 7 days (0=Mon, 6=Sun)
                     check_date = week_start + timedelta(days=day_offset)
@@ -249,12 +249,11 @@ def mark_sunday_bonus_background(tenant_id, employee_id, attendance_date):
                     
                     # Check if this day is configured as an off day for the employee
                     if off_days_map.get(weekday, False):
-                        # Only mark if it's today or in the future (don't mark past dates)
-                        if check_date >= today:
-                            target_off_day = check_date
-                            day_name = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'][weekday]
-                            logger.debug(f"📅 [Background] Found first off day: {day_name} {check_date} (weekday: {weekday})")
-                            break  # Use the first off day found
+                        # Mark any off day in this week (including past dates within the week)
+                        target_off_day = check_date
+                        day_name = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'][weekday]
+                        logger.debug(f"📅 [Background] Found first off day: {day_name} {check_date} (weekday: {weekday})")
+                        break  # Use the first off day found
                 
                 if target_off_day:
                     # Check existing attendance record
@@ -291,12 +290,10 @@ def mark_sunday_bonus_background(tenant_id, employee_id, attendance_date):
                     else:
                         logger.debug(f"⏭️ [Background] Off day {target_off_day} already marked as PRESENT, skipping")
                 else:
-                    # No off days configured or no future off days found - skip bonus marking
+                    # No off days configured - skip bonus marking
                     configured_off_days = [day for day, is_off in off_days_map.items() if is_off]
                     if not configured_off_days:
                         logger.debug(f"⏭️ [Background] No off days configured for {employee_id}, skipping bonus marking")
-                    else:
-                        logger.debug(f"⏭️ [Background] No future off days found in this week for {employee_id}, skipping bonus marking")
             else:
                 logger.debug(f"⏭️ [Background] Present count ({present_count}) < threshold ({present_threshold}), no bonus")
             

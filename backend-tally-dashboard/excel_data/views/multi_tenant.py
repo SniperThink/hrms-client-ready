@@ -640,7 +640,6 @@ class UploadSalaryDataAPIView(APIView):
                                         department=sd.department or 'General',
                                         basic_salary=sd.salary or Decimal('0'),
                                         basic_salary_per_hour=sd.hour_rs or Decimal('0'),
-                                        basic_salary_per_minute=sd.charge or Decimal('0'),
                                         employee_ot_rate=sd.hour_rs or Decimal('0'),
                                         employee_tds_rate=tds_rate,  # FIXED: Use calculated rate, not amount
                                         total_working_days=int((sd.days or 0) + (sd.absent or 0)),

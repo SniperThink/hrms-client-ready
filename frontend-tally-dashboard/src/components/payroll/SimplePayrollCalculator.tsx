@@ -29,7 +29,6 @@ interface PayrollEntry {
   present_days: number;
   holiday_days?: number;          // Paid holidays
   weekly_penalty_days?: number;   // Weekly absent penalty days
-  sunday_bonus_days?: number;     // Bonus Sundays counted as present
   absent_days: number;
   off_days?: number;              // Off days for the employee
   ot_hours: number;
@@ -111,7 +110,6 @@ const SimplePayrollCalculator: React.FC = () => {
       off_days: entry.off_days,
       holiday_days: entry.holiday_days ?? 0,
       weekly_penalty_days: entry.weekly_penalty_days ?? 0,
-      sunday_bonus_days: entry.sunday_bonus_days ?? 0,
       ot_hours: entry.ot_hours,
       late_minutes: entry.late_minutes,
       gross_salary: entry.gross_salary,
@@ -452,27 +450,7 @@ const SimplePayrollCalculator: React.FC = () => {
               </div>
             </div>
           </div>
-          
-          <div className="bg-white p-4 rounded-lg border border-gray-200">
-            <div className="flex items-center gap-2">
-              <Calculator className="text-orange-600" size={20} />
-              <div>
-                <p className="text-sm text-gray-600">Total Gross</p>
-                <p className="text-xl font-semibold text-gray-900">₹{summary.total_gross_salary.toLocaleString()}</p>
-              </div>
-            </div>
-          </div>
-          
-          <div className="bg-white p-4 rounded-lg border border-gray-200">
-            <div className="flex items-center gap-2">
-              <CheckCircle className="text-purple-600" size={20} />
-              <div>
-                <p className="text-sm text-gray-600">Total Net</p>
-                <p className="text-xl font-semibold text-gray-900">₹{summary.total_net_salary.toLocaleString()}</p>
-              </div>
-            </div>
-          </div>
-          
+
           <div className="bg-white p-4 rounded-lg border border-gray-200">
             <div className="flex items-center gap-2">
               <IndianRupee className="text-blue-600" size={20} />
@@ -495,10 +473,31 @@ const SimplePayrollCalculator: React.FC = () => {
           
           <div className="bg-white p-4 rounded-lg border border-gray-200">
             <div className="flex items-center gap-2">
+              <Calculator className="text-orange-600" size={20} />
+              <div>
+                <p className="text-sm text-gray-600">Total Gross</p>
+                <p className="text-xl font-semibold text-gray-900">₹{summary.total_gross_salary.toLocaleString()}</p>
+              </div>
+            </div>
+          </div>
+          
+          <div className="bg-white p-4 rounded-lg border border-gray-200">
+            <div className="flex items-center gap-2">
               <Receipt className="text-indigo-600" size={20} />
               <div>
                 <p className="text-sm text-gray-600">Total TDS Amount</p>
                 <p className="text-xl font-semibold text-gray-900">₹{(payrollData?.reduce((sum, emp) => sum + (emp.tds_amount || 0), 0) || 0).toLocaleString()}</p>
+              </div>
+            </div>
+          </div>
+
+          
+          <div className="bg-white p-4 rounded-lg border border-gray-200">
+            <div className="flex items-center gap-2">
+              <CheckCircle className="text-purple-600" size={20} />
+              <div>
+                <p className="text-sm text-gray-600">Total Net</p>
+                <p className="text-xl font-semibold text-gray-900">₹{summary.total_net_salary.toLocaleString()}</p>
               </div>
             </div>
           </div>
