@@ -604,6 +604,35 @@ const HREmployeeDetails: React.FC = () => {
 
   const handleSave = async () => {
     if (!editData || !employeeData) return;
+    
+    // Validate required fields before saving
+    const missingFields: string[] = [];
+    
+    if (!editData.first_name || !editData.first_name.trim()) {
+      missingFields.push('First Name');
+    }
+    if (!editData.shift_start_time || !editData.shift_start_time.trim()) {
+      missingFields.push('Shift Start Time');
+    }
+    if (!editData.shift_end_time || !editData.shift_end_time.trim()) {
+      missingFields.push('Shift End Time');
+    }
+    if (!editData.basic_salary || !editData.basic_salary.toString().trim()) {
+      missingFields.push('Basic Salary');
+    }
+    // Check date_of_joining - use editData if available, otherwise use employeeData
+    const dateOfJoining = editData.date_of_joining !== undefined 
+      ? editData.date_of_joining 
+      : employeeData.date_of_joining;
+    if (!dateOfJoining || !dateOfJoining.trim()) {
+      missingFields.push('Date of Joining');
+    }
+    
+    if (missingFields.length > 0) {
+      alert(`Please fill in all required fields: ${missingFields.join(', ')}`);
+      return;
+    }
+    
     // Only include fields that have changed and are not empty/null
     const updatedFields: Partial<EmployeeProfileData> = {};
     Object.keys(editData).forEach((key) => {

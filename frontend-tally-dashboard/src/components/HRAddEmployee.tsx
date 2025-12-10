@@ -567,13 +567,28 @@ const HRAddEmployee: React.FC = () => {
   // Function to validate the form based on active tab
   const validateForm = (): boolean => {
     if (activeTab === 'personal') {
-      if (!formData.first_name) {
-        setError('Please fill in all required fields: First Name and Last Name');
+      if (!formData.first_name || !formData.first_name.trim()) {
+        setError('Please fill in all required fields: First Name is required');
         return false;
       }
     } else if (activeTab === 'professional') {
-      if (!formData.shift_start_time || !formData.shift_end_time || !formData.basic_salary) {
-        setError('Please fill in all required fields: Shift Start Time, Shift End Time, and Basic Salary');
+      const missingFields: string[] = [];
+      
+      if (!formData.shift_start_time || !formData.shift_start_time.trim()) {
+        missingFields.push('Shift Start Time');
+      }
+      if (!formData.shift_end_time || !formData.shift_end_time.trim()) {
+        missingFields.push('Shift End Time');
+      }
+      if (!formData.basic_salary || !formData.basic_salary.trim()) {
+        missingFields.push('Basic Salary');
+      }
+      if (!formData.date_of_joining || !formData.date_of_joining.trim()) {
+        missingFields.push('Date of Joining');
+      }
+      
+      if (missingFields.length > 0) {
+        setError(`Please fill in all required fields: ${missingFields.join(', ')}`);
         return false;
       }
     }
@@ -708,12 +723,28 @@ const HRAddEmployee: React.FC = () => {
   };
 
   // Function to handle form submission
-  const handleSubmit = async () => {
-    if (!validateForm()) return;
+  const handleSubmit = async (e?: React.FormEvent) => {
+    // Prevent default form submission if event is provided
+    if (e) {
+      e.preventDefault();
+    }
+    
+    if (!validateForm()) {
+      // Scroll to error message
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+      return;
+    }
 
     if (activeTab === 'personal') {
       // Move to professional tab if on personal tab
       setActiveTab('professional');
+      return;
+    }
+
+    // Final validation before submission
+    if (!formData.date_of_joining || !formData.date_of_joining.trim()) {
+      setError('Date of Joining is required');
+      window.scrollTo({ top: 0, behavior: 'smooth' });
       return;
     }
 
@@ -1156,10 +1187,17 @@ const HRAddEmployee: React.FC = () => {
                   setFormData((prev) => ({ ...prev, date_of_joining: date }))
                 }
                 placeholder="Date of Joining"
-                className="w-full p-3 border border-gray-200 rounded-lg focus:outline-none focus:ring-1 focus:ring-teal-500 pointer-events-auto bg-transparent"
+                className={`w-full p-3 border rounded-lg focus:outline-none focus:ring-1 pointer-events-auto bg-transparent ${
+                  !formData.date_of_joining && activeTab === 'professional'
+                    ? 'border-red-300 focus:ring-red-500'
+                    : 'border-gray-200 focus:ring-teal-500'
+                }`}
                 name="date_of_joining"
                 required={true}
               />
+              {!formData.date_of_joining && activeTab === 'professional' && (
+                <p className="text-red-500 text-sm mt-1">Date of Joining is required</p>
+              )}
             </div>
 
             <div className="flex items-center gap-2">
@@ -1183,8 +1221,15 @@ const HRAddEmployee: React.FC = () => {
                     }
                   }}
                   onChange={handleInputChange}
-                  className="w-full px-3 py-3 border border-gray-200 rounded-lg text-sm focus:outline-none focus:border-teal-500 focus:ring-1 focus:ring-teal-500 bg-white text-gray-700 hover:border-gray-300 transition-colors duration-200 cursor-pointer"
+                  className={`w-full px-3 py-3 border rounded-lg text-sm focus:outline-none focus:ring-1 bg-white text-gray-700 hover:border-gray-300 transition-colors duration-200 cursor-pointer ${
+                    !formData.shift_start_time && activeTab === 'professional'
+                      ? 'border-red-300 focus:border-red-500 focus:ring-red-500'
+                      : 'border-gray-200 focus:border-teal-500 focus:ring-teal-500'
+                  }`}
                 />
+                {!formData.shift_start_time && activeTab === 'professional' && (
+                  <p className="text-red-500 text-sm mt-1">Shift Start Time is required</p>
+                )}
               </div>
             </div>
 
@@ -1209,8 +1254,15 @@ const HRAddEmployee: React.FC = () => {
                     }
                   }}
                   onChange={handleInputChange}
-                  className="w-full px-3 py-3 border border-gray-200 rounded-lg text-sm focus:outline-none focus:border-teal-500 focus:ring-1 focus:ring-teal-500 bg-white text-gray-700 hover:border-gray-300 transition-colors duration-200 cursor-pointer"
+                  className={`w-full px-3 py-3 border rounded-lg text-sm focus:outline-none focus:ring-1 bg-white text-gray-700 hover:border-gray-300 transition-colors duration-200 cursor-pointer ${
+                    !formData.shift_end_time && activeTab === 'professional'
+                      ? 'border-red-300 focus:border-red-500 focus:ring-red-500'
+                      : 'border-gray-200 focus:border-teal-500 focus:ring-teal-500'
+                  }`}
                 />
+                {!formData.shift_end_time && activeTab === 'professional' && (
+                  <p className="text-red-500 text-sm mt-1">Shift End Time is required</p>
+                )}
               </div>
             </div>
             <Dropdown
@@ -1235,9 +1287,16 @@ const HRAddEmployee: React.FC = () => {
                 value={formData.basic_salary}
                 onChange={(e) => handleSalaryChange(e.target.value)}
                 placeholder="Enter Basic Salary"
-                className="w-full h-[45px] border border-gray-200 rounded-md px-2 py-1 text-sm focus:outline-none focus:ring-1 focus:ring-teal-500"
+                className={`w-full h-[45px] border rounded-md px-2 py-1 text-sm focus:outline-none focus:ring-1 ${
+                  !formData.basic_salary && activeTab === 'professional'
+                    ? 'border-red-300 focus:ring-red-500'
+                    : 'border-gray-200 focus:ring-teal-500'
+                }`}
                 required
               />
+              {!formData.basic_salary && activeTab === 'professional' && (
+                <p className="text-red-500 text-sm mt-1">Basic Salary is required</p>
+              )}
             </div>
 
 
@@ -1380,7 +1439,12 @@ const HRAddEmployee: React.FC = () => {
                   ? 'opacity-70 cursor-not-allowed' 
                   : 'hover:bg-teal-700'
               }`}
-              disabled={isSubmitting}
+              disabled={isSubmitting || !formData.date_of_joining || !formData.shift_start_time || !formData.shift_end_time || !formData.basic_salary}
+              title={
+                (!formData.date_of_joining || !formData.shift_start_time || !formData.shift_end_time || !formData.basic_salary)
+                  ? 'Please fill in all required fields'
+                  : ''
+              }
             >
               {isSubmitting && (
                 <svg className="animate-spin h-4 w-4 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
