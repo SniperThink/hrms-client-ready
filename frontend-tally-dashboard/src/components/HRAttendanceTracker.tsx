@@ -632,6 +632,15 @@ const HRAttendanceTracker: React.FC = () => {
   const avgPresentPerc = kpiTotals && !isFiltered 
     ? kpiTotals.avg_attendance_percentage 
     : (totalWorkingDaysAgg > 0 ? (totalPresentDays / totalWorkingDaysAgg) * 100 : 0);
+    
+  // Calculate average working days and average present days
+  const avgWorkingDays = totalEmployees > 0 
+    ? totalWorkingDaysAgg / totalEmployees 
+    : 0;
+    
+  const avgPresentDays = totalEmployees > 0 
+    ? totalPresentDays / totalEmployees 
+    : 0;
 
   const user = JSON.parse(localStorage.getItem('user') || '{}');
   const isHRManager = user?.role === 'hr_manager' || user?.role === 'hr-manager';
@@ -789,9 +798,11 @@ const HRAttendanceTracker: React.FC = () => {
       
 
       {/* KPI Section */}
-      <div className="grid grid-cols-1 sm:grid-cols-4 gap-4">
+      <div className="grid grid-cols-6 gap-4">
         {loading ? (
           <>
+            <SkeletonKPICard />
+            <SkeletonKPICard />
             <SkeletonKPICard />
             <SkeletonKPICard />
             <SkeletonKPICard />
@@ -841,8 +852,16 @@ const HRAttendanceTracker: React.FC = () => {
               <div className="text-2xl font-semibold text-[#0B5E59]">{totalLateMinutes}</div>
             </div>
             <div className="bg-white shadow rounded-lg p-4 text-center">
+              <div className="text-sm text-gray-500">Average Working Days</div>
+              <div className="text-2xl font-semibold text-[#0B5E59]">{avgWorkingDays.toFixed(1)}</div>
+            </div>
+            <div className="bg-white shadow rounded-lg p-4 text-center">
+              <div className="text-sm text-gray-500">Average Present Days</div>
+              <div className="text-2xl font-semibold text-[#0B5E59]">{avgPresentDays.toFixed(1)}</div>
+            </div>
+            <div className="bg-white shadow rounded-lg p-4 text-center">
               <div className="text-sm text-gray-500">Average Present %</div>
-              <div className="text-2xl font-semibold text-[#0B5E59]">{`${avgPresentPerc.toFixed(1)}% ≈ ${totalEmployees > 0 ? ((avgPresentPerc / 100) * (totalWorkingDaysAgg / totalEmployees)).toFixed(1) : 0} days`}</div>
+              <div className="text-2xl font-semibold text-[#0B5E59]">{`${avgPresentPerc.toFixed(1)}%`}</div>
             </div>
           </>
         )}
@@ -910,8 +929,9 @@ const HRAttendanceTracker: React.FC = () => {
                     const absentDays = record.absent_days ?? Math.max(0, totalWorkingDays - (record.present_days ?? 0));
                     const unmarkedDays = record.unmarked_days ?? 0;
                     const offDays = record.off_days ?? 0;  // Use off_days from backend
-                    const attendancePercentage = calendarDays > 0 
-                      ? ((calendarDays - absentDays) / calendarDays) * 100 
+                    const presentDays = record.present_days ?? 0;
+                    const attendancePercentage = totalWorkingDays > 0 
+                      ? (presentDays / totalWorkingDays) * 100 
                       : 0;
                     
                     return (

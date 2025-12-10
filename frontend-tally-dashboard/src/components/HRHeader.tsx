@@ -77,6 +77,11 @@ const HRHeader: React.FC<HRHeaderProps> = ({ pageName }) => {
             title: 'Settings', 
             subtitle: "Admin Details" 
           };
+        case 'support':
+          return { 
+            title: 'Support', 
+            subtitle: "Get help and submit support tickets" 
+          };
         default:
           // Fallback to path-based detection
           break;
@@ -136,6 +141,11 @@ const HRHeader: React.FC<HRHeaderProps> = ({ pageName }) => {
         title: 'Settings', 
         subtitle: "Configure system preferences and options" 
       }
+    } else if (path.includes('/hr-management/support')) {
+      return { 
+        title: 'Support', 
+        subtitle: "Get help and submit support tickets" 
+      };
     } else if (path.includes('/super-admin')) {
       return { 
         title: 'Super Admin Dashboard', 

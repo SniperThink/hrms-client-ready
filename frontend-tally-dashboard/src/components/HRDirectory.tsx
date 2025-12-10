@@ -93,6 +93,25 @@ const HRDirectory: React.FC = () => {
     states: [] as string[]
   });
 
+  // Weekly absent penalty enabled state (from settings)
+  const [weeklyAbsentPenaltyEnabled, setWeeklyAbsentPenaltyEnabled] = useState<boolean>(false);
+
+  // Fetch salary config to check if weekly absent penalty is enabled
+  useEffect(() => {
+    const fetchSalaryConfig = async () => {
+      try {
+        const response = await apiCall('/api/salary-config/', { method: 'GET' });
+        if (response && response.ok) {
+          const data = await response.json();
+          setWeeklyAbsentPenaltyEnabled(!!data.weekly_absent_penalty_enabled);
+        }
+      } catch (error) {
+        logger.warn('Failed to load salary config for weekly rules');
+      }
+    };
+    fetchSalaryConfig();
+  }, []);
+
   // Initialize off_days as object when opening modal
   useEffect(() => {
     if (bulkUpdateField === 'off_days' && showBulkUpdateModal && typeof bulkUpdateValue !== 'object') {
@@ -105,6 +124,11 @@ const HRDirectory: React.FC = () => {
         off_saturday: false,
         off_sunday: false
       });
+    }
+    // Initialize weekly_rules_enabled as boolean when opening modal (only if not already set)
+    if (bulkUpdateField === 'weekly_rules_enabled' && showBulkUpdateModal && typeof bulkUpdateValue !== 'boolean') {
+      // Value should already be set in handleBulkAction, but ensure it's a boolean
+      setBulkUpdateValue(false);
     }
   }, [bulkUpdateField, showBulkUpdateModal]);
 
@@ -228,7 +252,8 @@ const HRDirectory: React.FC = () => {
             basic_salary: normalizeField(employee.basic_salary),
             is_active: employee.is_active || false,
           inactive_marked_at: employee.inactive_marked_at || null,
-            off_days: normalizeField(employee.off_days)
+            off_days: normalizeField(employee.off_days),
+            weekly_rules_enabled: employee.weekly_rules_enabled ?? false
           }))
         : [];
 
@@ -325,7 +350,8 @@ const HRDirectory: React.FC = () => {
             basic_salary: normalizeField(employee.basic_salary),
             is_active: employee.is_active || false,
             inactive_marked_at: employee.inactive_marked_at || null,
-            off_days: normalizeField(employee.off_days)
+            off_days: normalizeField(employee.off_days),
+            weekly_rules_enabled: employee.weekly_rules_enabled ?? false
           }))
         : [];
       
@@ -401,7 +427,8 @@ const HRDirectory: React.FC = () => {
                 basic_salary: normalizeField(employee.basic_salary),
                 is_active: employee.is_active || false,
                 inactive_marked_at: employee.inactive_marked_at || null,
-                off_days: normalizeField(employee.off_days)
+                off_days: normalizeField(employee.off_days),
+                weekly_rules_enabled: employee.weekly_rules_enabled ?? false
               }))
             : [];
           
@@ -455,7 +482,8 @@ const HRDirectory: React.FC = () => {
               basic_salary: normalizeField(employee.basic_salary),
               is_active: employee.is_active || false,
               inactive_marked_at: employee.inactive_marked_at || null,
-              off_days: normalizeField(employee.off_days)
+              off_days: normalizeField(employee.off_days),
+              weekly_rules_enabled: employee.weekly_rules_enabled ?? false
             }))
           : [];
         
@@ -809,6 +837,20 @@ const HRDirectory: React.FC = () => {
         });
         setShowBulkUpdateModal(true);
         break;
+      case 'weekly_rules_enabled':
+        // Open bulk update modal for weekly rules
+        // Check if all selected employees have the same weekly_rules_enabled value
+        if (selectedEmployeesData.length > 0) {
+          const allWeeklyRulesValues = selectedEmployeesData.map(emp => (emp as any).weekly_rules_enabled);
+          const allSame = allWeeklyRulesValues.every(val => val === allWeeklyRulesValues[0]);
+          // If all selected employees have the same value, use that value; otherwise default to false
+          setBulkUpdateValue(allSame ? allWeeklyRulesValues[0] : false);
+        } else {
+          setBulkUpdateValue(false);
+        }
+        setBulkUpdateField(action);
+        setShowBulkUpdateModal(true);
+        break;
       case 'department':
       case 'designation':
       case 'employment_type':
@@ -853,6 +895,12 @@ const HRDirectory: React.FC = () => {
         alert('Please enter both shift start time and end time');
         return;
       }
+    } else if (bulkUpdateField === 'weekly_rules_enabled') {
+      // weekly_rules_enabled is a boolean, no validation needed
+      if (typeof bulkUpdateValue !== 'boolean') {
+        alert('Invalid value for weekly rules');
+        return;
+      }
     } else if (!bulkUpdateValue || bulkUpdateValue === '') {
       alert('Please enter a value');
       return;
@@ -879,6 +927,9 @@ const HRDirectory: React.FC = () => {
           return;
         }
         updates.basic_salary = salaryValue;
+      } else if (bulkUpdateField === 'weekly_rules_enabled') {
+        // Handle weekly rules enabled - bulkUpdateValue is a boolean
+        updates.weekly_rules_enabled = bulkUpdateValue;
       } else {
         updates[bulkUpdateField] = bulkUpdateValue;
       }
@@ -1301,6 +1352,14 @@ const HRDirectory: React.FC = () => {
                     >
                       Change Shift Timings
                     </button>
+                    {weeklyAbsentPenaltyEnabled && (
+                      <button
+                        onClick={() => handleBulkAction('weekly_rules_enabled')}
+                        className="w-full px-4 py-2.5 text-left text-sm text-gray-700 hover:bg-gray-50"
+                      >
+                        Change Weekly Rules
+                      </button>
+                    )}
                     <div className="px-2 py-1 text-xs font-semibold text-gray-500 uppercase">Danger Zone</div>
                     <button
                       onClick={() => handleBulkAction('delete')}
@@ -1400,6 +1459,9 @@ const HRDirectory: React.FC = () => {
                     <th className="px-4 py-3 text-sm font-medium text-gray-600 sticky top-0 bg-gray-50 z-20">Shift End Time</th>
                     <th className="px-4 py-3 text-sm font-medium text-gray-600 sticky top-0 bg-gray-50 z-20">Basic Salary</th>
                     <th className="px-4 py-3 text-sm font-medium text-gray-600 sticky top-0 bg-gray-50 z-20">Off Days</th>
+                    {weeklyAbsentPenaltyEnabled && (
+                      <th className="px-4 py-3 text-sm font-medium text-gray-600 sticky top-0 bg-gray-50 z-20">Weekly Rules</th>
+                    )}
                     <th className="px-4 py-3 text-sm font-medium text-gray-600 sticky top-0 bg-gray-50 z-20">Status</th>
                     <th className="px-4 py-3 text-sm font-medium text-gray-600 sticky top-0 bg-gray-50 z-20">Actions</th>
                   </tr>
@@ -1407,7 +1469,7 @@ const HRDirectory: React.FC = () => {
                 <tbody>
                   {currentEntries.length === 0 ? (
                     <tr>
-                      <td colSpan={19} className="px-4 py-6 text-center text-gray-500">
+                      <td colSpan={weeklyAbsentPenaltyEnabled ? 20 : 19} className="px-4 py-6 text-center text-gray-500">
                         {searchQuery ? `No employees found matching "${searchQuery}"` : 'No employee records found.'}
                       </td>
                     </tr>
@@ -1451,6 +1513,17 @@ const HRDirectory: React.FC = () => {
                             {employee.off_days}
                           </span>
                         </td>
+                        {weeklyAbsentPenaltyEnabled && (
+                          <td className="px-4 py-3 text-sm">
+                            <span className={`inline-flex items-center px-2 py-1 rounded-full text-xs font-medium ${
+                              (employee as any).weekly_rules_enabled === true 
+                                ? 'bg-teal-100 text-teal-800' 
+                                : 'bg-gray-100 text-gray-600'
+                            }`}>
+                              {(employee as any).weekly_rules_enabled === true ? 'Enabled' : 'Disabled'}
+                            </span>
+                          </td>
+                        )}
                         <td className="px-4 py-3 text-sm">
                           <div className="flex items-center">
                             <label className="relative inline-flex items-center cursor-pointer">
@@ -1806,7 +1879,7 @@ const HRDirectory: React.FC = () => {
           <div className="bg-white rounded-lg shadow-xl max-w-md w-full max-h-[90vh] flex flex-col overflow-hidden">
             <div className="flex items-center justify-between p-6 border-b border-gray-200">
               <h2 className="text-xl font-semibold text-gray-900">
-                Bulk Update {bulkUpdateField === 'off_days' ? 'Off Days' : bulkUpdateField.replace('_', ' ').replace(/\b\w/g, l => l.toUpperCase())}
+                Bulk Update {bulkUpdateField === 'off_days' ? 'Off Days' : bulkUpdateField === 'weekly_rules_enabled' ? 'Weekly Rules' : bulkUpdateField === 'shift_timings' ? 'Shift Timings' : bulkUpdateField.replace('_', ' ').replace(/\b\w/g, l => l.toUpperCase())}
               </h2>
               <button
                 onClick={() => {
@@ -2001,6 +2074,26 @@ const HRDirectory: React.FC = () => {
                     </div>
                   </div>
                 )}
+
+                {bulkUpdateField === 'weekly_rules_enabled' && (
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-2">Weekly Rules</label>
+                    <div className="flex items-center gap-3">
+                      <label className="flex items-center gap-2 cursor-pointer">
+                        <input
+                          type="checkbox"
+                          checked={bulkUpdateValue || false}
+                          onChange={(e) => setBulkUpdateValue(e.target.checked)}
+                          className="w-4 h-4 text-teal-600 border-gray-300 rounded focus:ring-teal-500"
+                        />
+                        <span className="text-sm text-gray-700">Enable weekly rules for selected employees</span>
+                      </label>
+                    </div>
+                    <p className="text-xs text-gray-500 mt-2">
+                      Weekly rules enable penalty calculation based on weekly attendance threshold.
+                    </p>
+                  </div>
+                )}
               </div>
             </div>
 
@@ -2021,7 +2114,8 @@ const HRDirectory: React.FC = () => {
                 disabled={bulkUpdating || 
                   (bulkUpdateField === 'off_days' && (!bulkUpdateValue || typeof bulkUpdateValue !== 'object')) ||
                   (bulkUpdateField === 'shift_timings' && (!bulkUpdateValue || typeof bulkUpdateValue !== 'object' || !bulkUpdateValue.shift_start_time || !bulkUpdateValue.shift_end_time)) ||
-                  (bulkUpdateField !== 'off_days' && bulkUpdateField !== 'shift_timings' && !bulkUpdateValue)}
+                  (bulkUpdateField === 'weekly_rules_enabled' && typeof bulkUpdateValue !== 'boolean') ||
+                  (bulkUpdateField !== 'off_days' && bulkUpdateField !== 'shift_timings' && bulkUpdateField !== 'weekly_rules_enabled' && !bulkUpdateValue)}
                 className="px-6 py-2 bg-teal-600 text-white rounded-lg hover:bg-teal-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors flex items-center gap-2"
               >
                 {bulkUpdating ? (

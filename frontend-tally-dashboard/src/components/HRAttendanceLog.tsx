@@ -42,6 +42,13 @@ interface Employee {
   late_minutes?: number;
   ot_hours?: number;
   has_off_day?: boolean;
+  off_monday?: boolean;
+  off_tuesday?: boolean;
+  off_wednesday?: boolean;
+  off_thursday?: boolean;
+  off_friday?: boolean;
+  off_saturday?: boolean;
+  off_sunday?: boolean;
   current_attendance?: {
     status: string;
     ot_hours: number;
@@ -64,6 +71,8 @@ interface AttendanceEntry {
   sunday_bonus?: boolean; // Indicates this present day is a Sunday bonus
   weeklyAttendance: { [day: string]: boolean }; // Example: { M: true, T: false, W: true, ... }
   autoMarkedReasons?: { [day: string]: string | null }; // Reasons for auto-marked days
+  weekly_penalty_days?: number; // Weekly penalty days for the week
+  employee_off_days?: { [day: string]: boolean }; // Employee off day configuration
   _shiftStart?: string;
   _shiftEnd?: string;
   _prevClockIn?: string;
@@ -1024,6 +1033,121 @@ const HRAttendanceLog: React.FC = () => {
     }
   };
 
+  // Helper function to get first off day in the week
+  const getFirstOffDay = (employeeOffDays: { [day: string]: boolean } | undefined): string | null => {
+    if (!employeeOffDays) return null;
+    
+    // Order of days in the week: M, Tu, W, Th, F, Sa, Su
+    const dayOrder = ['M', 'Tu', 'W', 'Th', 'F', 'Sa', 'Su'];
+    for (const day of dayOrder) {
+      if (employeeOffDays[day] === true) {
+        return day;
+      }
+    }
+    return null;
+  };
+
+  // Helper function to calculate weekly penalty days based on absent days
+  // This matches backend logic: count absent days Mon-Sat (excluding Sunday)
+  const calculateWeeklyPenaltyDays = (weeklyAttendance: { [day: string]: boolean }): number => {
+    // Count absent days (false values) in Mon-Sat only (exclude Sunday)
+    const weekdays = ['M', 'Tu', 'W', 'Th', 'F', 'Sa'];
+    const absentDays = weekdays.filter(day => weeklyAttendance[day] === false).length;
+    
+    // Default threshold is 4 (if absent >= 4 days, penalty = 1)
+    // This matches the backend logic where weekly_absent_threshold defaults to 4
+    const threshold = 4;
+    
+    if (absentDays >= threshold) {
+      return 1; // One penalty day
+    }
+    return 0;
+  };
+
+  // Cache for employee off day configurations
+  const [employeeOffDaysCache, setEmployeeOffDaysCache] = useState<Map<string, { [day: string]: boolean }>>(new Map());
+
+  // Fetch employee off day configurations from directory API
+  const fetchEmployeeOffDays = useCallback(async (employeeIds: string[]): Promise<Map<string, { [day: string]: boolean }>> => {
+    const offDaysMap = new Map<string, { [day: string]: boolean }>();
+    
+    // Check cache first
+    const missingIds: string[] = [];
+    employeeIds.forEach(id => {
+      if (employeeOffDaysCache.has(id)) {
+        offDaysMap.set(id, employeeOffDaysCache.get(id)!);
+      } else {
+        missingIds.push(id);
+      }
+    });
+    
+    if (missingIds.length === 0) {
+      logger.info(`✅ Using cached off day configurations for all ${employeeIds.length} employees`);
+      return offDaysMap;
+    }
+    
+    try {
+      // Fetch employee directory data which includes off day configurations
+      // Fetch all employees and filter in frontend (directory API doesn't support filtering by employee_ids)
+      const params = new URLSearchParams();
+      params.append('limit', '0'); // 0 = fetch all
+      params.append('offset', '0');
+      
+      const response = await apiCall(`/api/employees/directory_data/?${params.toString()}`);
+      if (response.ok) {
+        const directoryData = await response.json();
+        const employees = directoryData.results || directoryData.employees || [];
+        
+        // Filter to only employees we need and build map
+        employees.forEach((emp: any) => {
+          if (emp.employee_id && missingIds.includes(emp.employee_id)) {
+            const offDays: { [day: string]: boolean } = {
+              'M': emp.off_monday || false,
+              'Tu': emp.off_tuesday || false,
+              'W': emp.off_wednesday || false,
+              'Th': emp.off_thursday || false,
+              'F': emp.off_friday || false,
+              'Sa': emp.off_saturday || false,
+              'Su': emp.off_sunday || false,
+            };
+            
+            // Only add to map if employee has at least one off day configured
+            const hasOffDay = Object.values(offDays).some(val => val === true);
+            if (hasOffDay) {
+              offDaysMap.set(emp.employee_id, offDays);
+            } else {
+              // Still cache it (as empty) to avoid refetching
+              offDaysMap.set(emp.employee_id, {
+                'M': false, 'Tu': false, 'W': false, 'Th': false, 'F': false, 'Sa': false, 'Su': false
+              });
+            }
+          }
+        });
+        
+        // Update cache
+        setEmployeeOffDaysCache(prev => {
+          const newCache = new Map(prev);
+          offDaysMap.forEach((value, key) => {
+            newCache.set(key, value);
+          });
+          return newCache;
+        });
+        
+        logger.info(`✅ Fetched off day configurations for ${offDaysMap.size} employees (${missingIds.length} new)`);
+      }
+    } catch (error) {
+      logger.error('❌ Error fetching employee off days:', error);
+    }
+    
+    // Merge cached and newly fetched
+    const mergedMap = new Map(employeeOffDaysCache);
+    offDaysMap.forEach((value, key) => {
+      mergedMap.set(key, value);
+    });
+    
+    return mergedMap;
+  }, [employeeOffDaysCache]);
+
   // Add a function to fetch weekly attendance for the selected day
   const fetchWeeklyAttendance = useCallback(async (date: string) => {
     try {
@@ -1032,6 +1156,27 @@ const HRAttendanceLog: React.FC = () => {
       if (response.ok) {
         const data = await response.json();
         logger.info('📊 Weekly attendance data received:', data);
+        
+        // Get all employee IDs from weekly attendance data
+        const allEmployeeIds = Object.keys(data);
+        
+        // Fetch employee off day configurations
+        const employeeOffDaysMap = await fetchEmployeeOffDays(allEmployeeIds);
+        
+        // Calculate weekly penalty days for each employee
+        const weeklyPenaltyDaysMap = new Map<string, number>();
+        allEmployeeIds.forEach((employeeId) => {
+          const weeklyAttendance = data[employeeId]?.weeklyAttendance || {};
+          const penaltyDays = calculateWeeklyPenaltyDays(weeklyAttendance);
+          if (penaltyDays > 0) {
+            weeklyPenaltyDaysMap.set(employeeId, penaltyDays);
+            // Log detailed penalty calculation
+            const absentDays = ['M', 'Tu', 'W', 'Th', 'F', 'Sa'].filter(day => weeklyAttendance[day] === false).length;
+            logger.info(`⚠️ Penalty days calculated for ${employeeId}: ${penaltyDays} (absent days: ${absentDays})`);
+          }
+        });
+        
+        logger.info(`📊 Penalty days summary: ${weeklyPenaltyDaysMap.size} employees with penalty days out of ${allEmployeeIds.length} total`);
         
         // Log a sample of the data to verify structure
         const sampleEmployeeIds = Object.keys(data).slice(0, 2);
@@ -1051,6 +1196,29 @@ const HRAttendanceLog: React.FC = () => {
           let updatedCount = 0;
           
           Object.entries(data).forEach(([employeeId, employeeData]: [string, any]) => {
+            const weeklyAttendance = employeeData.weeklyAttendance || {};
+            const autoMarkedReasons = employeeData.autoMarkedReasons || {};
+            const employeeOffDays = employeeOffDaysMap.get(employeeId);
+            const penaltyDays = weeklyPenaltyDaysMap.get(employeeId) || 0;
+            
+            // If penalty days exist, mark first off day as absent
+            let updatedWeeklyAttendance = { ...weeklyAttendance };
+            let updatedAutoMarkedReasons = { ...autoMarkedReasons };
+            
+            if (penaltyDays > 0 && employeeOffDays) {
+              const firstOffDay = getFirstOffDay(employeeOffDays);
+              if (firstOffDay) {
+                // Always mark first off day as absent for penalty (override any existing status)
+                updatedWeeklyAttendance[firstOffDay] = false;
+                updatedAutoMarkedReasons[firstOffDay] = 'Penalty day - Absent more than threshold';
+                logger.info(`⚠️ Penalty day applied: ${employeeId} - ${firstOffDay} marked as absent (penalty days: ${penaltyDays})`);
+              } else {
+                logger.warn(`⚠️ Penalty day exists for ${employeeId} but no off day found in configuration`);
+              }
+            } else if (penaltyDays > 0 && !employeeOffDays) {
+              logger.warn(`⚠️ Penalty day exists for ${employeeId} but off day configuration not available`);
+            }
+            
             // Check if this employee exists in our current entries
             if (updatedEntries.has(employeeId)) {
               const existingEntry = updatedEntries.get(employeeId);
@@ -1058,8 +1226,10 @@ const HRAttendanceLog: React.FC = () => {
                 // Merge weekly attendance data and auto-marked reasons
                 updatedEntries.set(employeeId, {
                   ...existingEntry,
-                  weeklyAttendance: employeeData.weeklyAttendance || {},
-                  autoMarkedReasons: employeeData.autoMarkedReasons || {},
+                  weeklyAttendance: updatedWeeklyAttendance,
+                  autoMarkedReasons: updatedAutoMarkedReasons,
+                  weekly_penalty_days: penaltyDays,
+                  employee_off_days: employeeOffDays,
                 });
                 updatedCount++;
               }
@@ -1076,8 +1246,10 @@ const HRAttendanceLog: React.FC = () => {
                 ot_hours: 0,
                 late_minutes: 0,
                 has_off_day: false,
-                weeklyAttendance: employeeData.weeklyAttendance || {},
-                autoMarkedReasons: employeeData.autoMarkedReasons || {},
+                weeklyAttendance: updatedWeeklyAttendance,
+                autoMarkedReasons: updatedAutoMarkedReasons,
+                weekly_penalty_days: penaltyDays,
+                employee_off_days: employeeOffDays,
               });
             }
           });
@@ -1091,7 +1263,7 @@ const HRAttendanceLog: React.FC = () => {
     } catch (error) {
       logger.error('❌ Error fetching weekly attendance:', error);
     }
-  }, []);
+  }, [fetchEmployeeOffDays]);
 
   // Call fetchWeeklyAttendance when the selected date changes or when employees are loaded
   useEffect(() => {
@@ -1566,6 +1738,7 @@ const HRAttendanceLog: React.FC = () => {
                               const isAbsent = dayValue === false;
                               const autoMarkReason = autoMarkedReasons[day];
                               const isAutoMarked = !!autoMarkReason && autoMarkReason !== null && autoMarkReason !== undefined;
+                              const isPenaltyDay = autoMarkReason && autoMarkReason.includes('Penalty day');
                               
                               // Debug log for auto-marked days
                               if (isAutoMarked) {
@@ -1579,7 +1752,9 @@ const HRAttendanceLog: React.FC = () => {
                                     isPresent
                                       ? 'bg-teal-100 text-teal-800 border-teal-700'
                                       : isAbsent
-                                      ? 'bg-red-100 text-red-800 border-red-300'
+                                      ? isPenaltyDay
+                                        ? 'bg-red-200 text-red-900 border-red-500'
+                                        : 'bg-red-100 text-red-800 border-red-300'
                                       : 'bg-gray-100 text-gray-600 border-gray-300'
                                   }`}
                                   title={
@@ -1594,7 +1769,7 @@ const HRAttendanceLog: React.FC = () => {
                                     <span title={autoMarkReason}>
                                       <Info 
                                         size={12} 
-                                        className="text-teal-600 cursor-help flex-shrink-0" 
+                                        className={isPenaltyDay ? 'text-red-700 cursor-help flex-shrink-0' : 'text-teal-600 cursor-help flex-shrink-0'} 
                                       />
                                     </span>
                                   )}

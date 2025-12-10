@@ -2807,7 +2807,7 @@ class EmployeeProfileViewSet(viewsets.ModelViewSet):
             'designation', 'mobile_number', 'email', 'is_active', 'basic_salary',
             'shift_start_time', 'shift_end_time', 'tenant_id', 'employment_type',
             'date_of_joining', 'location_branch', 'inactive_marked_at', 'off_monday', 'off_tuesday', 'off_wednesday', 'off_thursday',
-            'off_friday', 'off_saturday', 'off_sunday'
+            'off_friday', 'off_saturday', 'off_sunday', 'weekly_rules_enabled'
         ).order_by('first_name', 'last_name')
         timing_breakdown['employee_query_setup_ms'] = round((time.time() - step_start) * 1000, 2)
         
@@ -3155,6 +3155,7 @@ class EmployeeProfileViewSet(viewsets.ModelViewSet):
                 'off_friday': employee.off_friday,
                 'off_saturday': employee.off_saturday,
                 'off_sunday': employee.off_sunday,
+                'weekly_rules_enabled': getattr(employee, 'weekly_rules_enabled', False),
                 # Current month attendance data
                 'current_month': f"{current_month}/{current_year}",
                 'attendance': {
@@ -4016,7 +4017,7 @@ class EmployeeProfileViewSet(viewsets.ModelViewSet):
                 'department', 'designation', 'employment_type', 'date_of_joining',
                 'location_branch', 'basic_salary', 'off_monday', 'off_tuesday',
                 'off_wednesday', 'off_thursday', 'off_friday', 'off_saturday', 'off_sunday',
-                'shift_start_time', 'shift_end_time'
+                'shift_start_time', 'shift_end_time', 'weekly_rules_enabled'
             ]
 
             # Build SQL SET clauses and parameters
@@ -4049,7 +4050,7 @@ class EmployeeProfileViewSet(viewsets.ModelViewSet):
                     except (ValueError, TypeError):
                         return Response({"error": f"Invalid salary value"}, status=400)
                 
-                elif field.startswith('off_'):
+                elif field.startswith('off_') or field == 'weekly_rules_enabled':
                     bool_value = bool(value)
                     set_clauses.append(f'"{field}" = %s')
                     params.append(bool_value)
@@ -6584,20 +6585,9 @@ class DailyAttendanceViewSet(viewsets.ModelViewSet):
                     unmarked_days_value = max(0, net_working_days - data['present_days'] - data['absent_days'])
             
             # Calculate penalty days: Get existing weekly penalty days from aggregated data
+            # Note: weekly_penalty_days should already be calculated correctly in the aggregation phase
+            # by checking weekly absent counts against weekly_absent_threshold (not monthly totals)
             weekly_penalty_days = float(data.get('weekly_penalty_days', 0) or 0)
-            
-            # NEW: Add penalty day if absent_days >= threshold (similar to bonus days)
-            # This is in addition to weekly penalty days
-            try:
-                absent_penalty_enabled = getattr(tenant, 'weekly_absent_penalty_enabled', False)
-                absent_threshold = getattr(tenant, 'weekly_absent_threshold', 4) or 4
-                
-                if absent_penalty_enabled and absent_days >= absent_threshold:
-                    # Add 1 penalty day if absent days meet or exceed threshold
-                    weekly_penalty_days += 1.0
-                    logger.debug(f"📊 Added penalty day for {emp_id}: absent_days={absent_days} >= threshold={absent_threshold}")
-            except Exception as e:
-                logger.warning(f"Error checking absent penalty threshold for {emp_id}: {e}")
             
             attendance_records.append({
                 'id': record_id,
