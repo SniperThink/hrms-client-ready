@@ -1509,7 +1509,9 @@ def get_eligible_employees_for_date(request):
         # eligible Sunday as bonus present even if it's an off day.
         sunday_bonus_map = {}
         sunday_bonus_enabled = getattr(tenant, 'sunday_bonus_enabled', False)
-        sunday_bonus_threshold = getattr(tenant, 'sunday_bonus_threshold', 4) or 4
+        # Present threshold is complement of absent threshold: 7 - weekly_absent_threshold
+        weekly_absent_threshold = getattr(tenant, 'weekly_absent_threshold', 4) or 4
+        sunday_bonus_threshold = 7 - weekly_absent_threshold
         
         if sunday_bonus_enabled and day_of_week == 6 and employee_ids:
             from datetime import timedelta

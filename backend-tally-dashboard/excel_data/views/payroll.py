@@ -2843,7 +2843,7 @@ def calculate_simple_payroll_ultra_fast(request):
                         CASE 
                             WHEN %s::boolean IS TRUE 
                                 AND e.weekly_rules_enabled IS TRUE
-                                AND wa.absent_days > %s 
+                                AND wa.absent_days >= %s  -- Threshold is inclusive (e.g., 2 absences with threshold 2 adds penalty)
                             THEN 1 ELSE 0 
                         END
                     ) AS weekly_penalty_days

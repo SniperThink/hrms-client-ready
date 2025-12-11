@@ -113,6 +113,8 @@ const HRAttendanceLog: React.FC = () => {
   const [totalCount, setTotalCount] = useState<number>(0);
   const INITIAL_DISPLAY_COUNT = 30;
   const LOAD_MORE_COUNT = 30;
+  // Tenant-configured weekly absent threshold (null until fetched)
+  const [weeklyAbsentThreshold, setWeeklyAbsentThreshold] = useState<number | null>(null);
 
   // Add cache and request tracking to prevent duplicate calls
   const [cache, setCache] = useState<Map<string, { data: Employee[]; dayName: string; hasExcelAttendance: boolean; timestamp: number }>>(new Map());
@@ -294,6 +296,22 @@ const HRAttendanceLog: React.FC = () => {
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedDate]);
+
+  // Load weekly absent threshold from HR Settings (salary config)
+  useEffect(() => {
+    (async () => {
+      try {
+        const resp = await apiCall('/api/salary-config/');
+        const config = resp && resp.ok ? await resp.json() : null;
+        const threshold = (config as any)?.weekly_absent_threshold;
+        if (typeof threshold === 'number' && threshold >= 2 && threshold <= 7) {
+          setWeeklyAbsentThreshold(threshold);
+        }
+      } catch (err) {
+        logger.warn('Failed to load salary config for attendance log; weekly threshold unavailable', err);
+      }
+    })();
+  }, []);
 
   // PROGRESSIVE LOADING: Fetch employees with automatic background loading
   const fetchEligibleEmployees = async (signal?: AbortSignal) => {
@@ -1054,9 +1072,9 @@ const HRAttendanceLog: React.FC = () => {
     const weekdays = ['M', 'Tu', 'W', 'Th', 'F', 'Sa'];
     const absentDays = weekdays.filter(day => weeklyAttendance[day] === false).length;
     
-    // Default threshold is 4 (if absent >= 4 days, penalty = 1)
-    // This matches the backend logic where weekly_absent_threshold defaults to 4
-    const threshold = 4;
+    // Use tenant-configured threshold from HR Settings; if unavailable, skip penalty
+    if (typeof weeklyAbsentThreshold !== 'number') return 0;
+    const threshold = weeklyAbsentThreshold;
     
     if (absentDays >= threshold) {
       return 1; // One penalty day
@@ -1213,10 +1231,12 @@ const HRAttendanceLog: React.FC = () => {
                 updatedAutoMarkedReasons[firstOffDay] = 'Penalty day - Absent more than threshold';
                 logger.info(`⚠️ Penalty day applied: ${employeeId} - ${firstOffDay} marked as absent (penalty days: ${penaltyDays})`);
               } else {
-                logger.warn(`⚠️ Penalty day exists for ${employeeId} but no off day found in configuration`);
+                // Employee has penalty but no off days configured - this is expected for some employees
+                logger.debug(`ℹ️ Penalty day exists for ${employeeId} but no off day found in configuration (employee may not have off days configured)`);
               }
             } else if (penaltyDays > 0 && !employeeOffDays) {
-              logger.warn(`⚠️ Penalty day exists for ${employeeId} but off day configuration not available`);
+              // Employee has penalty but off day configuration not available - this is expected for some employees
+              logger.debug(`ℹ️ Penalty day exists for ${employeeId} but off day configuration not available (employee may not have off days configured)`);
             }
             
             // Check if this employee exists in our current entries
@@ -1582,6 +1602,79 @@ const HRAttendanceLog: React.FC = () => {
 
                     // Use employee.has_off_day as fallback if entry doesn't have it
                     const hasOffDay = entry.has_off_day !== undefined ? entry.has_off_day : (employee.has_off_day || false);
+                    
+                    // Build off-day map (prefer entry.employee_off_days, fallback to employee flags)
+                    const employeeOffDays =
+                      (entry as any).employee_off_days ||
+                      {
+                        M: (employee as any).off_monday,
+                        Tu: (employee as any).off_tuesday,
+                        W: (employee as any).off_wednesday,
+                        Th: (employee as any).off_thursday,
+                        F: (employee as any).off_friday,
+                        Sa: (employee as any).off_saturday,
+                        Su: (employee as any).off_sunday,
+                      };
+                    const firstOffDayCode = ['M', 'Tu', 'W', 'Th', 'F', 'Sa', 'Su'].find((d) => employeeOffDays?.[d] === true);
+                    
+                    // Calculate absent count and check threshold
+                    const weeklyData = entry?.weeklyAttendance || {};
+                    const weekdays = ['M', 'Tu', 'W', 'Th', 'F', 'Sa'];
+                    const absentCount = weekdays.filter((day) => weeklyData[day] === false).length;
+                    const threshold = typeof weeklyAbsentThreshold === 'number' ? weeklyAbsentThreshold : null;
+                    
+                    // Check if threshold is breached
+                    const isThresholdBreached = threshold !== null && absentCount >= threshold;
+                    
+                    // Map selected day name to code to check if current date is first off day
+                    const selectedDayCode = (() => {
+                      const dn = dayName.toLowerCase();
+                      if (dn === 'monday') return 'M';
+                      if (dn === 'tuesday') return 'Tu';
+                      if (dn === 'wednesday') return 'W';
+                      if (dn === 'thursday') return 'Th';
+                      if (dn === 'friday') return 'F';
+                      if (dn === 'saturday') return 'Sa';
+                      if (dn === 'sunday') return 'Su';
+                      return null;
+                    })();
+                    
+                    // Check if first off day is manually marked as present (not auto-marked)
+                    // This can be from weeklyAttendance data OR from current entry status if selected date is the first off day
+                    const firstOffDayValue = firstOffDayCode ? weeklyData[firstOffDayCode] : undefined;
+                    
+                    // Check if current selected date is the first off day and manually marked present
+                    const isCurrentDateFirstOffDay = firstOffDayCode && selectedDayCode === firstOffDayCode;
+                    // Current date is manually present if: status is present, not sunday bonus, and not auto-marked
+                    const isCurrentDateAutoMarked = isCurrentDateFirstOffDay ? (!!entry?.autoMarkedReasons?.[selectedDayCode!] || !!entry.sunday_bonus) : false;
+                    const isCurrentDateManuallyPresent = isCurrentDateFirstOffDay && entry.status === 'present' && !isCurrentDateAutoMarked;
+                    
+                    // First off day is manually present if:
+                    // 1. Current selected date is the first off day AND entry status is manually marked present (not auto-marked), OR
+                    // 2. It's marked as present in weeklyAttendance
+                    // Note: If it's present in weeklyAttendance, we consider it as manually marked for penalty display
+                    // (User can manually mark it, and if it's present, we show orange when threshold is breached)
+                    const isFirstOffDayManuallyPresent = firstOffDayCode && (
+                      isCurrentDateManuallyPresent ||
+                      firstOffDayValue === true
+                    );
+                    
+                    // Show orange chip if: threshold breached AND first off day is manually marked present
+                    const showPenaltyPresentChip = isThresholdBreached && isFirstOffDayManuallyPresent;
+                    
+                    // Debug logging for penalty chip logic
+                    if (isThresholdBreached && firstOffDayCode) {
+                      logger.debug(`🔍 Penalty chip check for ${employee.employee_id}:`, {
+                        absentCount,
+                        threshold,
+                        firstOffDayCode,
+                        firstOffDayValue,
+                        isCurrentDateFirstOffDay,
+                        isCurrentDateManuallyPresent,
+                        isFirstOffDayManuallyPresent,
+                        showPenaltyPresentChip
+                      });
+                    }
 
                     return (
                       <tr key={employee.employee_id} className={`hover:bg-gray-50 ${entry.status === 'unmarked' ? 'bg-yellow-50 border-l-4 border-yellow-400' : ''}`}>
@@ -1622,12 +1715,12 @@ const HRAttendanceLog: React.FC = () => {
                                   }`}
                                 title={isHoliday ? 'Cannot mark attendance on holidays' : hasExcelAttendance ? 'Disabled: Excel attendance uploaded' : 'Mark as present for extra payment'}
                               >
-                                Mark as Present (Extra Pay)
+                                Mark as Present
                               </button>
                             </div>
                           ) : (
                             <div className="flex flex-col gap-1">
-                              {hasOffDay && entry.status === 'present' && (
+                              {hasOffDay && entry.status === 'present' && !isThresholdBreached && (
                                 <span className="text-xs text-orange-600 font-medium mb-1">⚠️ Off Day - Extra Pay</span>
                               )}
                               {entry.sunday_bonus && entry.status === 'present' && (
@@ -1733,43 +1826,127 @@ const HRAttendanceLog: React.FC = () => {
                             {['M', 'Tu', 'W', 'Th', 'F', 'Sa', 'Su'].map((day) => {
                               const weeklyData = entry?.weeklyAttendance || {};
                               const autoMarkedReasons = entry?.autoMarkedReasons || {};
-                              const dayValue = weeklyData[day];
-                              const isPresent = dayValue === true;
-                              const isAbsent = dayValue === false;
+                              
+                              // If current selected date is this day, use entry status to determine value
+                              let dayValue = weeklyData[day];
+                              if (selectedDayCode === day) {
+                                // Override with current entry status for the selected date
+                                if (entry.status === 'present') dayValue = true;
+                                else if (entry.status === 'absent' || entry.status === 'off') dayValue = false;
+                              }
+                              
+                              const isFirstOffDay = firstOffDayCode ? day === firstOffDayCode : false;
+                              // For current date, check if it's manually marked (not auto-marked and not sunday bonus)
+                              const isCurrentDay = selectedDayCode === day;
+                              const isCurrentDayAutoMarked = isCurrentDay ? (!!entry?.autoMarkedReasons?.[day] || !!entry.sunday_bonus) : false;
+                              const isCurrentDayManuallyPresent = isCurrentDay && entry.status === 'present' && !isCurrentDayAutoMarked;
+                              
+                              // Check if this day is present (from weeklyData or current entry if it's the selected day)
+                              // If showPenaltyPresentChip is true, it means first off day is manually present, so consider it present
+                              const isPresent = dayValue === true || 
+                                (isCurrentDay && isCurrentDayManuallyPresent) ||
+                                (showPenaltyPresentChip && isFirstOffDay);
+                              const isAbsent = dayValue === false && !(isCurrentDay && isCurrentDayManuallyPresent) && !(showPenaltyPresentChip && isFirstOffDay);
                               const autoMarkReason = autoMarkedReasons[day];
                               const isAutoMarked = !!autoMarkReason && autoMarkReason !== null && autoMarkReason !== undefined;
-                              const isPenaltyDay = autoMarkReason && autoMarkReason.includes('Penalty day');
+                              // Check if this is a penalty day (marked as absent due to threshold breach)
+                              // Only consider it a penalty day if it's absent - if it's present, it's not a penalty day
+                              const isPenaltyDay = isAbsent && autoMarkReason && autoMarkReason.includes('Penalty day');
+                              
+                              // Show orange chip if: threshold breached AND this is first off day AND it's present AND manually marked (not auto-marked)
+                              // This means employee came on off day that is marked as penalty day
+                              const isPenaltyPresentChip = showPenaltyPresentChip && isFirstOffDay && isPresent && !isAutoMarked;
+                              
+                              // If day is present but has penalty-related autoMarkReason, it shouldn't be treated as auto-marked for penalty
+                              // Instead, it should be treated as manually marked present (orange chip)
+                              const hasPenaltyReasonButPresent = isPresent && autoMarkReason && autoMarkReason.includes('Penalty day');
+                              
+                              // Debug log for penalty chip
+                              if (isThresholdBreached && isFirstOffDay) {
+                                logger.debug(`🟠 Penalty chip check for ${entry?.employee_id} - ${day}:`, {
+                                  showPenaltyPresentChip,
+                                  isFirstOffDay,
+                                  isPresent,
+                                  dayValue,
+                                  isCurrentDay,
+                                  isCurrentDayManuallyPresent,
+                                  entryStatus: entry.status,
+                                  isPenaltyPresentChip,
+                                  firstOffDayCode
+                                });
+                              }
                               
                               // Debug log for auto-marked days
                               if (isAutoMarked) {
                                 logger.debug(`🔵 Auto-marked day detected: ${entry?.employee_id} - ${day} - Reason: ${autoMarkReason}`);
                               }
                               
+                              // Determine chip color and tooltip based on rules:
+                              // 1. Orange: Employee came on off day that is marked as penalty day (threshold breached + first off day manually marked present)
+                              // 2. Green with tooltip: Auto-marked present (Sunday bonus)
+                              // 3. Red with tooltip: Penalty day (absent due to threshold breach)
+                              // 4. Green/Red plain: Regular present/absent
+                              
+                              let chipColor = '';
+                              let chipTooltip = '';
+                              let showInfoIcon = false;
+                              
+                              if (isPresent) {
+                                // Check if it's a penalty present chip (manually marked present on penalty day)
+                                // OR if it has penalty reason but is present (should be treated as penalty present)
+                                if (isPenaltyPresentChip || hasPenaltyReasonButPresent) {
+                                  // Rule 4: Employee came on off day that is penalty day - show orange
+                                  chipColor = 'bg-orange-100 text-orange-800 border-orange-300';
+                                  chipTooltip = 'Penalty day is marked as present';
+                                  showInfoIcon = true;
+                                } else if (isAutoMarked) {
+                                  // Rule 1: Auto-marked present (Sunday bonus) - show green with tooltip
+                                  chipColor = 'bg-teal-100 text-teal-800 border-teal-700';
+                                  chipTooltip = autoMarkReason || 'Auto-marked present';
+                                  showInfoIcon = true;
+                                } else {
+                                  // Rule 3: Plain present - show green
+                                  chipColor = 'bg-teal-100 text-teal-800 border-teal-700';
+                                  chipTooltip = 'Present';
+                                  showInfoIcon = false;
+                                }
+                              } else if (isAbsent) {
+                                if (isPenaltyDay) {
+                                  // Rule 2: Penalty day (absent due to threshold breach) - show red with tooltip
+                                  chipColor = 'bg-red-200 text-red-900 border-red-500';
+                                  chipTooltip = autoMarkReason || 'Penalty day - Absent more than threshold';
+                                  showInfoIcon = true;
+                                } else {
+                                  // Rule 3: Plain absent - show red
+                                  chipColor = 'bg-red-100 text-red-800 border-red-300';
+                                  chipTooltip = 'Absent';
+                                  showInfoIcon = false;
+                                }
+                              } else {
+                                // Unmarked
+                                chipColor = 'bg-gray-100 text-gray-600 border-gray-300';
+                                chipTooltip = 'Unmarked';
+                                showInfoIcon = false;
+                              }
+                              
                               return (
                                 <span
                                   key={day}
-                                  className={`inline-flex items-center gap-1 px-2 py-1 rounded text-xs font-medium border ${
-                                    isPresent
-                                      ? 'bg-teal-100 text-teal-800 border-teal-700'
-                                      : isAbsent
-                                      ? isPenaltyDay
-                                        ? 'bg-red-200 text-red-900 border-red-500'
-                                        : 'bg-red-100 text-red-800 border-red-300'
-                                      : 'bg-gray-100 text-gray-600 border-gray-300'
-                                  }`}
-                                  title={
-                                    isAutoMarked ? autoMarkReason :
-                                    isPresent ? 'Present' : 
-                                    isAbsent ? 'Absent' : 
-                                    'Unmarked'
-                                  }
+                                  className={`inline-flex items-center gap-1 px-2 py-1 rounded text-xs font-medium border ${chipColor}`}
+                                  title={chipTooltip}
                                 >
                                   {day}
-                                  {isAutoMarked && (
-                                    <span title={autoMarkReason}>
+                                  {showInfoIcon && (
+                                    <span title={chipTooltip}>
                                       <Info 
                                         size={12} 
-                                        className={isPenaltyDay ? 'text-red-700 cursor-help flex-shrink-0' : 'text-teal-600 cursor-help flex-shrink-0'} 
+                                        className={
+                                          (isPenaltyPresentChip || hasPenaltyReasonButPresent)
+                                            ? 'text-orange-700 cursor-help flex-shrink-0' 
+                                            : isPenaltyDay 
+                                            ? 'text-red-700 cursor-help flex-shrink-0' 
+                                            : 'text-teal-600 cursor-help flex-shrink-0'
+                                        } 
                                       />
                                     </span>
                                   )}
