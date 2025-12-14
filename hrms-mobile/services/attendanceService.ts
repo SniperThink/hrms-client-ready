@@ -64,6 +64,35 @@ export const attendanceService = {
     
     return await api.get<AttendanceStats>(`${API_ENDPOINTS.attendanceStats}?${params.toString()}`);
   },
+
+  // Get eligible employees for attendance marking
+  async getEligibleEmployees(date: string): Promise<any> {
+    const params = new URLSearchParams();
+    params.append('date', date);
+    
+    return await api.get(`${API_ENDPOINTS.employees}eligible_for_attendance/?${params.toString()}`);
+  },
+
+  // Save attendance data
+  async saveAttendance(attendanceData: any[]): Promise<any> {
+    return await api.post(`${API_ENDPOINTS.dailyAttendance}bulk_create/`, { attendance_records: attendanceData });
+  },
+
+  // Check if Excel attendance was uploaded for a date
+  async checkExcelAttendance(date: string): Promise<any> {
+    const params = new URLSearchParams();
+    params.append('date', date);
+    
+    return await api.get(`${API_ENDPOINTS.uploadAttendance}check/?${params.toString()}`);
+  },
+
+  // Check if a date is a holiday
+  async checkHoliday(date: string): Promise<any> {
+    const params = new URLSearchParams();
+    params.append('date', date);
+    
+    return await api.get(`${API_ENDPOINTS.holidays}check/?${params.toString()}`);
+  },
 };
 
 export default attendanceService;

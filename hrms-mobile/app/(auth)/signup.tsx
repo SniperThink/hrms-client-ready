@@ -11,6 +11,7 @@ import {
   KeyboardAvoidingView,
   Platform,
   ScrollView,
+  Dimensions,
 } from 'react-native';
 import { useRouter } from 'expo-router';
 import { useAppDispatch } from '@/store/hooks';
@@ -18,6 +19,10 @@ import { setUser, setTenant } from '@/store/slices/authSlice';
 import { authService, SignupData } from '@/services/authService';
 import Colors from '@/constants/Colors';
 import { useColorScheme } from '@/components/useColorScheme';
+import FontAwesome from '@expo/vector-icons/FontAwesome';
+import SniperThinkLogo from '@/components/SniperThinkLogo';
+
+const { width, height } = Dimensions.get('window');
 
 export default function SignupScreen() {
   const router = useRouter();
@@ -64,7 +69,7 @@ export default function SignupScreen() {
       dispatch(setTenant(response.tenant));
 
       // Navigate to main app
-      router.replace('/(tabs)');
+      router.replace('/(drawer)');
     } catch (error: any) {
       Alert.alert('Signup Failed', error.message || 'Unable to create account. Please try again.');
     } finally {
@@ -79,20 +84,36 @@ export default function SignupScreen() {
     >
       <ScrollView contentContainerStyle={styles.scrollContent}>
         <View style={[styles.content, { backgroundColor: colors.background }]}>
+          {/* Logo and Title */}
           <View style={styles.header}>
-            <Text style={[styles.title, { color: colors.primary }]}>Create Account</Text>
+            <SniperThinkLogo size={60} color="#176d67" />
+            <Text style={[styles.title, { color: '#176d67' }]}>Create Account</Text>
             <Text style={[styles.subtitle, { color: colors.textSecondary }]}>
-              Sign up to get started with HRMS
+              Set up your company's HRMS in minutes.
             </Text>
           </View>
 
+          {/* Signup Form */}
           <View style={styles.form}>
+            {/* Company Name */}
+            <View style={styles.inputContainer}>
+              <Text style={[styles.label, { color: colors.text }]}>Company Name</Text>
+              <TextInput
+                style={[styles.input, { backgroundColor: colors.surface, color: colors.text, borderColor: colors.border }]}
+                placeholder="Enter your company name"
+                placeholderTextColor={colors.textLight}
+                value={formData.company_name}
+                onChangeText={(text) => setFormData({ ...formData, company_name: text })}
+              />
+            </View>
+
+            {/* Name Fields */}
             <View style={styles.row}>
               <View style={[styles.inputContainer, { flex: 1, marginRight: 8 }]}>
                 <Text style={[styles.label, { color: colors.text }]}>First Name</Text>
                 <TextInput
                   style={[styles.input, { backgroundColor: colors.surface, color: colors.text, borderColor: colors.border }]}
-                  placeholder="First Name"
+                  placeholder="John"
                   placeholderTextColor={colors.textLight}
                   value={formData.first_name}
                   onChangeText={(text) => setFormData({ ...formData, first_name: text })}
@@ -102,7 +123,7 @@ export default function SignupScreen() {
                 <Text style={[styles.label, { color: colors.text }]}>Last Name</Text>
                 <TextInput
                   style={[styles.input, { backgroundColor: colors.surface, color: colors.text, borderColor: colors.border }]}
-                  placeholder="Last Name"
+                  placeholder="Doe"
                   placeholderTextColor={colors.textLight}
                   value={formData.last_name}
                   onChangeText={(text) => setFormData({ ...formData, last_name: text })}
@@ -110,17 +131,7 @@ export default function SignupScreen() {
               </View>
             </View>
 
-            <View style={styles.inputContainer}>
-              <Text style={[styles.label, { color: colors.text }]}>Company Name</Text>
-              <TextInput
-                style={[styles.input, { backgroundColor: colors.surface, color: colors.text, borderColor: colors.border }]}
-                placeholder="Your Company Name"
-                placeholderTextColor={colors.textLight}
-                value={formData.company_name}
-                onChangeText={(text) => setFormData({ ...formData, company_name: text })}
-              />
-            </View>
-
+            {/* Subdomain */}
             <View style={styles.inputContainer}>
               <Text style={[styles.label, { color: colors.text }]}>Subdomain</Text>
               <TextInput
@@ -136,11 +147,12 @@ export default function SignupScreen() {
               </Text>
             </View>
 
+            {/* Email */}
             <View style={styles.inputContainer}>
-              <Text style={[styles.label, { color: colors.text }]}>Email</Text>
+              <Text style={[styles.label, { color: colors.text }]}>Admin Email</Text>
               <TextInput
                 style={[styles.input, { backgroundColor: colors.surface, color: colors.text, borderColor: colors.border }]}
-                placeholder="your@email.com"
+                placeholder="admin@yourcompany.com"
                 placeholderTextColor={colors.textLight}
                 value={formData.email}
                 onChangeText={(text) => setFormData({ ...formData, email: text })}
@@ -150,6 +162,7 @@ export default function SignupScreen() {
               />
             </View>
 
+            {/* Password */}
             <View style={styles.inputContainer}>
               <Text style={[styles.label, { color: colors.text }]}>Password</Text>
               <View style={styles.passwordContainer}>
@@ -165,11 +178,16 @@ export default function SignupScreen() {
                   onPress={() => setShowPassword(!showPassword)}
                   style={styles.eyeButton}
                 >
-                  <Text style={{ color: colors.primary }}>{showPassword ? 'Hide' : 'Show'}</Text>
+                  <FontAwesome 
+                    name={showPassword ? 'eye-slash' : 'eye'} 
+                    size={20} 
+                    color={colors.textLight} 
+                  />
                 </TouchableOpacity>
               </View>
             </View>
 
+            {/* Confirm Password */}
             <View style={styles.inputContainer}>
               <Text style={[styles.label, { color: colors.text }]}>Confirm Password</Text>
               <TextInput
@@ -182,24 +200,33 @@ export default function SignupScreen() {
               />
             </View>
 
+            {/* Note */}
+            <View style={[styles.noteBox, { backgroundColor: '#f0fdfa', borderColor: '#176d67' }]}>
+              <Text style={[styles.noteText, { color: '#176d67' }]}>
+                <Text style={{ fontWeight: '600' }}>Note:</Text> A temporary password will be automatically generated and sent to your email. You'll be required to change it on first login.
+              </Text>
+            </View>
+
+            {/* Signup Button */}
             <TouchableOpacity
-              style={[styles.signupButton, { backgroundColor: colors.primary }]}
+              style={[styles.signupButton, { backgroundColor: '#176d67' }]}
               onPress={handleSignup}
               disabled={loading}
             >
               {loading ? (
                 <ActivityIndicator color="white" />
               ) : (
-                <Text style={styles.signupButtonText}>Create Account</Text>
+                <Text style={styles.signupButtonText}>Create Company Account</Text>
               )}
             </TouchableOpacity>
 
+            {/* Login Link */}
             <View style={styles.loginContainer}>
               <Text style={[styles.loginText, { color: colors.textSecondary }]}>
                 Already have an account?{' '}
               </Text>
               <TouchableOpacity onPress={() => router.push('/(auth)/login')}>
-                <Text style={[styles.loginLink, { color: colors.primary }]}>Login</Text>
+                <Text style={[styles.loginLink, { color: '#176d67' }]}>Sign in to your company</Text>
               </TouchableOpacity>
             </View>
           </View>
@@ -218,15 +245,15 @@ const styles = StyleSheet.create({
   },
   content: {
     flex: 1,
-    padding: 20,
+    padding: 24,
     justifyContent: 'center',
   },
   header: {
-    marginBottom: 30,
     alignItems: 'center',
+    marginBottom: 30,
   },
   title: {
-    fontSize: 28,
+    fontSize: 24,
     fontWeight: 'bold',
     marginBottom: 8,
   },
@@ -237,9 +264,6 @@ const styles = StyleSheet.create({
   form: {
     width: '100%',
   },
-  row: {
-    flexDirection: 'row',
-  },
   inputContainer: {
     marginBottom: 16,
   },
@@ -249,7 +273,7 @@ const styles = StyleSheet.create({
     marginBottom: 8,
   },
   input: {
-    height: 52,
+    height: 48,
     borderWidth: 1.5,
     borderRadius: 12,
     paddingHorizontal: 16,
@@ -260,16 +284,24 @@ const styles = StyleSheet.create({
     shadowRadius: 2,
     elevation: 1,
   },
+  row: {
+    flexDirection: 'row',
+  },
   passwordContainer: {
     position: 'relative',
   },
   passwordInput: {
-    height: 50,
-    borderWidth: 1,
-    borderRadius: 8,
+    height: 48,
+    borderWidth: 1.5,
+    borderRadius: 12,
     paddingHorizontal: 16,
-    paddingRight: 60,
+    paddingRight: 48,
     fontSize: 16,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.05,
+    shadowRadius: 2,
+    elevation: 1,
   },
   eyeButton: {
     position: 'absolute',
@@ -281,13 +313,22 @@ const styles = StyleSheet.create({
     fontSize: 12,
     marginTop: 4,
   },
+  noteBox: {
+    padding: 12,
+    borderRadius: 8,
+    borderWidth: 1,
+    marginBottom: 16,
+  },
+  noteText: {
+    fontSize: 13,
+    lineHeight: 18,
+  },
   signupButton: {
-    height: 54,
+    height: 48,
     borderRadius: 12,
     justifyContent: 'center',
     alignItems: 'center',
-    marginTop: 8,
-    marginBottom: 20,
+    marginBottom: 16,
     shadowColor: '#000',
     shadowOffset: { width: 0, height: 4 },
     shadowOpacity: 0.2,
@@ -303,13 +344,18 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     justifyContent: 'center',
     alignItems: 'center',
+    paddingTop: 16,
+    borderTopWidth: 1,
+    borderTopColor: '#e5e7eb',
   },
   loginText: {
     fontSize: 14,
+    marginBottom: 2,
   },
   loginLink: {
     fontSize: 14,
     fontWeight: '600',
+    marginBottom: 2,
   },
 });
 

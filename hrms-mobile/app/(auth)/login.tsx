@@ -11,6 +11,7 @@ import {
   KeyboardAvoidingView,
   Platform,
   ScrollView,
+  Dimensions,
 } from 'react-native';
 import { useRouter } from 'expo-router';
 import { useAppDispatch } from '@/store/hooks';
@@ -18,6 +19,10 @@ import { setUser, setTenant } from '@/store/slices/authSlice';
 import { authService, LoginCredentials } from '@/services/authService';
 import Colors from '@/constants/Colors';
 import { useColorScheme } from '@/components/useColorScheme';
+import FontAwesome from '@expo/vector-icons/FontAwesome';
+import SniperThinkLogo from '@/components/SniperThinkLogo';
+
+const { width, height } = Dimensions.get('window');
 
 export default function LoginScreen() {
   const router = useRouter();
@@ -52,7 +57,7 @@ export default function LoginScreen() {
       dispatch(setTenant(response.tenant));
 
       // Navigate to main app
-      router.replace('/(tabs)');
+      router.replace('/(drawer)');
     } catch (error: any) {
       // Handle different error types
       let errorMessage = 'Invalid email or password';
@@ -86,14 +91,19 @@ export default function LoginScreen() {
         <View style={[styles.content, { backgroundColor: colors.background }]}>
           {/* Logo and Title */}
           <View style={styles.header}>
-            <Text style={[styles.title, { color: colors.primary }]}>HRMS</Text>
+            <SniperThinkLogo size={60} color="#176d67" marginBottom={32} />
+            <Text style={[styles.title, { color: '#176d67' }]}>SniperThink HRMS</Text>
             <Text style={[styles.subtitle, { color: colors.textSecondary }]}>
+              Analyze. Automate. Accelerate.
+            </Text>
+            <Text style={[styles.description, { color: colors.textSecondary }]}>
               Welcome back! Please login to continue.
             </Text>
           </View>
 
           {/* Login Form */}
           <View style={styles.form}>
+            {/* Email Input */}
             <View style={styles.inputContainer}>
               <Text style={[styles.label, { color: colors.text }]}>Email</Text>
               <TextInput
@@ -108,6 +118,7 @@ export default function LoginScreen() {
               />
             </View>
 
+            {/* Password Input */}
             <View style={styles.inputContainer}>
               <Text style={[styles.label, { color: colors.text }]}>Password</Text>
               <View style={styles.passwordContainer}>
@@ -124,18 +135,25 @@ export default function LoginScreen() {
                   onPress={() => setShowPassword(!showPassword)}
                   style={styles.eyeButton}
                 >
-                  <Text style={{ color: colors.primary }}>{showPassword ? 'Hide' : 'Show'}</Text>
+                  <FontAwesome 
+                    name={showPassword ? 'eye-slash' : 'eye'} 
+                    size={20} 
+                    color={colors.textLight} 
+                  />
                 </TouchableOpacity>
               </View>
             </View>
 
+            {/* Options Row */}
             <View style={styles.optionsRow}>
               <TouchableOpacity
                 style={styles.checkboxContainer}
                 onPress={() => setKeepSignedIn(!keepSignedIn)}
               >
-                <View style={[styles.checkbox, { borderColor: colors.border, backgroundColor: keepSignedIn ? colors.primary : 'transparent' }]}>
-                  {keepSignedIn && <Text style={{ color: 'white', fontSize: 12 }}>✓</Text>}
+                <View style={[styles.checkbox, { borderColor: colors.border, backgroundColor: keepSignedIn ? '#176d67' : 'transparent' }]}>
+                  {keepSignedIn && (
+                    <FontAwesome name="check" size={12} color="white" />
+                  )}
                 </View>
                 <Text style={[styles.checkboxLabel, { color: colors.textSecondary }]}>
                   Keep me signed in
@@ -143,30 +161,32 @@ export default function LoginScreen() {
               </TouchableOpacity>
 
               <TouchableOpacity onPress={() => router.push('/(auth)/forgot-password')}>
-                <Text style={[styles.forgotPassword, { color: colors.primary }]}>
-                  Forgot Password?
+                <Text style={[styles.forgotPassword, { color: '#176d67' }]}>
+                  Forgot password?
                 </Text>
               </TouchableOpacity>
             </View>
 
+            {/* Login Button */}
             <TouchableOpacity
-              style={[styles.loginButton, { backgroundColor: colors.primary }]}
+              style={[styles.loginButton, { backgroundColor: '#176d67' }]}
               onPress={handleLogin}
               disabled={loading}
             >
               {loading ? (
                 <ActivityIndicator color="white" />
               ) : (
-                <Text style={styles.loginButtonText}>Login</Text>
+                <Text style={styles.loginButtonText}>Sign In</Text>
               )}
             </TouchableOpacity>
 
+            {/* Sign Up Link */}
             <View style={styles.signupContainer}>
               <Text style={[styles.signupText, { color: colors.textSecondary }]}>
-                Don't have an account?{' '}
+                New to SniperThink?{' '}
               </Text>
               <TouchableOpacity onPress={() => router.push('/(auth)/signup')}>
-                <Text style={[styles.signupLink, { color: colors.primary }]}>Sign Up</Text>
+                <Text style={[styles.signupLink, { color: '#176d67' }]}>Sign up</Text>
               </TouchableOpacity>
             </View>
           </View>
@@ -185,20 +205,25 @@ const styles = StyleSheet.create({
   },
   content: {
     flex: 1,
-    padding: 20,
+    padding: 24,
     justifyContent: 'center',
   },
   header: {
-    marginBottom: 40,
     alignItems: 'center',
+    marginBottom: 40,
   },
   title: {
-    fontSize: 32,
+    fontSize: 28,
     fontWeight: 'bold',
     marginBottom: 8,
   },
   subtitle: {
-    fontSize: 16,
+    fontSize: 18,
+    fontWeight: '600',
+    marginBottom: 8,
+  },
+  description: {
+    fontSize: 14,
     textAlign: 'center',
   },
   form: {
@@ -228,17 +253,22 @@ const styles = StyleSheet.create({
     position: 'relative',
   },
   passwordInput: {
-    height: 50,
-    borderWidth: 1,
-    borderRadius: 8,
+    height: 52,
+    borderWidth: 1.5,
+    borderRadius: 12,
     paddingHorizontal: 16,
-    paddingRight: 60,
+    paddingRight: 48,
     fontSize: 16,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.05,
+    shadowRadius: 2,
+    elevation: 1,
   },
   eyeButton: {
     position: 'absolute',
     right: 16,
-    top: 14,
+    top: 16,
     padding: 4,
   },
   optionsRow: {

@@ -7,14 +7,15 @@
     "icon": "./assets/images/icon.png",
     "scheme": "hrmsmobile",
     "userInterfaceStyle": "automatic",
-    "newArchEnabled": true,
+    "newArchEnabled": false,
     "splash": {
       "image": "./assets/images/splash-icon.png",
       "resizeMode": "contain",
       "backgroundColor": "#ffffff"
     },
     "ios": {
-      "supportsTablet": true
+      "supportsTablet": true,
+      "bundleIdentifier": "com.anonymous.hrmsmobile"
     },
     "android": {
       "adaptiveIcon": {
@@ -26,6 +27,15 @@
       "usesCleartextTraffic": true,
       "networkSecurityConfig": "./network_security_config.xml",
       "package": "com.anonymous.hrmsmobile"
+    },
+    "updates": {
+      "enabled": true,
+      "fallbackToCacheTimeout": 0,
+      "checkAutomatically": "ON_LOAD",
+      "url": "https://u.expo.dev/your-project-id"
+    },
+    "runtimeVersion": {
+      "policy": "sdkVersion"
     },
     "web": {
       "bundler": "metro",
@@ -41,8 +51,10 @@
             "usesCleartextTraffic": true
           }
         }
-      ]
+      ],
+      "expo-secure-store"
     ],
+    "jsEngine": "hermes",
     "experiments": {
       "typedRoutes": true
     }

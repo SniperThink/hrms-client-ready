@@ -5,6 +5,7 @@ import { Stack } from 'expo-router';
 import * as SplashScreen from 'expo-splash-screen';
 import { useEffect } from 'react';
 import { Provider } from 'react-redux';
+import { SafeAreaProvider } from 'react-native-safe-area-context';
 import 'react-native-reanimated';
 
 import { useColorScheme } from '@/components/useColorScheme';
@@ -51,15 +52,17 @@ function RootLayoutNav() {
   const colorScheme = useColorScheme();
 
   return (
-    <Provider store={store}>
-    <ThemeProvider value={colorScheme === 'dark' ? DarkTheme : DefaultTheme}>
-        <Stack screenOptions={{ headerShown: false }}>
-          <Stack.Screen name="(auth)" options={{ headerShown: false }} />
-        <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
-        <Stack.Screen name="modal" options={{ presentation: 'modal' }} />
-        <Stack.Screen name="payroll/detail-table" options={{ headerShown: false }} />
-      </Stack>
-    </ThemeProvider>
-    </Provider>
+    <SafeAreaProvider>
+      <Provider store={store}>
+        <ThemeProvider value={colorScheme === 'dark' ? DarkTheme : DefaultTheme}>
+          <Stack screenOptions={{ headerShown: false }}>
+            <Stack.Screen name="(auth)" options={{ headerShown: false }} />
+            <Stack.Screen name="(drawer)" options={{ headerShown: false }} />
+            <Stack.Screen name="modal" options={{ presentation: 'modal' }} />
+            <Stack.Screen name="payroll/detail-table" options={{ headerShown: false }} />
+          </Stack>
+        </ThemeProvider>
+      </Provider>
+    </SafeAreaProvider>
   );
 }
