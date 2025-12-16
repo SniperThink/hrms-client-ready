@@ -175,7 +175,19 @@ export const api = {
       const error: APIError = await response.json().catch(() => ({ error: 'Network error' }));
       throw new Error(error.error || error.message || `HTTP ${response.status}`);
     }
-    return await response.json();
+    
+    // Handle 204 No Content (empty response)
+    if (response.status === 204 || response.headers.get('content-length') === '0') {
+      return undefined as T;
+    }
+    
+    // Try to parse JSON, but return undefined if empty
+    const text = await response.text();
+    if (!text || text.trim() === '') {
+      return undefined as T;
+    }
+    
+    return JSON.parse(text);
   },
 
   // File upload

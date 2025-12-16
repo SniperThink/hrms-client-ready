@@ -6,7 +6,23 @@ import { Holiday } from '@/types';
 export const holidayService = {
   // Get all holidays
   async getHolidays(): Promise<Holiday[]> {
-    return await api.get<Holiday[]>(API_ENDPOINTS.holidays);
+    const response = await api.get<any>(API_ENDPOINTS.holidays);
+    console.log('Raw holidays response:', response);
+    
+    // Check if response is paginated (has results array)
+    if (response && typeof response === 'object' && 'results' in response) {
+      console.log('Paginated response detected, returning results array');
+      return response.results || [];
+    }
+    
+    // Check if response is already an array
+    if (Array.isArray(response)) {
+      console.log('Array response detected');
+      return response;
+    }
+    
+    console.log('Unexpected response format, returning empty array');
+    return [];
   },
 
   // Get holiday by ID
@@ -16,7 +32,19 @@ export const holidayService = {
 
   // Get upcoming holidays
   async getUpcomingHolidays(): Promise<Holiday[]> {
-    return await api.get<Holiday[]>(API_ENDPOINTS.upcomingHolidays);
+    const response = await api.get<any>(API_ENDPOINTS.upcomingHolidays);
+    console.log('Raw upcoming holidays response:', response);
+    
+    // Check if response is paginated or array
+    if (response && typeof response === 'object' && 'results' in response) {
+      return response.results || [];
+    }
+    
+    if (Array.isArray(response)) {
+      return response;
+    }
+    
+    return [];
   },
 
   // Get holidays by month
@@ -45,7 +73,17 @@ export const holidayService = {
 
   // Delete holiday
   async deleteHoliday(id: number): Promise<void> {
-    return await api.delete(`${API_ENDPOINTS.holidays}${id}/`);
+    console.log('Calling delete API for holiday ID:', id);
+    console.log('Delete URL:', `${API_ENDPOINTS.holidays}${id}/`);
+    
+    try {
+      await api.delete(`${API_ENDPOINTS.holidays}${id}/`);
+      console.log('Delete successful for holiday ID:', id);
+    } catch (error: any) {
+      console.error('Delete API error:', error);
+      console.error('Error response:', error.response);
+      throw error;
+    }
   },
 };
 

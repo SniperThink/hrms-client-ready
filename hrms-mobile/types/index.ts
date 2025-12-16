@@ -171,8 +171,19 @@ export interface Holiday {
   id: number;
   name: string;
   date: string;
-  is_recurring: boolean;
+  holiday_type?: string;
   description?: string;
+  is_active?: boolean;
+  applies_to_all?: boolean;
+  specific_departments?: string[];
+  is_past?: boolean;
+  created_by?: number;
+  created_by_email?: string;
+  tenant_name?: string;
+  created_at?: string;
+  updated_at?: string;
+  // Legacy field for backwards compatibility
+  is_recurring?: boolean;
 }
 
 // API Response Types
@@ -194,16 +205,26 @@ export interface PaginatedResponse<T> {
 
 export interface DashboardStats {
   total_employees: number;
-  active_employees: number;
-  total_salary: string;
-  average_salary: string;
-  attendance_rate: number;
-  department_data: Array<{
+  active_employees?: number;
+  employees_paid_this_month?: number;
+  total_salary_paid?: number;
+  current_month?: string;
+  total_salary?: string;
+  average_salary?: string;
+  attendance_rate?: number;
+  present_today?: number;
+  absent_today?: number;
+  on_leave_today?: number;
+  department_distribution?: Array<{
     department: string;
     count: number;
-    total_salary: string;
   }>;
-  salary_trends: Array<{
+  department_data?: Array<{
+    department: string;
+    count: number;
+    total_salary?: string;
+  }>;
+  salary_trends?: Array<{
     month: string;
     year: number;
     total: string;

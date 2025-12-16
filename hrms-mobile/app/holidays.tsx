@@ -36,14 +36,21 @@ export default function HolidayManagementScreen() {
   const loadHolidays = async () => {
     try {
       setLoading(true);
+      console.log('Loading holidays, showUpcoming:', showUpcoming);
+      
       if (showUpcoming) {
         const data = await holidayService.getUpcomingHolidays();
+        console.log('Upcoming holidays loaded:', data);
         setUpcomingHolidays(data);
       } else {
         const data = await holidayService.getHolidays();
+        console.log('All holidays loaded:', data);
+        console.log('Number of holidays:', data?.length || 0);
         setHolidays(data);
       }
     } catch (error: any) {
+      console.error('Error loading holidays:', error);
+      console.error('Error details:', error.response?.data || error.message);
       Alert.alert('Error', error.message || 'Failed to load holidays');
     } finally {
       setLoading(false);
@@ -67,10 +74,15 @@ export default function HolidayManagementScreen() {
           style: 'destructive',
           onPress: async () => {
             try {
+              console.log('Deleting holiday with ID:', id);
               await holidayService.deleteHoliday(id);
+              console.log('Holiday deleted successfully');
+              Alert.alert('Success', 'Holiday deleted successfully');
               loadHolidays();
             } catch (error: any) {
-              Alert.alert('Error', error.message || 'Failed to delete holiday');
+              console.error('Error deleting holiday:', error);
+              console.error('Error details:', error.response?.data || error.message);
+              Alert.alert('Error', error.response?.data?.error || error.message || 'Failed to delete holiday');
             }
           },
         },
@@ -92,9 +104,9 @@ export default function HolidayManagementScreen() {
             <Text style={[styles.holidayDate, { color: colors.textSecondary }]}>
               {format(parseISO(item.date), 'MMMM dd, yyyy')}
             </Text>
-            {item.is_recurring && (
+            {item.holiday_type && (
               <View style={[styles.recurringBadge, { backgroundColor: colors.info }]}>
-                <Text style={styles.recurringText}>Recurring</Text>
+                <Text style={styles.recurringText}>{item.holiday_type}</Text>
               </View>
             )}
             {upcoming && (

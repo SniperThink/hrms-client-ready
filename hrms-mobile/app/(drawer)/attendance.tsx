@@ -80,6 +80,606 @@ interface AttendanceEntry {
   _prevLate?: number;
 }
 
+// Attendance record interface for tracker
+interface AttendanceRecord {
+  id: number;
+  employee_id: string;
+  name: string;
+  department?: string;
+  date: string;
+  calendar_days: number;
+  off_days?: number;
+  total_working_days: number;
+  present_days: number;
+  absent_days: number;
+  unmarked_days?: number;
+  holiday_days?: number;
+  weekly_penalty_days?: number;
+  status?: string;
+  attendance_percentage?: number;
+  ot_hours: string | number;
+  late_minutes: number;
+}
+
+// Filter type
+type FilterType = 'one_day' | 'custom_month' | 'last_6_months' | 'last_12_months' | 'last_5_years' | 'custom_range';
+
+// Month names
+const monthNames = ['JAN', 'FEB', 'MAR', 'APR', 'MAY', 'JUN', 'JUL', 'AUG', 'SEP', 'OCT', 'NOV', 'DEC'];
+
+// Track Attendance Tab Component
+const TrackAttendanceTab: React.FC<{
+  colors: any;
+  searchQuery: string;
+  setSearchQuery: (query: string) => void;
+}> = memo(({ colors, searchQuery, setSearchQuery }) => {
+  const [attendanceData, setAttendanceData] = useState<AttendanceRecord[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [filterType, setFilterType] = useState<FilterType>('custom_month');
+  const [selectedDepartment, setSelectedDepartment] = useState<string>('all');
+  const [departments, setDepartments] = useState<string[]>([]);
+  const [selectedYear, setSelectedYear] = useState<number>(new Date().getFullYear());
+  const [selectedMonth, setSelectedMonth] = useState<string>(monthNames[new Date().getMonth()]);
+  const [selectedDate, setSelectedDate] = useState<string>('');
+  const [rangeStartDate, setRangeStartDate] = useState<string>('');
+  const [rangeEndDate, setRangeEndDate] = useState<string>('');
+  const [showFilterModal, setShowFilterModal] = useState(false);
+  const [showMonthModal, setShowMonthModal] = useState(false);
+  const [showYearModal, setShowYearModal] = useState(false);
+  const [showDateModal, setShowDateModal] = useState(false);
+  
+  // KPI totals
+  const [kpiTotals, setKpiTotals] = useState<{
+    total_employees: number;
+    total_ot_hours: number;
+    total_late_minutes: number;
+    total_present_days: number;
+    total_working_days: number;
+    avg_attendance_percentage: number;
+    absentees_count?: number;
+    presentees_count?: number;
+    unmarked_count?: number;
+  } | null>(null);
+
+  // Generate years
+  const currentYear = new Date().getFullYear();
+  const availableYears = Array.from({ length: 8 }, (_, i) => currentYear + 2 - i);
+
+  // Filter options
+  const filterTypeOptions = [
+    { value: 'one_day', label: 'One Day' },
+    { value: 'custom_month', label: 'Custom Month' },
+    { value: 'last_6_months', label: 'Last 6 Months' },
+    { value: 'last_12_months', label: 'Last 12 Months' },
+    { value: 'last_5_years', label: 'Last 5 Years' },
+    { value: 'custom_range', label: 'Custom Range' },
+  ];
+
+  // Fetch attendance data
+  const fetchAttendanceData = useCallback(async () => {
+    try {
+      setLoading(true);
+      
+      // Build query parameters
+      const params = new URLSearchParams();
+      
+      if (filterType === 'custom_month' && selectedMonth && selectedYear) {
+        params.append('time_period', 'custom');
+        const monthIndex = monthNames.indexOf(selectedMonth) + 1;
+        params.append('month', monthIndex.toString());
+        params.append('year', selectedYear.toString());
+      } else if (filterType === 'one_day' && selectedDate) {
+        params.append('time_period', 'custom_range');
+        params.append('start_date', selectedDate);
+        params.append('end_date', selectedDate);
+      } else if (filterType === 'custom_range' && rangeStartDate && rangeEndDate) {
+        params.append('time_period', 'custom_range');
+        params.append('start_date', rangeStartDate);
+        params.append('end_date', rangeEndDate);
+      } else {
+        params.append('time_period', filterType);
+      }
+      
+      params.append('offset', '0');
+      params.append('limit', '0'); // Fetch all records
+      
+      const url = `${API_ENDPOINTS.dailyAttendance}all_records/?${params.toString()}`;
+      const response = await api.get(url);
+      
+      if (response && response.results) {
+        setAttendanceData(response.results);
+        setKpiTotals(response.kpi_totals || null);
+        
+        // Extract departments
+        const deptSet = new Set<string>(['all']);
+        response.results.forEach((record: AttendanceRecord) => {
+          if (record.department) deptSet.add(record.department);
+        });
+        setDepartments(Array.from(deptSet));
+      }
+      
+      setLoading(false);
+    } catch (error) {
+      console.error('Error fetching attendance data:', error);
+      setLoading(false);
+    }
+  }, [filterType, selectedMonth, selectedYear, selectedDate, rangeStartDate, rangeEndDate]);
+
+  // Load data on mount and filter changes
+  useEffect(() => {
+    fetchAttendanceData();
+  }, [fetchAttendanceData]);
+
+  // Filter data by search and department
+  const filteredData = useMemo(() => {
+    return attendanceData.filter(record => {
+      // Search filter
+      if (searchQuery) {
+        const query = searchQuery.toLowerCase();
+        const matchesSearch = 
+          record.name.toLowerCase().includes(query) ||
+          record.employee_id.toLowerCase().includes(query);
+        if (!matchesSearch) return false;
+      }
+      
+      // Department filter
+      if (selectedDepartment && selectedDepartment !== 'all') {
+        const recordDept = record.department || 'N/A';
+        if (recordDept !== selectedDepartment) return false;
+      }
+      
+      return true;
+    });
+  }, [attendanceData, searchQuery, selectedDepartment]);
+
+  // Calculate KPIs
+  const isFiltered = searchQuery !== '' || selectedDepartment !== 'all';
+  
+  const totalEmployees = kpiTotals && !isFiltered ? kpiTotals.total_employees : filteredData.length;
+  const totalOtHours = kpiTotals && !isFiltered ? kpiTotals.total_ot_hours : filteredData.reduce((sum, r) => sum + (typeof r.ot_hours === 'string' ? parseFloat(r.ot_hours) || 0 : r.ot_hours), 0);
+  const totalLateMinutes = kpiTotals && !isFiltered ? kpiTotals.total_late_minutes : filteredData.reduce((sum, r) => sum + r.late_minutes, 0);
+  const totalPresentDays = kpiTotals && !isFiltered ? kpiTotals.total_present_days : filteredData.reduce((sum, r) => sum + r.present_days, 0);
+  const totalWorkingDays = kpiTotals && !isFiltered ? kpiTotals.total_working_days : filteredData.reduce((sum, r) => sum + (r.total_working_days || 0), 0);
+  const avgPresentPerc = kpiTotals && !isFiltered ? kpiTotals.avg_attendance_percentage : (totalWorkingDays > 0 ? (totalPresentDays / totalWorkingDays) * 100 : 0);
+  const avgWorkingDays = totalEmployees > 0 ? totalWorkingDays / totalEmployees : 0;
+  const avgPresentDays = totalEmployees > 0 ? totalPresentDays / totalEmployees : 0;
+
+  return (
+    <View style={styles.trackAttendanceContainer}>
+      {/* Tracker header */}
+      <View style={styles.trackHeader}>
+        <Text style={[styles.trackTitle, { color: colors.text }]}>Attendance Tracker</Text>
+        <Text style={[styles.trackSubtitle, { color: colors.textSecondary }]}>
+          Analyse attendance trends across months and departments
+        </Text>
+      </View>
+
+      {/* Filters Section */}
+      <View style={styles.trackFiltersContainer}>
+        {/* Filter Type and Department */}
+        <View style={styles.filterRow}>
+          <TouchableOpacity
+            style={[styles.filterButton, { backgroundColor: colors.surface, borderColor: colors.border }]}
+            onPress={() => setShowFilterModal(true)}
+          >
+            <FontAwesome name="filter" size={14} color={colors.primary} />
+            <Text style={[styles.filterButtonText, { color: colors.text }]}>
+              {filterTypeOptions.find(f => f.value === filterType)?.label || 'Filter'}
+            </Text>
+            <FontAwesome name="chevron-down" size={10} color={colors.textSecondary} />
+          </TouchableOpacity>
+
+          <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.departmentScroll}>
+            {departments.map((dept) => (
+              <TouchableOpacity
+                key={dept}
+                style={[
+                  styles.departmentChip,
+                  {
+                    backgroundColor: selectedDepartment === dept ? colors.primary : colors.surface,
+                    borderColor: selectedDepartment === dept ? colors.primary : colors.border,
+                  },
+                ]}
+                onPress={() => setSelectedDepartment(dept)}
+              >
+                <Text
+                  style={[
+                    styles.departmentChipText,
+                    { color: selectedDepartment === dept ? 'white' : colors.text },
+                  ]}
+                >
+                  {dept === 'all' ? 'All Departments' : dept}
+                </Text>
+              </TouchableOpacity>
+            ))}
+          </ScrollView>
+        </View>
+
+        {/* Date/Month/Range Selection based on filter type */}
+        {filterType === 'custom_month' && (
+          <View style={styles.dateSelectionRow}>
+            <TouchableOpacity
+              style={[styles.dateSelectButton, { backgroundColor: colors.surface, borderColor: colors.border }]}
+              onPress={() => setShowYearModal(true)}
+            >
+              <Text style={[styles.dateSelectButtonText, { color: colors.text }]}>{selectedYear}</Text>
+              <FontAwesome name="chevron-down" size={10} color={colors.textSecondary} />
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={[styles.dateSelectButton, { backgroundColor: colors.surface, borderColor: colors.border }]}
+              onPress={() => setShowMonthModal(true)}
+            >
+              <Text style={[styles.dateSelectButtonText, { color: colors.text }]}>{selectedMonth}</Text>
+              <FontAwesome name="chevron-down" size={10} color={colors.textSecondary} />
+            </TouchableOpacity>
+          </View>
+        )}
+
+        {filterType === 'one_day' && (
+          <View style={styles.dateSelectionRow}>
+            <TouchableOpacity
+              style={[styles.dateSelectButtonFull, { backgroundColor: colors.surface, borderColor: colors.border }]}
+              onPress={() => setShowDateModal(true)}
+            >
+              <FontAwesome name="calendar" size={14} color={colors.primary} />
+              <Text style={[styles.dateSelectButtonText, { color: colors.text }]}>
+                {selectedDate ? format(new Date(selectedDate), 'dd MMM yyyy') : 'Select Date'}
+              </Text>
+              <FontAwesome name="chevron-down" size={10} color={colors.textSecondary} />
+            </TouchableOpacity>
+          </View>
+        )}
+      </View>
+
+      {/* KPI Cards */}
+      {loading ? (
+        <View style={styles.loadingContainer}>
+          <ActivityIndicator size="large" color={colors.primary} />
+          <Text style={[styles.loadingText, { color: colors.textSecondary }]}>Loading attendance data...</Text>
+        </View>
+      ) : filterType === 'one_day' ? (
+        <View style={styles.kpiContainer}>
+          <View style={[styles.kpiCard, { backgroundColor: colors.surface, borderColor: colors.border }]}>
+            <Text style={[styles.kpiLabel, { color: colors.textSecondary }]}>Total Employees</Text>
+            <Text style={[styles.kpiValue, { color: colors.primary }]}>{totalEmployees}</Text>
+          </View>
+          <View style={[styles.kpiCard, { backgroundColor: colors.surface, borderColor: colors.border }]}>
+            <Text style={[styles.kpiLabel, { color: colors.textSecondary }]}>Present</Text>
+            <Text style={[styles.kpiValue, { color: colors.success }]}>
+              {kpiTotals && !isFiltered && kpiTotals.presentees_count !== undefined
+                ? kpiTotals.presentees_count
+                : filteredData.filter(r => r.present_days > 0).length}
+            </Text>
+          </View>
+          <View style={[styles.kpiCard, { backgroundColor: colors.surface, borderColor: colors.border }]}>
+            <Text style={[styles.kpiLabel, { color: colors.textSecondary }]}>Absent</Text>
+            <Text style={[styles.kpiValue, { color: colors.error }]}>
+              {kpiTotals && !isFiltered && kpiTotals.absentees_count !== undefined
+                ? kpiTotals.absentees_count
+                : filteredData.filter(r => r.absent_days > 0).length}
+            </Text>
+          </View>
+        </View>
+      ) : (
+        <View style={styles.kpiContainer}>
+          <View style={[styles.kpiCard, { backgroundColor: colors.surface, borderColor: colors.border }]}>
+            <Text style={[styles.kpiLabel, { color: colors.textSecondary }]}>Total Employees</Text>
+            <Text style={[styles.kpiValue, { color: colors.primary }]}>{totalEmployees}</Text>
+          </View>
+          <View style={[styles.kpiCard, { backgroundColor: colors.surface, borderColor: colors.border }]}>
+            <Text style={[styles.kpiLabel, { color: colors.textSecondary }]}>Total OT Hours</Text>
+            <Text style={[styles.kpiValue, { color: colors.primary }]}>{totalOtHours.toFixed(1)}</Text>
+          </View>
+          <View style={[styles.kpiCard, { backgroundColor: colors.surface, borderColor: colors.border }]}>
+            <Text style={[styles.kpiLabel, { color: colors.textSecondary }]}>Late Minutes</Text>
+            <Text style={[styles.kpiValue, { color: colors.primary }]}>{totalLateMinutes.toFixed(0)}</Text>
+          </View>
+          <View style={[styles.kpiCard, { backgroundColor: colors.surface, borderColor: colors.border }]}>
+            <Text style={[styles.kpiLabel, { color: colors.textSecondary }]}>Avg Working Days</Text>
+            <Text style={[styles.kpiValue, { color: colors.primary }]}>{avgWorkingDays.toFixed(1)}</Text>
+          </View>
+          <View style={[styles.kpiCard, { backgroundColor: colors.surface, borderColor: colors.border }]}>
+            <Text style={[styles.kpiLabel, { color: colors.textSecondary }]}>Avg Present Days</Text>
+            <Text style={[styles.kpiValue, { color: colors.primary }]}>{avgPresentDays.toFixed(1)}</Text>
+          </View>
+          <View style={[styles.kpiCard, { backgroundColor: colors.surface, borderColor: colors.border }]}>
+            <Text style={[styles.kpiLabel, { color: colors.textSecondary }]}>Avg Present %</Text>
+            <Text style={[styles.kpiValue, { color: colors.primary }]}>{avgPresentPerc.toFixed(1)}%</Text>
+          </View>
+        </View>
+      )}
+
+      {/* Attendance Data - mobile friendly cards instead of a wide table */}
+      {!loading && (
+        filteredData.length === 0 ? (
+          <View style={styles.emptyContainer}>
+            <FontAwesome name="inbox" size={48} color={colors.textSecondary} />
+            <Text style={[styles.emptyText, { color: colors.textSecondary }]}>
+              No attendance records found
+            </Text>
+          </View>
+        ) : (
+          <ScrollView style={styles.attendanceCardsContainer}>
+            {filteredData.map((record) => {
+              const attendancePercentage = record.total_working_days > 0 
+                ? (record.present_days / record.total_working_days) * 100 
+                : 0;
+
+              return (
+                <View
+                  key={record.id}
+                  style={[
+                    styles.attendanceCard,
+                    { backgroundColor: colors.surface, borderColor: colors.border },
+                  ]}
+                >
+                  {/* Top row: name + status */}
+                  <View style={styles.attendanceCardHeader}>
+                    <View style={{ flex: 1 }}>
+                      <Text style={[styles.attendanceName, { color: colors.text }]} numberOfLines={1}>
+                        {record.name}
+                      </Text>
+                      <Text style={[styles.attendanceSub, { color: colors.textSecondary }]} numberOfLines={1}>
+                        {record.employee_id} • {record.department || 'N/A'}
+                      </Text>
+                    </View>
+                    <View
+                      style={[
+                        styles.attendanceStatusPill,
+                        {
+                          backgroundColor:
+                            record.status === 'present'
+                              ? `${colors.success}20`
+                              : record.status === 'absent'
+                              ? `${colors.error}20`
+                              : `${colors.warning}20`,
+                        },
+                      ]}
+                    >
+                      <Text
+                        style={[
+                          styles.attendanceStatusText,
+                          {
+                            color:
+                              record.status === 'present'
+                                ? colors.success
+                                : record.status === 'absent'
+                                ? colors.error
+                                : colors.warning,
+                          },
+                        ]}
+                      >
+                        {record.status || (record.present_days > 0 ? 'Present' : 'Absent')}
+                      </Text>
+                    </View>
+                  </View>
+
+                  {/* Metrics grid */}
+                  <View style={styles.attendanceMetricsRow}>
+                    <View style={styles.attendanceMetric}>
+                      <Text style={[styles.metricLabelSmall, { color: colors.textSecondary }]}>
+                        Working Days
+                      </Text>
+                      <Text style={[styles.metricValueSmall, { color: colors.text }]}>
+                        {record.total_working_days?.toFixed
+                          ? record.total_working_days.toFixed(0)
+                          : record.total_working_days || 0}
+                      </Text>
+                    </View>
+                    <View style={styles.attendanceMetric}>
+                      <Text style={[styles.metricLabelSmall, { color: colors.textSecondary }]}>
+                        Present
+                      </Text>
+                      <Text style={[styles.metricValueSmall, { color: colors.text }]}>
+                        {record.present_days?.toFixed
+                          ? record.present_days.toFixed(1)
+                          : record.present_days || 0}
+                      </Text>
+                    </View>
+                    <View style={styles.attendanceMetric}>
+                      <Text style={[styles.metricLabelSmall, { color: colors.textSecondary }]}>
+                        Absent
+                      </Text>
+                      <Text style={[styles.metricValueSmall, { color: colors.text }]}>
+                        {record.absent_days?.toFixed
+                          ? record.absent_days.toFixed(1)
+                          : record.absent_days || 0}
+                      </Text>
+                    </View>
+                    <View style={styles.attendanceMetric}>
+                      <Text style={[styles.metricLabelSmall, { color: colors.textSecondary }]}>
+                        OT Hrs
+                      </Text>
+                      <Text style={[styles.metricValueSmall, { color: colors.text }]}>
+                        {(typeof record.ot_hours === 'string'
+                          ? parseFloat(record.ot_hours) || 0
+                          : record.ot_hours || 0
+                        ).toFixed(1)}
+                      </Text>
+                    </View>
+                  </View>
+
+                  <View style={styles.attendanceMetricsRow}>
+                    <View style={styles.attendanceMetric}>
+                      <Text style={[styles.metricLabelSmall, { color: colors.textSecondary }]}>
+                        Late (min)
+                      </Text>
+                      <Text style={[styles.metricValueSmall, { color: colors.text }]}>
+                        {(typeof record.late_minutes === 'string'
+                          ? parseFloat(record.late_minutes) || 0
+                          : record.late_minutes || 0
+                        ).toFixed(0)}
+                      </Text>
+                    </View>
+                    <View style={styles.attendanceMetric}>
+                      <Text style={[styles.metricLabelSmall, { color: colors.textSecondary }]}>
+                        Off Days
+                      </Text>
+                      <Text style={[styles.metricValueSmall, { color: colors.text }]}>
+                        {record.off_days || 0}
+                      </Text>
+                    </View>
+                    <View style={styles.attendanceMetric}>
+                      <Text style={[styles.metricLabelSmall, { color: colors.textSecondary }]}>
+                        Holidays
+                      </Text>
+                      <Text style={[styles.metricValueSmall, { color: colors.text }]}>
+                        {record.holiday_days || 0}
+                      </Text>
+                    </View>
+                    <View style={styles.attendanceMetric}>
+                      <Text style={[styles.metricLabelSmall, { color: colors.textSecondary }]}>
+                        Present %
+                      </Text>
+                      <Text
+                        style={[
+                          styles.metricValueSmall,
+                          {
+                            color:
+                              attendancePercentage >= 90
+                                ? colors.success
+                                : attendancePercentage >= 75
+                                ? colors.warning
+                                : colors.error,
+                          },
+                        ]}
+                      >
+                        {attendancePercentage.toFixed(1)}%
+                      </Text>
+                    </View>
+                  </View>
+                </View>
+              );
+            })}
+          </ScrollView>
+        )
+      )}
+
+      {/* Filter Type Modal */}
+      <Modal
+        visible={showFilterModal}
+        transparent={true}
+        animationType="slide"
+        onRequestClose={() => setShowFilterModal(false)}
+      >
+        <TouchableOpacity
+          style={styles.modalOverlay}
+          activeOpacity={1}
+          onPress={() => setShowFilterModal(false)}
+        >
+          <View style={[styles.modalContent, { backgroundColor: colors.surface }]}>
+            <Text style={[styles.modalTitle, { color: colors.text }]}>Select Filter</Text>
+            {filterTypeOptions.map((option) => (
+              <TouchableOpacity
+                key={option.value}
+                style={[
+                  styles.modalOption,
+                  {
+                    backgroundColor: filterType === option.value ? `${colors.primary}20` : 'transparent',
+                    borderLeftWidth: filterType === option.value ? 4 : 0,
+                    borderLeftColor: filterType === option.value ? colors.primary : 'transparent',
+                  },
+                ]}
+                onPress={() => {
+                  setFilterType(option.value as FilterType);
+                  setShowFilterModal(false);
+                }}
+              >
+                <Text style={[styles.modalOptionText, { color: filterType === option.value ? colors.primary : colors.text }]}>
+                  {option.label}
+                </Text>
+                {filterType === option.value && <FontAwesome name="check" size={16} color={colors.primary} />}
+              </TouchableOpacity>
+            ))}
+          </View>
+        </TouchableOpacity>
+      </Modal>
+
+      {/* Year Modal */}
+      <Modal
+        visible={showYearModal}
+        transparent={true}
+        animationType="slide"
+        onRequestClose={() => setShowYearModal(false)}
+      >
+        <TouchableOpacity
+          style={styles.modalOverlay}
+          activeOpacity={1}
+          onPress={() => setShowYearModal(false)}
+        >
+          <View style={[styles.modalContent, { backgroundColor: colors.surface }]}>
+            <Text style={[styles.modalTitle, { color: colors.text }]}>Select Year</Text>
+            {availableYears.map((year) => (
+              <TouchableOpacity
+                key={year}
+                style={[
+                  styles.modalOption,
+                  {
+                    backgroundColor: selectedYear === year ? `${colors.primary}20` : 'transparent',
+                    borderLeftWidth: selectedYear === year ? 4 : 0,
+                    borderLeftColor: selectedYear === year ? colors.primary : 'transparent',
+                  },
+                ]}
+                onPress={() => {
+                  setSelectedYear(year);
+                  setShowYearModal(false);
+                }}
+              >
+                <Text style={[styles.modalOptionText, { color: selectedYear === year ? colors.primary : colors.text }]}>
+                  {year}
+                </Text>
+                {selectedYear === year && <FontAwesome name="check" size={16} color={colors.primary} />}
+              </TouchableOpacity>
+            ))}
+          </View>
+        </TouchableOpacity>
+      </Modal>
+
+      {/* Month Modal */}
+      <Modal
+        visible={showMonthModal}
+        transparent={true}
+        animationType="slide"
+        onRequestClose={() => setShowMonthModal(false)}
+      >
+        <TouchableOpacity
+          style={styles.modalOverlay}
+          activeOpacity={1}
+          onPress={() => setShowMonthModal(false)}
+        >
+          <View style={[styles.modalContent, { backgroundColor: colors.surface }]}>
+            <Text style={[styles.modalTitle, { color: colors.text }]}>Select Month</Text>
+            {monthNames.map((month) => (
+              <TouchableOpacity
+                key={month}
+                style={[
+                  styles.modalOption,
+                  {
+                    backgroundColor: selectedMonth === month ? `${colors.primary}20` : 'transparent',
+                    borderLeftWidth: selectedMonth === month ? 4 : 0,
+                    borderLeftColor: selectedMonth === month ? colors.primary : 'transparent',
+                  },
+                ]}
+                onPress={() => {
+                  setSelectedMonth(month);
+                  setShowMonthModal(false);
+                }}
+              >
+                <Text style={[styles.modalOptionText, { color: selectedMonth === month ? colors.primary : colors.text }]}>
+                  {month}
+                </Text>
+                {selectedMonth === month && <FontAwesome name="check" size={16} color={colors.primary} />}
+              </TouchableOpacity>
+            ))}
+          </View>
+        </TouchableOpacity>
+      </Modal>
+    </View>
+  );
+});
+
+TrackAttendanceTab.displayName = 'TrackAttendanceTab';
+
 export default function AttendanceScreen() {
   const router = useRouter();
   const dispatch = useAppDispatch();
@@ -573,10 +1173,36 @@ export default function AttendanceScreen() {
   
   return (
     <GestureHandlerRootView style={[styles.container, { backgroundColor: colors.background }]}>
-      {/* Header */}
+      {/* Header with sleek date dropdown and search */}
       <View style={[styles.header, { backgroundColor: colors.primary }]}>
-        <Text style={styles.headerTitle}>Attendance</Text>
-        <Text style={styles.headerSubtitle}>Mark and track employee attendance</Text>
+        <View style={styles.headerControls}>
+          <TouchableOpacity
+            style={[styles.dateButton, { backgroundColor: colors.surface, borderColor: colors.border }]}
+            onPress={() => setShowDatePicker(true)}
+          >
+            <FontAwesome name="calendar" size={16} color={colors.primary} />
+            <Text style={[styles.dateButtonText, { color: colors.text }]}>
+              {selectedDate ? format(new Date(selectedDate), 'dd MMM yyyy (EEEE)') : 'Select Date'}
+            </Text>
+            <FontAwesome name="chevron-down" size={12} color={colors.textSecondary} />
+          </TouchableOpacity>
+
+          <View style={[styles.headerSearch, { backgroundColor: 'rgba(255,255,255,0.12)' }]}>
+            <FontAwesome name="search" size={16} color="rgba(255,255,255,0.9)" />
+            <TextInput
+              style={styles.headerSearchInput}
+              placeholder="Search by name or ID..."
+              placeholderTextColor="rgba(255,255,255,0.9)"
+              value={searchQuery}
+              onChangeText={setSearchQuery}
+            />
+            {searchQuery.length > 0 && (
+              <TouchableOpacity onPress={() => setSearchQuery('')}>
+                <FontAwesome name="times-circle" size={16} color="rgba(255,255,255,0.9)" />
+              </TouchableOpacity>
+            )}
+          </View>
+        </View>
       </View>
 
       {/* Tabs */}
@@ -616,40 +1242,7 @@ export default function AttendanceScreen() {
         <>
           {/* Date Selection and Filters */}
           <ScrollView style={styles.filtersContainer}>
-        {/* Date Picker */}
-        <View style={styles.dateSection}>
-          <Text style={[styles.sectionLabel, { color: colors.text }]}>Select Date</Text>
-          <TouchableOpacity
-            style={[styles.dateButton, { backgroundColor: colors.surface, borderColor: colors.border }]}
-            onPress={() => setShowDatePicker(true)}
-          >
-            <FontAwesome name="calendar" size={16} color={colors.primary} />
-            <Text style={[styles.dateButtonText, { color: colors.text }]}>
-              {selectedDate ? format(new Date(selectedDate), 'dd MMM yyyy (EEEE)') : 'Select Date'}
-            </Text>
-            <FontAwesome name="chevron-down" size={12} color={colors.textSecondary} />
-          </TouchableOpacity>
-        </View>
-
-        {/* Search Bar */}
-        <View style={styles.searchSection}>
-          <Text style={[styles.sectionLabel, { color: colors.text }]}>Search Employees</Text>
-          <View style={[styles.searchContainer, { backgroundColor: colors.surface, borderColor: colors.border }]}>
-            <FontAwesome name="search" size={16} color={colors.textSecondary} />
-            <TextInput
-              style={[styles.searchInput, { color: colors.text }]}
-              placeholder="Search by name, ID, or department..."
-              placeholderTextColor={colors.textSecondary}
-              value={searchQuery}
-              onChangeText={setSearchQuery}
-            />
-            {searchQuery.length > 0 && (
-              <TouchableOpacity onPress={() => setSearchQuery('')}>
-                <FontAwesome name="times-circle" size={16} color={colors.textSecondary} />
-              </TouchableOpacity>
-            )}
-          </View>
-        </View>
+        {/* Filters moved to header: date + search */}
 
         {/* Department Filter */}
         <View style={styles.departmentSection}>
@@ -822,113 +1415,15 @@ export default function AttendanceScreen() {
         )}
 
         <View style={{ height: 32 }} />
-          </ScrollView>
+        </ScrollView>
         </>
       ) : (
-        /* Track Attendance Tab */
-        <View style={styles.trackAttendanceContainer}>
-          <ScrollView style={styles.trackFiltersContainer}>
-            {/* Month/Year Selection */}
-            <View style={styles.monthSection}>
-              <Text style={[styles.sectionLabel, { color: colors.text }]}>Select Month</Text>
-              <View style={styles.monthYearContainer}>
-                <TouchableOpacity
-                  style={[styles.monthYearButton, { backgroundColor: colors.surface, borderColor: colors.border }]}
-                  onPress={() => {/* TODO: Add month picker */}}
-                >
-                  <FontAwesome name="calendar" size={16} color={colors.primary} />
-                  <Text style={[styles.dateButtonText, { color: colors.text }]}>
-                    {format(new Date(), 'MMMM yyyy')}
-                  </Text>
-                  <FontAwesome name="chevron-down" size={12} color={colors.textSecondary} />
-                </TouchableOpacity>
-              </View>
-            </View>
-
-            {/* Search Employee */}
-            <View style={styles.searchSection}>
-              <Text style={[styles.sectionLabel, { color: colors.text }]}>Search Employee</Text>
-              <View style={[styles.searchContainer, { backgroundColor: colors.surface, borderColor: colors.border }]}>
-                <FontAwesome name="search" size={16} color={colors.textSecondary} />
-                <TextInput
-                  style={[styles.searchInput, { color: colors.text }]}
-                  placeholder="Search by name or ID..."
-                  placeholderTextColor={colors.textSecondary}
-                  value={searchQuery}
-                  onChangeText={setSearchQuery}
-                />
-                {searchQuery.length > 0 && (
-                  <TouchableOpacity onPress={() => setSearchQuery('')}>
-                    <FontAwesome name="times-circle" size={16} color={colors.textSecondary} />
-                  </TouchableOpacity>
-                )}
-              </View>
-            </View>
-          </ScrollView>
-
-          {/* Attendance Summary Cards */}
-          <View style={styles.summaryContainer}>
-            <View style={[styles.summaryCard, { backgroundColor: colors.surface, borderColor: colors.border }]}>
-              <FontAwesome name="calendar-check-o" size={24} color={colors.success} />
-              <View style={styles.summaryContent}>
-                <Text style={[styles.summaryValue, { color: colors.text }]}>22</Text>
-                <Text style={[styles.summaryLabel, { color: colors.textSecondary }]}>Present Days</Text>
-              </View>
-            </View>
-            <View style={[styles.summaryCard, { backgroundColor: colors.surface, borderColor: colors.border }]}>
-              <FontAwesome name="calendar-times-o" size={24} color={colors.error} />
-              <View style={styles.summaryContent}>
-                <Text style={[styles.summaryValue, { color: colors.text }]}>3</Text>
-                <Text style={[styles.summaryLabel, { color: colors.textSecondary }]}>Absent Days</Text>
-              </View>
-            </View>
-            <View style={[styles.summaryCard, { backgroundColor: colors.surface, borderColor: colors.border }]}>
-              <FontAwesome name="clock-o" size={24} color={colors.warning} />
-              <View style={styles.summaryContent}>
-                <Text style={[styles.summaryValue, { color: colors.text }]}>12.5</Text>
-                <Text style={[styles.summaryLabel, { color: colors.textSecondary }]}>OT Hours</Text>
-              </View>
-            </View>
-          </View>
-
-          {/* Attendance Records */}
-          <View style={styles.attendanceListContainer}>
-            <Text style={[styles.sectionLabel, { color: colors.text }]}>Attendance Records</Text>
-            <ScrollView style={styles.attendanceRecordsList}>
-              {/* Sample attendance records */}
-              {[1, 2, 3, 4, 5].map((item) => (
-                <View key={item} style={[styles.attendanceRecord, { backgroundColor: colors.surface, borderColor: colors.border }]}>
-                  <View style={styles.recordDate}>
-                    <Text style={[styles.recordDateText, { color: colors.text }]}>
-                      {format(new Date(Date.now() - (item - 1) * 24 * 60 * 60 * 1000), 'dd MMM yyyy')}
-                    </Text>
-                    <Text style={[styles.recordDayText, { color: colors.textSecondary }]}>
-                      {format(new Date(Date.now() - (item - 1) * 24 * 60 * 60 * 1000), 'EEEE')}
-                    </Text>
-                  </View>
-                  <View style={styles.recordStatus}>
-                    <View style={[
-                      styles.statusBadge,
-                      { backgroundColor: item % 4 === 0 ? colors.error : colors.success }
-                    ]}>
-                      <Text style={styles.statusBadgeText}>
-                        {item % 4 === 0 ? 'Absent' : 'Present'}
-                      </Text>
-                    </View>
-                  </View>
-                  <View style={styles.recordTimes}>
-                    <Text style={[styles.recordTimeText, { color: colors.text }]}>
-                      {item % 4 === 0 ? '-' : '09:15 - 18:30'}
-                    </Text>
-                    <Text style={[styles.recordOTText, { color: colors.textSecondary }]}>
-                      {item % 4 === 0 ? '0 OT' : '1.5 OT'}
-                    </Text>
-                  </View>
-                </View>
-              ))}
-            </ScrollView>
-          </View>
-        </View>
+        /* Track Attendance Tab - Redesigned to match web dashboard */
+        <TrackAttendanceTab 
+          colors={colors}
+          searchQuery={searchQuery}
+          setSearchQuery={setSearchQuery}
+        />
       )}
     </GestureHandlerRootView>
   );
@@ -943,6 +1438,26 @@ const styles = StyleSheet.create({
     paddingTop: 60,
     paddingBottom: 20,
     paddingHorizontal: 20,
+  },
+  headerControls: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+  },
+  headerSearch: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    borderRadius: 8,
+    paddingHorizontal: 12,
+    height: 44,
+  },
+  headerSearchInput: {
+    flex: 1,
+    paddingVertical: 8,
+    paddingHorizontal: 8,
+    color: 'white',
+    fontSize: 14,
   },
   headerTitle: {
     fontSize: 24,
@@ -1310,8 +1825,22 @@ const styles = StyleSheet.create({
   trackAttendanceContainer: {
     flex: 1,
   },
+  trackHeader: {
+    paddingHorizontal: 16,
+    paddingTop: 8,
+    paddingBottom: 4,
+  },
+  trackTitle: {
+    fontSize: 18,
+    fontWeight: '700',
+  },
+  trackSubtitle: {
+    marginTop: 2,
+    fontSize: 12,
+  },
   trackFiltersContainer: {
-    padding: 16,
+    paddingHorizontal: 16,
+    paddingVertical: 8,
   },
   monthSection: {
     marginBottom: 16,
@@ -1393,17 +1922,6 @@ const styles = StyleSheet.create({
     fontSize: 12,
     marginTop: 2,
   },
-  // Performance optimization styles
-  emptyContainer: {
-    flex: 1,
-    justifyContent: 'center',
-    alignItems: 'center',
-    paddingVertical: 40,
-  },
-  emptyText: {
-    fontSize: 16,
-    fontStyle: 'italic',
-  },
   // Optimized table styles for better performance
   tableRowOptimized: {
     flexDirection: 'row',
@@ -1424,5 +1942,193 @@ const styles = StyleSheet.create({
     minWidth: 60,
     includeFontPadding: false,
     textAlignVertical: 'center',
+  },
+  // Track Attendance Tab Styles
+  filterRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    marginBottom: 12,
+  },
+  filterButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: 8,
+    borderWidth: 1,
+    gap: 6,
+  },
+  filterButtonText: {
+    fontSize: 14,
+    fontWeight: '500',
+  },
+  departmentScroll: {
+    flex: 1,
+  },
+  departmentChip: {
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 16,
+    borderWidth: 1,
+    marginRight: 8,
+  },
+  departmentChipText: {
+    fontSize: 12,
+    fontWeight: '500',
+  },
+  dateSelectionRow: {
+    flexDirection: 'row',
+    gap: 8,
+    marginBottom: 12,
+  },
+  dateSelectButton: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    borderRadius: 8,
+    borderWidth: 1,
+  },
+  dateSelectButtonFull: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    borderRadius: 8,
+    borderWidth: 1,
+    gap: 8,
+  },
+  dateSelectButtonText: {
+    fontSize: 14,
+    fontWeight: '500',
+  },
+  kpiContainer: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    paddingHorizontal: 16,
+    paddingBottom: 8,
+    gap: 8,
+  },
+  kpiCard: {
+    flex: 1,
+    minWidth: '30%',
+    paddingVertical: 8,
+    paddingHorizontal: 10,
+    borderRadius: 8,
+    borderWidth: 1,
+    alignItems: 'center',
+  },
+  kpiLabel: {
+    fontSize: 11,
+    fontWeight: '500',
+    marginBottom: 4,
+    textAlign: 'center',
+  },
+  kpiValue: {
+    fontSize: 18,
+    fontWeight: '700',
+  },
+  // Old wide table styles kept for reference (no longer used for tracker)
+  tableScrollContainer: {
+    flex: 1,
+    paddingHorizontal: 16,
+  },
+  percentageBadge: {
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 12,
+    alignItems: 'center',
+  },
+  percentageText: {
+    fontSize: 12,
+    fontWeight: '600',
+  },
+  // Card-based tracker list
+  attendanceCardsContainer: {
+    flex: 1,
+    paddingHorizontal: 16,
+    paddingBottom: 12,
+  },
+  attendanceCard: {
+    borderRadius: 12,
+    borderWidth: 1,
+    padding: 10,
+    marginBottom: 8,
+  },
+  attendanceCardHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 10,
+    gap: 8,
+  },
+  attendanceName: {
+    fontSize: 15,
+    fontWeight: '600',
+  },
+  attendanceSub: {
+    marginTop: 2,
+    fontSize: 12,
+  },
+  attendanceStatusPill: {
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    borderRadius: 999,
+  },
+  attendanceStatusText: {
+    fontSize: 11,
+    fontWeight: '600',
+    textTransform: 'uppercase',
+  },
+  attendanceMetricsRow: {
+    flexDirection: 'row',
+    marginTop: 4,
+  },
+  attendanceMetric: {
+    flex: 1,
+    paddingVertical: 4,
+  },
+  metricLabelSmall: {
+    fontSize: 11,
+  },
+  metricValueSmall: {
+    marginTop: 2,
+    fontSize: 13,
+    fontWeight: '600',
+  },
+  modalOverlay: {
+    flex: 1,
+    justifyContent: 'flex-end',
+    backgroundColor: 'rgba(0, 0, 0, 0.5)',
+  },
+  modalContent: {
+    borderTopLeftRadius: 20,
+    borderTopRightRadius: 20,
+    paddingVertical: 20,
+    maxHeight: '70%',
+  },
+  modalTitle: {
+    fontSize: 18,
+    fontWeight: '700',
+    paddingHorizontal: 20,
+    paddingBottom: 16,
+    borderBottomWidth: 1,
+    borderBottomColor: '#E5E7EB',
+  },
+  modalOption: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: 20,
+    paddingVertical: 16,
+    borderBottomWidth: 1,
+    borderBottomColor: '#F3F4F6',
+  },
+  modalOptionText: {
+    fontSize: 16,
+    fontWeight: '500',
   },
 });

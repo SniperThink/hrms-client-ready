@@ -67,10 +67,13 @@ export const API_ENDPOINTS = {
   // Users
   userInvitations: '/api/user-invitations/',
   userProfile: '/api/user/profile/',
+  users: '/api/users/',
+  userPermissions: (userId: string) => `/api/users/${userId}/permissions/`,
+  deleteAccount: '/api/user/delete-account/',
   
-  // Tenant
-  tenantSettings: '/api/tenant/settings/',
-  tenantCredits: '/api/tenant/credits/',
+  // Salary Configuration
+  salaryConfig: '/api/salary-config/',
+  salaryConfigUpdate: '/api/salary-config/update/',
   
   // Support
   supportTickets: '/api/support/tickets/',
@@ -78,6 +81,8 @@ export const API_ENDPOINTS = {
   // Data Upload
   uploadSalary: '/api/upload-salary/',
   uploadAttendance: '/api/upload-attendance/',
+  downloadSalaryTemplate: '/api/download-template/',
+  downloadAttendanceTemplate: '/api/download-attendance-template/',
 };
 
 // Storage Keys

@@ -9,6 +9,8 @@ import {
   TouchableOpacity,
   Alert,
   ActivityIndicator,
+  Modal,
+  FlatList,
 } from 'react-native';
 import { useRouter } from 'expo-router';
 import { attendanceService } from '@/services/attendanceService';
@@ -34,6 +36,8 @@ export default function AttendanceEntryScreen() {
   const [lateMinutes, setLateMinutes] = useState('');
   const [loading, setLoading] = useState(false);
   const [loadingEmployees, setLoadingEmployees] = useState(true);
+  const [searchQuery, setSearchQuery] = useState('');
+  const [showDatePicker, setShowDatePicker] = useState(false);
 
   useEffect(() => {
     loadEmployees();
@@ -87,6 +91,38 @@ export default function AttendanceEntryScreen() {
     }
   };
 
+  // Generate date options for the last 30 days and next 30 days
+  const generateDateOptions = () => {
+    const dates = [];
+    const today = new Date();
+    
+    // Last 30 days
+    for (let i = 30; i >= 0; i--) {
+      const date = new Date(today);
+      date.setDate(today.getDate() - i);
+      dates.push({
+        date: format(date, 'yyyy-MM-dd'),
+        display: format(date, 'dd MMM yyyy (EEEE)'),
+        isToday: i === 0,
+      });
+    }
+    
+    // Next 30 days
+    for (let i = 1; i <= 30; i++) {
+      const date = new Date(today);
+      date.setDate(today.getDate() + i);
+      dates.push({
+        date: format(date, 'yyyy-MM-dd'),
+        display: format(date, 'dd MMM yyyy (EEEE)'),
+        isToday: false,
+      });
+    }
+    
+    return dates;
+  };
+
+  const dateOptions = generateDateOptions();
+
   if (loadingEmployees) {
     return (
       <View style={[styles.container, { backgroundColor: colors.background }]}>
@@ -97,13 +133,26 @@ export default function AttendanceEntryScreen() {
 
   return (
     <ScrollView style={[styles.container, { backgroundColor: colors.background }]}>
-      {/* Header */}
+      {/* Header with Search */}
       <View style={[styles.header, { backgroundColor: colors.primary }]}>
         <TouchableOpacity onPress={() => router.back()} style={styles.backButton}>
           <FontAwesome name="arrow-left" size={20} color="white" />
         </TouchableOpacity>
-        <Text style={styles.headerTitle}>Record Attendance</Text>
-        <View style={{ width: 40 }} />
+        <View style={styles.searchContainer}>
+          <FontAwesome name="search" size={16} color="rgba(255,255,255,0.7)" />
+          <TextInput
+            style={[styles.searchInput, { color: 'white' }]}
+            placeholder="Search employee..."
+            placeholderTextColor="rgba(255,255,255,0.7)"
+            value={searchQuery}
+            onChangeText={setSearchQuery}
+          />
+          {searchQuery.length > 0 && (
+            <TouchableOpacity onPress={() => setSearchQuery('')}>
+              <FontAwesome name="times-circle" size={16} color="rgba(255,255,255,0.7)" />
+            </TouchableOpacity>
+          )}
+        </View>
       </View>
 
       <View style={styles.form}>
@@ -111,7 +160,13 @@ export default function AttendanceEntryScreen() {
         <View style={[styles.section, { backgroundColor: colors.surface, borderColor: colors.border }]}>
           <Text style={[styles.sectionTitle, { color: colors.text }]}>Employee</Text>
           <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.employeeScroll}>
-            {employees.map((emp) => (
+            {employees
+              .filter(emp => 
+                searchQuery === '' || 
+                `${emp.first_name} ${emp.last_name}`.toLowerCase().includes(searchQuery.toLowerCase()) ||
+                emp.employee_id.toLowerCase().includes(searchQuery.toLowerCase())
+              )
+              .map((emp) => (
               <TouchableOpacity
                 key={emp.id}
                 style={[
@@ -138,16 +193,19 @@ export default function AttendanceEntryScreen() {
           </ScrollView>
         </View>
 
-        {/* Date */}
+        {/* Sleek Date Dropdown */}
         <View style={[styles.section, { backgroundColor: colors.surface, borderColor: colors.border }]}>
           <Text style={[styles.sectionTitle, { color: colors.text }]}>Date</Text>
-          <TextInput
-            style={[styles.input, { backgroundColor: colors.background, color: colors.text, borderColor: colors.border }]}
-            value={date}
-            onChangeText={setDate}
-            placeholder="YYYY-MM-DD"
-            placeholderTextColor={colors.textLight}
-          />
+          <TouchableOpacity
+            style={[styles.dateDropdown, { backgroundColor: colors.background, borderColor: colors.border }]}
+            onPress={() => setShowDatePicker(true)}
+          >
+            <FontAwesome name="calendar" size={16} color={colors.primary} />
+            <Text style={[styles.dateText, { color: colors.text }]}>
+              {date ? format(new Date(date), 'dd MMM yyyy (EEEE)') : 'Select Date'}
+            </Text>
+            <FontAwesome name="chevron-down" size={12} color={colors.textSecondary} />
+          </TouchableOpacity>
         </View>
 
         {/* Status */}
@@ -252,6 +310,59 @@ export default function AttendanceEntryScreen() {
 
         <View style={{ height: 32 }} />
       </View>
+
+      {/* Date Picker Modal */}
+      <Modal
+        visible={showDatePicker}
+        transparent={true}
+        animationType="slide"
+        onRequestClose={() => setShowDatePicker(false)}
+      >
+        <View style={styles.modalOverlay}>
+          <View style={[styles.modalContent, { backgroundColor: colors.surface }]}>
+            <View style={styles.modalHeader}>
+              <Text style={[styles.modalTitle, { color: colors.text }]}>Select Date</Text>
+              <TouchableOpacity onPress={() => setShowDatePicker(false)}>
+                <FontAwesome name="times" size={20} color={colors.textSecondary} />
+              </TouchableOpacity>
+            </View>
+            
+            <FlatList
+              data={dateOptions}
+              keyExtractor={(item) => item.date}
+              showsVerticalScrollIndicator={false}
+              renderItem={({ item }) => (
+                <TouchableOpacity
+                  style={[
+                    styles.dateOption,
+                    {
+                      backgroundColor: date === item.date ? colors.primary : 'transparent',
+                      borderColor: colors.border,
+                    },
+                  ]}
+                  onPress={() => {
+                    setDate(item.date);
+                    setShowDatePicker(false);
+                  }}
+                >
+                  <Text
+                    style={[
+                      styles.dateOptionText,
+                      {
+                        color: date === item.date ? 'white' : colors.text,
+                        fontWeight: item.isToday ? '600' : 'normal',
+                      },
+                    ]}
+                  >
+                    {item.display}
+                    {item.isToday && ' (Today)'}
+                  </Text>
+                </TouchableOpacity>
+              )}
+            />
+          </View>
+        </View>
+      </Modal>
     </ScrollView>
   );
 }
@@ -270,10 +381,21 @@ const styles = StyleSheet.create({
   backButton: {
     padding: 8,
   },
-  headerTitle: {
-    fontSize: 20,
-    fontWeight: 'bold',
-    color: 'white',
+  searchContainer: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: 'rgba(255,255,255,0.1)',
+    borderRadius: 20,
+    paddingHorizontal: 12,
+    marginLeft: 16,
+    marginHorizontal: 8,
+  },
+  searchInput: {
+    flex: 1,
+    paddingVertical: 8,
+    paddingHorizontal: 8,
+    fontSize: 14,
   },
   form: {
     padding: 16,
@@ -362,6 +484,49 @@ const styles = StyleSheet.create({
     color: 'white',
     fontSize: 16,
     fontWeight: '600',
+  },
+  dateDropdown: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    padding: 12,
+    borderRadius: 8,
+    borderWidth: 1,
+    gap: 12,
+  },
+  dateText: {
+    flex: 1,
+    fontSize: 14,
+  },
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.5)',
+    justifyContent: 'flex-end',
+  },
+  modalContent: {
+    maxHeight: '70%',
+    borderTopLeftRadius: 20,
+    borderTopRightRadius: 20,
+    paddingBottom: 20,
+  },
+  modalHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    padding: 20,
+    borderBottomWidth: 1,
+    borderBottomColor: 'rgba(0,0,0,0.1)',
+  },
+  modalTitle: {
+    fontSize: 18,
+    fontWeight: '600',
+  },
+  dateOption: {
+    padding: 16,
+    borderBottomWidth: 1,
+    borderBottomColor: 'rgba(0,0,0,0.05)',
+  },
+  dateOptionText: {
+    fontSize: 14,
   },
 });
 
