@@ -213,12 +213,19 @@ const TrackAttendanceTab: React.FC<{
   // Filter data by search and department
   const filteredData = useMemo(() => {
     return attendanceData.filter(record => {
+      // Skip if record is invalid
+      if (!record) return false;
+      
+      // Ensure required fields exist
+      const recordName = record.name || '';
+      const recordId = record.employee_id || '';
+      
       // Search filter
       if (searchQuery) {
         const query = searchQuery.toLowerCase();
         const matchesSearch = 
-          record.name.toLowerCase().includes(query) ||
-          record.employee_id.toLowerCase().includes(query);
+          (recordName && recordName.toLowerCase().includes(query)) ||
+          (recordId && recordId.toLowerCase().includes(query));
         if (!matchesSearch) return false;
       }
       
@@ -1173,20 +1180,9 @@ export default function AttendanceScreen() {
   
   return (
     <GestureHandlerRootView style={[styles.container, { backgroundColor: colors.background }]}>
-      {/* Header with sleek date dropdown and search */}
+      {/* Header with search only */}
       <View style={[styles.header, { backgroundColor: colors.primary }]}>
         <View style={styles.headerControls}>
-          <TouchableOpacity
-            style={[styles.dateButton, { backgroundColor: colors.surface, borderColor: colors.border }]}
-            onPress={() => setShowDatePicker(true)}
-          >
-            <FontAwesome name="calendar" size={16} color={colors.primary} />
-            <Text style={[styles.dateButtonText, { color: colors.text }]}>
-              {selectedDate ? format(new Date(selectedDate), 'dd MMM yyyy (EEEE)') : 'Select Date'}
-            </Text>
-            <FontAwesome name="chevron-down" size={12} color={colors.textSecondary} />
-          </TouchableOpacity>
-
           <View style={[styles.headerSearch, { backgroundColor: 'rgba(255,255,255,0.12)' }]}>
             <FontAwesome name="search" size={16} color="rgba(255,255,255,0.9)" />
             <TextInput
@@ -1435,9 +1431,9 @@ const styles = StyleSheet.create({
     flex: 1,
   },
   header: {
-    paddingTop: 60,
-    paddingBottom: 20,
-    paddingHorizontal: 20,
+    paddingTop: 10,
+    paddingBottom: 12,
+    paddingHorizontal: 16,
   },
   headerControls: {
     flexDirection: 'row',
@@ -1450,12 +1446,13 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     borderRadius: 8,
     paddingHorizontal: 12,
-    height: 44,
+    height: 40,
+    gap: 8,
   },
   headerSearchInput: {
     flex: 1,
-    paddingVertical: 8,
-    paddingHorizontal: 8,
+    paddingVertical: 6,
+    paddingHorizontal: 4,
     color: 'white',
     fontSize: 14,
   },

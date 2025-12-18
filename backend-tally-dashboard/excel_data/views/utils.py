@@ -2185,3 +2185,114 @@ class DownloadAttendanceTemplateAPIView(APIView):
             return Response({
                 'error': f'Failed to generate template: {str(e)}'
             }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+class RevertPenaltyDayView(APIView):
+    """
+    API endpoint to revert penalty days by marking an employee as PRESENT on a penalty day.
+    When an employee is marked PRESENT, the weekly penalty is recalculated automatically.
+    If the absent count drops below the threshold, the penalty is removed.
+    """
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        """
+        Revert penalty day for an employee.
+        
+        Request body:
+        {
+            "employee_id": "EMP001",
+            "date": "2025-01-15"
+        }
+        """
+        try:
+            employee_id = request.data.get('employee_id')
+            date_str = request.data.get('date')
+
+            # Validate input
+            if not employee_id or not date_str:
+                return Response({
+                    'error': 'employee_id and date are required'
+                }, status=status.HTTP_400_BAD_REQUEST)
+
+            # Parse date
+            from datetime import datetime, timedelta
+            try:
+                attendance_date = datetime.strptime(date_str, '%Y-%m-%d').date()
+            except ValueError:
+                return Response({
+                    'error': 'Invalid date format. Use YYYY-MM-DD'
+                }, status=status.HTTP_400_BAD_REQUEST)
+
+            # Get tenant from request
+            tenant = request.user.tenant if hasattr(request.user, 'tenant') else None
+            if not tenant:
+                return Response({
+                    'error': 'Tenant not found'
+                }, status=status.HTTP_400_BAD_REQUEST)
+
+            # Get week boundaries (Monday to Sunday)
+            day_of_week = attendance_date.weekday()  # 0 = Monday, 6 = Sunday
+            week_start = attendance_date - timedelta(days=day_of_week)
+            week_end = week_start + timedelta(days=6)
+
+            # NOTE: Directly decrement penalty days by 1 for this month without changing attendance status
+            month_num = attendance_date.month
+            year = attendance_date.year
+
+            monthly_summary, created = MonthlyAttendanceSummary.objects.get_or_create(
+                tenant=tenant,
+                employee_id=employee_id,
+                year=year,
+                month=month_num,
+                defaults={
+                    'present_days': 0,
+                    'holiday_days': 0,
+                    'ot_hours': 0,
+                    'late_minutes': 0,
+                    'weekly_penalty_days': 0,
+                }
+            )
+
+            from decimal import Decimal
+            current_penalty_days = Decimal(monthly_summary.weekly_penalty_days or 0)
+            new_penalty_days = current_penalty_days - Decimal('1')
+            if new_penalty_days < 0:
+                new_penalty_days = Decimal('0')
+
+            penalty_reverted = new_penalty_days < current_penalty_days
+            if penalty_reverted:
+                monthly_summary.weekly_penalty_days = new_penalty_days
+                monthly_summary.save(update_fields=['weekly_penalty_days'])
+                logger.info(
+                    f'✅ Penalty decremented for {employee_id} on {date_str}: '
+                    f'{current_penalty_days} → {new_penalty_days}'
+                )
+            else:
+                logger.info(
+                    f'ℹ️ No penalty to decrement for {employee_id} on {date_str}: '
+                    f'current={current_penalty_days}'
+                )
+
+            return Response({
+                'success': True,
+                'message': 'Penalty decremented by 1' if penalty_reverted else 'No penalty to decrement',
+                'data': {
+                    'employee_id': employee_id,
+                    'date': date_str,
+                    'week_info': {
+                        'week_start': week_start.isoformat(),
+                        'week_end': week_end.isoformat(),
+                        'penalty_reverted': penalty_reverted
+                    },
+                    'monthly_summary': {
+                        'penalty_days': float(new_penalty_days)
+                    }
+                }
+            }, status=status.HTTP_200_OK)
+
+        except Exception as e:
+            logger.error(f'❌ Error reverting penalty: {str(e)}', exc_info=True)
+            return Response({
+                'error': f'Failed to revert penalty: {str(e)}'
+            }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)

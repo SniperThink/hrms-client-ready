@@ -5,7 +5,7 @@ from ..views import (
     calculate_ot_rate, attendance_status, bulk_update_attendance,
     update_monthly_summaries_parallel, get_eligible_employees_for_date,
     CleanupTokensView, get_salary_config, update_salary_config,
-    recalculate_penalty_bonus_days
+    recalculate_penalty_bonus_days, RevertPenaltyDayView
 )
 
 urlpatterns = [
@@ -20,5 +20,6 @@ urlpatterns = [
     path('bulk-update-attendance/', bulk_update_attendance, name='bulk-update-attendance'),
     path('update-monthly-summaries/', update_monthly_summaries_parallel, name='update-monthly-summaries'),
     path('recalculate-penalty-bonus/', recalculate_penalty_bonus_days, name='recalculate-penalty-bonus'),
+    path('attendance-actions/revert-penalty/', RevertPenaltyDayView.as_view(), name='revert-penalty'),
     path('eligible-employees/', get_eligible_employees_for_date, name='eligible-employees'),
 ]

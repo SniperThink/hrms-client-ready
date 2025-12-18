@@ -6,6 +6,7 @@ import DatePicker from './DatePicker';
 import './TimeInput.css';
 import Dropdown from './Dropdown';
 import { logger } from '../utils/logger';
+import PenaltyRevertModal from './PenaltyRevertModal';
 import { 
   SkeletonAttendanceLogTable, 
   SkeletonSearchBar, 
@@ -122,6 +123,18 @@ const HRAttendanceLog: React.FC = () => {
   
   // Holiday cache with 1-hour expiration
   const [holidayCache, setHolidayCache] = useState<Map<string, { isHoliday: boolean; holidayInfo: {name: string; description?: string; type: string} | null; timestamp: number }>>(new Map());
+  
+  // Penalty revert modal state
+  const [penaltyModalOpen, setPenaltyModalOpen] = useState<boolean>(false);
+  const [selectedPenaltyEmployee, setSelectedPenaltyEmployee] = useState<{
+    employeeId: string;
+    employeeName: string;
+    weeklyAttendance: { [day: string]: boolean };
+    penaltyDayCode?: string;
+    penaltyWeekStart?: string;
+  } | null>(null);
+  // Track chips whose penalty was reverted (employeeId-dayCode)
+  const [revertedPenaltyChips, setRevertedPenaltyChips] = useState<Set<string>>(new Set());
   
   // Cache invalidation function
   const invalidateCache = () => {
@@ -1881,6 +1894,9 @@ const HRAttendanceLog: React.FC = () => {
                                 logger.debug(`🔵 Auto-marked day detected: ${entry?.employee_id} - ${day} - Reason: ${autoMarkReason}`);
                               }
                               
+                              // Track if this chip was reverted locally
+                              const wasReverted = revertedPenaltyChips.has(`${employee.employee_id}-${day}`);
+
                               // Determine chip color and tooltip based on rules:
                               // 1. Orange: Employee came on off day that is marked as penalty day (threshold breached + first off day manually marked present)
                               // 2. Green with tooltip: Auto-marked present (Sunday bonus)
@@ -1912,10 +1928,17 @@ const HRAttendanceLog: React.FC = () => {
                                 }
                               } else if (isAbsent) {
                                 if (isPenaltyDay) {
-                                  // Rule 2: Penalty day (absent due to threshold breach) - show red with tooltip
-                                  chipColor = 'bg-red-200 text-red-900 border-red-500';
-                                  chipTooltip = autoMarkReason || 'Penalty day - Absent more than threshold';
-                                  showInfoIcon = true;
+                                  // Rule 2: Penalty day (absent due to threshold breach)
+                                  if (wasReverted) {
+                                    // Reverted penalty should appear purple
+                                    chipColor = 'bg-purple-200 text-purple-900 border-purple-500';
+                                    chipTooltip = 'Penalty reverted for this day';
+                                    showInfoIcon = true;
+                                  } else {
+                                    chipColor = 'bg-red-200 text-red-900 border-red-500';
+                                    chipTooltip = autoMarkReason || 'Penalty day - Absent more than threshold';
+                                    showInfoIcon = true;
+                                  }
                                 } else {
                                   // Rule 3: Plain absent - show red
                                   chipColor = 'bg-red-100 text-red-800 border-red-300';
@@ -1929,11 +1952,32 @@ const HRAttendanceLog: React.FC = () => {
                                 showInfoIcon = false;
                               }
                               
+                              // Check if this is a penalty day that can be reverted
+                              const isPenaltyDayClickable = isPenaltyDay && isThresholdBreached;
+
                               return (
-                                <span
+                                <button
                                   key={day}
-                                  className={`inline-flex items-center gap-1 px-2 py-1 rounded text-xs font-medium border ${chipColor}`}
-                                  title={chipTooltip}
+                                  onClick={() => {
+                                    if (isPenaltyDayClickable) {
+                                      setSelectedPenaltyEmployee({
+                                        employeeId: employee.employee_id,
+                                        employeeName: employee.first_name && employee.last_name
+                                          ? `${employee.first_name} ${employee.last_name}`
+                                          : employee.name || 'Unknown',
+                                        weeklyAttendance: entry?.weeklyAttendance || {},
+                                        penaltyDayCode: day
+                                      });
+                                      setPenaltyModalOpen(true);
+                                    }
+                                  }}
+                                  disabled={!isPenaltyDayClickable}
+                                  className={`inline-flex items-center gap-1 px-2 py-1 rounded text-xs font-medium border ${chipColor} ${
+                                    isPenaltyDayClickable 
+                                      ? 'cursor-pointer hover:opacity-80 transition-opacity' 
+                                      : ''
+                                  }`}
+                                  title={isPenaltyDayClickable ? 'Click to revert penalty' : chipTooltip}
                                 >
                                   {day}
                                   {showInfoIcon && (
@@ -1950,7 +1994,7 @@ const HRAttendanceLog: React.FC = () => {
                                       />
                                     </span>
                                   )}
-                                </span>
+                                </button>
                               );
                             })}
                           </div>
@@ -1983,6 +2027,36 @@ const HRAttendanceLog: React.FC = () => {
             </div>
           )}
         </div>
+      )}
+
+      {/* Penalty Revert Modal */}
+      {selectedPenaltyEmployee && (
+        <PenaltyRevertModal
+          isOpen={penaltyModalOpen}
+          onClose={() => {
+            setPenaltyModalOpen(false);
+            setSelectedPenaltyEmployee(null);
+          }}
+          employeeId={selectedPenaltyEmployee.employeeId}
+          employeeName={selectedPenaltyEmployee.employeeName}
+          date={selectedDate}
+          weeklyAbsentThreshold={weeklyAbsentThreshold}
+          weeklyAttendance={selectedPenaltyEmployee.weeklyAttendance}
+          onSuccess={() => {
+            // Refresh attendance data after penalty revert
+            // Mark this chip as reverted (purple)
+            if (selectedPenaltyEmployee?.penaltyDayCode) {
+              const key = `${selectedPenaltyEmployee.employeeId}-${selectedPenaltyEmployee.penaltyDayCode}`;
+              setRevertedPenaltyChips((prev) => {
+                const next = new Set(prev);
+                next.add(key);
+                return next;
+              });
+            }
+            invalidateCache();
+            fetchEligibleEmployees();
+          }}
+        />
       )}
     </div>
   );
