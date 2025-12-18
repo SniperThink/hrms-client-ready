@@ -78,6 +78,8 @@ class DailyAttendance(TenantAwareModel):
     # OT and Late tracking (added for payroll calculation)
     ot_hours = models.DecimalField(max_digits=5, decimal_places=1, default=0, help_text="Overtime hours worked")
     late_minutes = models.IntegerField(default=0, help_text="Minutes late for work")
+    # Weekly penalty override: when True, an ABSENT on this day is ignored for weekly penalty threshold
+    penalty_ignored = models.BooleanField(default=False, help_text="If True, this day's ABSENT does not count toward weekly penalty threshold")
 
     class Meta:
         app_label = 'excel_data'

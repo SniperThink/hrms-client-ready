@@ -2236,57 +2236,51 @@ class RevertPenaltyDayView(APIView):
             week_start = attendance_date - timedelta(days=day_of_week)
             week_end = week_start + timedelta(days=6)
 
-            # NOTE: Directly decrement penalty days by 1 for this month without changing attendance status
-            month_num = attendance_date.month
-            year = attendance_date.year
+            # TOGGLE: Flip DailyAttendance.penalty_ignored for this specific date
+            try:
+                daily = DailyAttendance.objects.get(
+                    tenant=tenant,
+                    employee_id=employee_id,
+                    date=attendance_date
+                )
+            except DailyAttendance.DoesNotExist:
+                return Response({
+                    'success': False,
+                    'error': 'Daily attendance not found for this employee and date'
+                }, status=status.HTTP_404_NOT_FOUND)
 
-            monthly_summary, created = MonthlyAttendanceSummary.objects.get_or_create(
+            old_ignored = bool(getattr(daily, 'penalty_ignored', False))
+            new_ignored = not old_ignored
+            setattr(daily, 'penalty_ignored', new_ignored)
+            daily.save(update_fields=['penalty_ignored'])
+
+            # Compute absent count for the week excluding ignored days (for context)
+            from decimal import Decimal
+            absent_count = DailyAttendance.objects.filter(
                 tenant=tenant,
                 employee_id=employee_id,
-                year=year,
-                month=month_num,
-                defaults={
-                    'present_days': 0,
-                    'holiday_days': 0,
-                    'ot_hours': 0,
-                    'late_minutes': 0,
-                    'weekly_penalty_days': 0,
-                }
+                date__gte=week_start,
+                date__lte=week_end,
+                attendance_status='ABSENT',
+                penalty_ignored=False
+            ).count()
+
+            logger.info(
+                f"🔁 Toggled penalty_ignored for {employee_id} on {date_str}: {old_ignored} → {new_ignored}; "
+                f"week {week_start.isoformat()}–{week_end.isoformat()} absent(excluding ignored)={absent_count}"
             )
-
-            from decimal import Decimal
-            current_penalty_days = Decimal(monthly_summary.weekly_penalty_days or 0)
-            new_penalty_days = current_penalty_days - Decimal('1')
-            if new_penalty_days < 0:
-                new_penalty_days = Decimal('0')
-
-            penalty_reverted = new_penalty_days < current_penalty_days
-            if penalty_reverted:
-                monthly_summary.weekly_penalty_days = new_penalty_days
-                monthly_summary.save(update_fields=['weekly_penalty_days'])
-                logger.info(
-                    f'✅ Penalty decremented for {employee_id} on {date_str}: '
-                    f'{current_penalty_days} → {new_penalty_days}'
-                )
-            else:
-                logger.info(
-                    f'ℹ️ No penalty to decrement for {employee_id} on {date_str}: '
-                    f'current={current_penalty_days}'
-                )
 
             return Response({
                 'success': True,
-                'message': 'Penalty decremented by 1' if penalty_reverted else 'No penalty to decrement',
+                'message': 'Penalty reverted (ignored for weekly count)' if new_ignored else 'Penalty un-reverted (counted again)',
                 'data': {
                     'employee_id': employee_id,
                     'date': date_str,
+                    'penalty_ignored': new_ignored,
                     'week_info': {
                         'week_start': week_start.isoformat(),
                         'week_end': week_end.isoformat(),
-                        'penalty_reverted': penalty_reverted
-                    },
-                    'monthly_summary': {
-                        'penalty_days': float(new_penalty_days)
+                        'absent_count_excluding_ignored': absent_count
                     }
                 }
             }, status=status.HTTP_200_OK)

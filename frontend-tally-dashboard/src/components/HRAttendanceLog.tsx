@@ -132,6 +132,7 @@ const HRAttendanceLog: React.FC = () => {
     weeklyAttendance: { [day: string]: boolean };
     penaltyDayCode?: string;
     penaltyWeekStart?: string;
+    initialPenaltyIgnored?: boolean;
   } | null>(null);
   // Track chips whose penalty was reverted (employeeId-dayCode)
   const [revertedPenaltyChips, setRevertedPenaltyChips] = useState<Set<string>>(new Set());
@@ -1966,7 +1967,8 @@ const HRAttendanceLog: React.FC = () => {
                                           ? `${employee.first_name} ${employee.last_name}`
                                           : employee.name || 'Unknown',
                                         weeklyAttendance: entry?.weeklyAttendance || {},
-                                        penaltyDayCode: day
+                                        penaltyDayCode: day,
+                                        initialPenaltyIgnored: wasReverted
                                       });
                                       setPenaltyModalOpen(true);
                                     }
@@ -2042,14 +2044,19 @@ const HRAttendanceLog: React.FC = () => {
           date={selectedDate}
           weeklyAbsentThreshold={weeklyAbsentThreshold}
           weeklyAttendance={selectedPenaltyEmployee.weeklyAttendance}
-          onSuccess={() => {
+          initialPenaltyIgnored={selectedPenaltyEmployee.initialPenaltyIgnored}
+          onSuccess={(newIgnored?: boolean) => {
             // Refresh attendance data after penalty revert
-            // Mark this chip as reverted (purple)
+            // Mark/unmark this chip as reverted (purple) based on toggle result
             if (selectedPenaltyEmployee?.penaltyDayCode) {
               const key = `${selectedPenaltyEmployee.employeeId}-${selectedPenaltyEmployee.penaltyDayCode}`;
               setRevertedPenaltyChips((prev) => {
                 const next = new Set(prev);
-                next.add(key);
+                if (newIgnored) {
+                  next.add(key);
+                } else {
+                  next.delete(key);
+                }
                 return next;
               });
             }

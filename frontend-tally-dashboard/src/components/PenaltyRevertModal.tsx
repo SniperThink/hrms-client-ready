@@ -11,7 +11,8 @@ interface PenaltyRevertModalProps {
   date: string;
   weeklyAbsentThreshold: number | null;
   weeklyAttendance: { [day: string]: boolean };
-  onSuccess?: () => void;
+  initialPenaltyIgnored?: boolean;
+  onSuccess?: (newIgnored?: boolean) => void;
 }
 
 const PenaltyRevertModal: React.FC<PenaltyRevertModalProps> = ({
@@ -22,6 +23,7 @@ const PenaltyRevertModal: React.FC<PenaltyRevertModalProps> = ({
   date,
   weeklyAbsentThreshold,
   weeklyAttendance,
+  initialPenaltyIgnored,
   onSuccess
 }) => {
   const [loading, setLoading] = useState(false);
@@ -74,13 +76,19 @@ const PenaltyRevertModal: React.FC<PenaltyRevertModalProps> = ({
       }
 
       const result = await response.json();
-      logger.info('✅ Penalty reverted successfully:', result);
+      logger.info('✅ Penalty toggle result:', result);
+
+      const newIgnored = result?.data?.penalty_ignored;
 
       // Show success message
-      alert(`✅ Penalty Reverted Successfully!\n\nEmployee: ${employeeName}\nDate: ${date}\nPenalty Days Removed: 1`);
+      if (newIgnored) {
+        alert(`✅ Penalty Reverted Successfully!\n\nEmployee: ${employeeName}\nDate: ${date}\nThis day's ABSENT will not count toward weekly penalty.`);
+      } else {
+        alert(`↺ Penalty Revert Undone\n\nEmployee: ${employeeName}\nDate: ${date}\nThis day's ABSENT will now count toward weekly penalty.`);
+      }
 
       onClose();
-      onSuccess?.();
+      onSuccess?.(newIgnored);
     } catch (err) {
       const errorMessage = err instanceof Error ? err.message : 'Failed to revert penalty';
       logger.error('❌ Error reverting penalty:', err);
@@ -186,22 +194,20 @@ const PenaltyRevertModal: React.FC<PenaltyRevertModalProps> = ({
           </button>
           <button
             onClick={handleRevertPenalty}
-            disabled={loading || !isThresholdBreached}
+            disabled={loading}
             className={`flex-1 px-4 py-2 rounded-lg text-sm font-medium text-white flex items-center justify-center gap-2 ${
-              isThresholdBreached
-                ? 'bg-teal-600 hover:bg-teal-700 disabled:opacity-50'
-                : 'bg-gray-400 cursor-not-allowed'
+              'bg-teal-600 hover:bg-teal-700 disabled:opacity-50'
             }`}
-            title={!isThresholdBreached ? 'No penalty to revert' : ''}
+            title={initialPenaltyIgnored ? 'Undo Revert (count day toward weekly penalty again)' : 'Revert Penalty (ignore this day for weekly penalty)'}
           >
             {loading ? (
               <>
                 <Loader2 size={16} className="animate-spin" />
-                Reverting...
+                Saving...
               </>
             ) : (
               <>
-                ✓ Revert Penalty
+                {initialPenaltyIgnored ? '↺ Undo Revert' : '✓ Revert Penalty'}
               </>
             )}
           </button>

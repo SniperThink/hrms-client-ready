@@ -631,15 +631,15 @@ class SalaryCalculationService:
             employee_id=employee.employee_id,
             date__gte=month_start,
             date__lte=month_end,
-        ).only('date', 'attendance_status')
+        ).only('date', 'attendance_status', 'penalty_ignored')
         
         if not daily_qs.exists():
             return {
                 'weekly_penalty_days': Decimal('0'),
             }
         
-        # Build map date -> status for quick lookup
-        status_by_date = {rec.date: rec.attendance_status for rec in daily_qs}
+        # Build map date -> (status, penalty_ignored) for quick lookup
+        status_by_date = {rec.date: (rec.attendance_status, bool(getattr(rec, 'penalty_ignored', False))) for rec in daily_qs}
         
         weekly_penalty_days = 0
         
@@ -657,11 +657,11 @@ class SalaryCalculationService:
             if not week_dates:
                 continue
             
-            # Count ABSENT days in this week for penalty calculation
+            # Count ABSENT days in this week for penalty calculation, excluding penalty_ignored days
             absent_count = 0
             for d in week_dates:
-                status = status_by_date.get(d)
-                if status == 'ABSENT':
+                status, ignored = status_by_date.get(d, (None, False))
+                if status == 'ABSENT' and not ignored:
                     absent_count += 1
             
             # Apply absent penalty rule: if absent meets or exceeds threshold, add penalty

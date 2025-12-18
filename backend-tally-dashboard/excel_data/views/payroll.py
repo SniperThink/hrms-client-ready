@@ -2826,7 +2826,7 @@ def calculate_simple_payroll_ultra_fast(request):
                 SELECT
                     da.employee_id,
                     date_trunc('week', da.date) AS week_start,
-                    SUM(CASE WHEN da.attendance_status = 'ABSENT' THEN 1 ELSE 0 END) AS absent_days,
+                    SUM(CASE WHEN da.attendance_status = 'ABSENT' AND COALESCE(da.penalty_ignored, false) = false THEN 1 ELSE 0 END) AS absent_days,
                     SUM(CASE WHEN da.attendance_status IN ('PRESENT', 'PAID_LEAVE') THEN 1 ELSE 0 END) AS present_days
                 FROM excel_data_dailyattendance da
                 WHERE da.tenant_id = %s
