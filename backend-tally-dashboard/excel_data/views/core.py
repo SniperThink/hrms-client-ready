@@ -1324,7 +1324,8 @@ class SalaryDataViewSet(viewsets.ModelViewSet):
         
         # Estimate total working days (employees * 30 days per month * number of periods)
         # CRITICAL FIX: Account for multiple periods when calculating attendance percentage
-        num_periods = len(payroll_periods) if payroll_periods else 1
+        # Use count of currently selected periods passed into this function
+        num_periods = (len(payroll_periods) if payroll_periods else 1)
         estimated_total_working_days = total_employees * 30 * num_periods if total_employees > 0 else 0
         avg_attendance_percentage = (total_present / estimated_total_working_days * 100) if estimated_total_working_days > 0 else 0
         
@@ -1332,33 +1333,69 @@ class SalaryDataViewSet(viewsets.ModelViewSet):
         total_ot_hours = float(current_stats['total_ot_hours'] or 0)
         total_late_minutes = float(current_stats['total_late_minutes'] or 0)
         
-        # PHASE 2 OPTIMIZATION: Lightning-fast previous period analysis
+        # PHASE 2 OPTIMIZATION: Previous window analysis (equal-length comparison window)
         previous_period_start = time.time()
         previous_period_stats = {}
-        if len(payroll_periods) > 1:
-            previous_period = payroll_periods[1]
-            previous_queryset = CalculatedSalary.objects.filter(
-                tenant=tenant,
-                payroll_period=previous_period
-            ).only('present_days', 'ot_hours', 'late_minutes')  # Only select needed fields
-            
-            # Apply department filter to previous period as well
-            if selected_department and selected_department != 'All':
-                previous_queryset = previous_queryset.filter(department=selected_department)
-            
-            if previous_queryset.exists():
-                previous_period_stats = previous_queryset.aggregate(
-                    prev_employees=Count('id'),
-                    prev_present_days=Sum('present_days'),
-                    prev_ot_hours=Sum('ot_hours'),
-                    prev_late_minutes=Sum('late_minutes')
-                )
-                
-                # Calculate previous attendance percentage - estimate working days as present days * 1.2
-                prev_present = float(previous_period_stats.get('prev_present_days', 0) or 0)
-                # Since we don't have total_working_days field, estimate it
-                prev_estimated_working = prev_present * 1.2 if prev_present > 0 else 30  # Assume some absences
-                previous_period_stats['prev_attendance'] = (prev_present / prev_estimated_working * 100) if prev_estimated_working > 0 else 0
+        try:
+            # Determine window size and oldest selected period from the provided list
+            window_size = (len(payroll_periods) if payroll_periods else 0)
+            if window_size > 0:
+                oldest_selected = payroll_periods[-1]  # assume payroll_periods is newest-first
+                raw_month = str(getattr(oldest_selected, 'month', '') or '')
+                raw_year = int(getattr(oldest_selected, 'year', 0) or 0)
+
+                # Month mappings
+                MONTH_TO_NUM = {
+                    'JANUARY': 1, 'FEBRUARY': 2, 'MARCH': 3, 'APRIL': 4,
+                    'MAY': 5, 'JUNE': 6, 'JULY': 7, 'AUGUST': 8,
+                    'SEPTEMBER': 9, 'OCTOBER': 10, 'NOVEMBER': 11, 'DECEMBER': 12,
+                    'JAN': 1, 'FEB': 2, 'MAR': 3, 'APR': 4, 'MAY': 5, 'JUN': 6,
+                    'JUL': 7, 'AUG': 8, 'SEP': 9, 'OCT': 10, 'NOV': 11, 'DEC': 12,
+                }
+                NUM_TO_FULL = {1:'JANUARY',2:'FEBRUARY',3:'MARCH',4:'APRIL',5:'MAY',6:'JUNE',7:'JULY',8:'AUGUST',9:'SEPTEMBER',10:'OCTOBER',11:'NOVEMBER',12:'DECEMBER'}
+                NUM_TO_SHORT = {1:'JAN',2:'FEB',3:'MAR',4:'APR',5:'MAY',6:'JUN',7:'JUL',8:'AUG',9:'SEP',10:'OCT',11:'NOV',12:'DEC'}
+
+                month_num = MONTH_TO_NUM.get(raw_month.upper())
+                if month_num is None and raw_month:
+                    month_num = MONTH_TO_NUM.get(raw_month[:3].upper(), 1)
+                y, m = raw_year, (month_num or 1)
+
+                # Build list of previous (year, month) pairs of equal length to window_size
+                prev_pairs = []
+                for _ in range(window_size):
+                    m -= 1
+                    if m == 0:
+                        m = 12
+                        y -= 1
+                    prev_pairs.append((y, m))
+
+                # Build OR filter across prior periods
+                prev_filter = Q()
+                for yy, mm in prev_pairs:
+                    prev_filter |= (Q(payroll_period__year=yy) & (Q(payroll_period__month=NUM_TO_FULL[mm]) | Q(payroll_period__month=NUM_TO_SHORT[mm]) | Q(payroll_period__month=str(mm))))
+
+                previous_queryset = CalculatedSalary.objects.filter(
+                    tenant=tenant
+                ).filter(prev_filter).only('employee_id', 'present_days', 'ot_hours', 'late_minutes')
+
+                if selected_department and selected_department != 'All':
+                    previous_queryset = previous_queryset.filter(department=selected_department)
+
+                if previous_queryset.exists():
+                    previous_period_stats = previous_queryset.aggregate(
+                        prev_employees=Count('employee_id', distinct=True),
+                        prev_present_days=Sum('present_days'),
+                        prev_ot_hours=Sum('ot_hours'),
+                        prev_late_minutes=Sum('late_minutes')
+                    )
+                    # Consistent attendance% denominator with current window
+                    prev_employees = int(previous_period_stats.get('prev_employees') or 0)
+                    prev_present = float(previous_period_stats.get('prev_present_days') or 0)
+                    prev_working_est = (prev_employees * 30 * window_size) if prev_employees > 0 else 0
+                    previous_period_stats['prev_attendance'] = (prev_present / prev_working_est * 100) if prev_working_est > 0 else 0
+        except Exception:
+            # Keep previous_period_stats empty on failure; deltas will default to 0 safely below
+            pass
         
         query_timings['previous_period_analysis_ms'] = round((time.time() - previous_period_start) * 1000, 2)
         
@@ -1921,45 +1958,62 @@ class SalaryDataViewSet(viewsets.ModelViewSet):
         total_ot_hours = float(current_stats['total_ot_hours'] or 0)
         total_late_minutes = float(current_stats['total_late_minutes'] or 0)
         
-        # FAST: Previous period comparison
+        # Previous window comparison (equal-length)
         previous_period_start = time.time()
         previous_period_stats = {}
-        if len(payroll_periods) > 1:
-            from ..models import ChartAggregatedData
-            previous_period = payroll_periods[1]
-            # Normalize month to period_key format
-            MONTH_MAPPING = {
-                'JANUARY': 'JAN', 'FEBRUARY': 'FEB', 'MARCH': 'MAR', 'APRIL': 'APR',
-                'MAY': 'MAY', 'JUNE': 'JUN', 'JULY': 'JUL', 'AUGUST': 'AUG',
-                'SEPTEMBER': 'SEP', 'OCTOBER': 'OCT', 'NOVEMBER': 'NOV', 'DECEMBER': 'DEC',
-                'JAN': 'JAN', 'FEB': 'FEB', 'MAR': 'MAR', 'APR': 'APR',
-                'JUN': 'JUN', 'JUL': 'JUL', 'AUG': 'AUG', 'SEP': 'SEP',
-                'OCT': 'OCT', 'NOV': 'NOV', 'DEC': 'DEC'
-            }
-            prev_month_name = previous_period.month.upper()
-            prev_month_short = MONTH_MAPPING.get(prev_month_name, prev_month_name[:3] if len(prev_month_name) >= 3 else 'JAN')
-            prev_period_key = f"{prev_month_short}-{previous_period.year}"
-            
-            previous_queryset = ChartAggregatedData.objects.filter(
-                tenant=tenant,
-                period_key=prev_period_key
-            )
-            
-            if selected_department and selected_department != 'All':
-                previous_queryset = previous_queryset.filter(department=selected_department)
-            
-            if previous_queryset.exists():
-                previous_period_stats = previous_queryset.aggregate(
-                    prev_employees=Count('employee_id', distinct=True),
-                    prev_present_days=Sum('present_days'),
-                    prev_working_days=Sum('total_working_days'),
-                    prev_ot_hours=Sum('ot_hours'),
-                    prev_late_minutes=Sum('late_minutes')
+        from ..models import ChartAggregatedData
+        try:
+            # Build previous window keys equal to the size of current selection
+            periods_list = list(payroll_periods) if hasattr(payroll_periods, '__iter__') else []
+            window_size = len(periods_list) if periods_list else 0
+            if window_size > 0:
+                # Determine the oldest period in the current selection (assuming newest-first ordering)
+                oldest = periods_list[-1]
+                raw_month = str(getattr(oldest, 'month', '') or '')
+                raw_year = int(getattr(oldest, 'year', 0) or 0)
+                # Month mappings
+                MONTH_TO_NUM = {
+                    'JANUARY': 1, 'FEBRUARY': 2, 'MARCH': 3, 'APRIL': 4,
+                    'MAY': 5, 'JUNE': 6, 'JULY': 7, 'AUGUST': 8,
+                    'SEPTEMBER': 9, 'OCTOBER': 10, 'NOVEMBER': 11, 'DECEMBER': 12,
+                    'JAN': 1, 'FEB': 2, 'MAR': 3, 'APR': 4, 'MAY': 5, 'JUN': 6,
+                    'JUL': 7, 'AUG': 8, 'SEP': 9, 'OCT': 10, 'NOV': 11, 'DEC': 12,
+                }
+                NUM_TO_SHORT = {1:'JAN',2:'FEB',3:'MAR',4:'APR',5:'MAY',6:'JUN',7:'JUL',8:'AUG',9:'SEP',10:'OCT',11:'NOV',12:'DEC'}
+                month_num = MONTH_TO_NUM.get(raw_month.upper(), None)
+                if month_num is None:
+                    # Try first 3 letters if full month wasn't found
+                    month_num = MONTH_TO_NUM.get(raw_month[:3].upper(), 1)
+                y, m = raw_year, month_num
+                previous_keys = []
+                # Generate window_size months immediately before the oldest selected month
+                for _ in range(window_size):
+                    m -= 1
+                    if m == 0:
+                        m = 12
+                        y -= 1
+                    previous_keys.append(f"{NUM_TO_SHORT[m]}-{y}")
+
+                previous_queryset = ChartAggregatedData.objects.filter(
+                    tenant=tenant,
+                    period_key__in=previous_keys
                 )
-                
-                prev_present = float(previous_period_stats.get('prev_present_days', 0) or 0)
-                prev_working = float(previous_period_stats.get('prev_working_days', 1) or 1)
-                previous_period_stats['prev_attendance'] = (prev_present / prev_working * 100) if prev_working > 0 else 0
+                if selected_department and selected_department != 'All':
+                    previous_queryset = previous_queryset.filter(department=selected_department)
+                if previous_queryset.exists():
+                    previous_period_stats = previous_queryset.aggregate(
+                        prev_employees=Count('employee_id', distinct=True),
+                        prev_present_days=Sum('present_days'),
+                        prev_working_days=Sum('total_working_days'),
+                        prev_ot_hours=Sum('ot_hours'),
+                        prev_late_minutes=Sum('late_minutes')
+                    )
+                    prev_present = float(previous_period_stats.get('prev_present_days', 0) or 0)
+                    prev_working = float(previous_period_stats.get('prev_working_days', 0) or 0)
+                    previous_period_stats['prev_attendance'] = (prev_present / prev_working * 100) if prev_working > 0 else 0
+        except Exception:
+            # On any error, leave previous_period_stats empty; deltas will remain 0
+            pass
         
         query_timings['previous_period_analysis_ms'] = round((time.time() - previous_period_start) * 1000, 2)
         

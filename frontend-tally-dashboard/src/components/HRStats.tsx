@@ -24,9 +24,9 @@ const HRStats: React.FC<HRStatsProps> = ({ timePeriod, selectedDepartment = 'All
   const [loading, setLoading] = useState(true);
   const [hasData, setHasData] = useState(false);
 
-  // If parent provides overviewSalaryData, use it as the primary source
+  // If parent provides overviewSalaryData, use it as the primary source ONLY for 'All' department
   useEffect(() => {
-    if (overviewSalaryData) {
+    if (overviewSalaryData && (selectedDepartment === 'All' || !selectedDepartment)) {
       setData(overviewSalaryData);
       const hasActualData = overviewSalaryData.totalEmployees > 0 ||
         (overviewSalaryData.salaryTrends && overviewSalaryData.salaryTrends.length > 0) ||
@@ -34,12 +34,12 @@ const HRStats: React.FC<HRStatsProps> = ({ timePeriod, selectedDepartment = 'All
       setHasData(hasActualData);
       setLoading(false);
     }
-  }, [overviewSalaryData]);
+  }, [overviewSalaryData, selectedDepartment]);
 
   useEffect(() => {
     const loadData = async () => {
-      // If overview provided data, don't fetch here - use parent's data as source of truth
-      if (overviewSalaryData) return;
+      // If overview provided data AND department is 'All', don't fetch - use parent's data as source of truth
+      if (overviewSalaryData && (selectedDepartment === 'All' || !selectedDepartment)) return;
       try {
         setLoading(true);
         const salaryData = await fetchSalaryData(
@@ -194,10 +194,29 @@ const HRStats: React.FC<HRStatsProps> = ({ timePeriod, selectedDepartment = 'All
   // Calculate percentage changes with proper validation
   const calculateChange = (changePercentage: number) => {
     // Ensure the change percentage is valid and not NaN
-    if (isNaN(changePercentage) || changePercentage === null || changePercentage === undefined) {
+    if (
+      changePercentage === null ||
+      changePercentage === undefined ||
+      isNaN(Number(changePercentage))
+    ) {
       return 0;
     }
-    return Math.round(changePercentage) / 100; // Round to 2 decimal places
+    const v = Number(changePercentage);
+    // Heuristics:
+    // - If absolute value <= 1, treat as fraction and convert to %
+    // - If absolute value is very large (e.g., >100 and <= 10000), assume basis points and scale down
+    // - Otherwise, assume it's already a percentage
+    let pct = v;
+    if (Math.abs(v) <= 1) {
+      pct = v * 100;
+    } else if (Math.abs(v) > 100 && Math.abs(v) <= 10000) {
+      pct = v / 100;
+    }
+    // Clamp to [-100, 100] to avoid extreme swings
+    if (pct > 100) pct = 100;
+    if (pct < -100) pct = -100;
+    // Round to 2 decimals
+    return Math.round(pct * 100) / 100;
   };
 
   // Debug logging for percentage calculations
@@ -208,6 +227,12 @@ const HRStats: React.FC<HRStatsProps> = ({ timePeriod, selectedDepartment = 'All
     attendanceChange: filteredData?.attendanceChange,
     lateMinutesChange: filteredData?.lateMinutesChange,
     otHoursChange: filteredData?.otHoursChange,
+    normalized: {
+      employees: calculateChange(filteredData?.employeesChange || 0),
+      attendance: calculateChange(filteredData?.attendanceChange || 0),
+      lateMinutes: calculateChange(filteredData?.lateMinutesChange || 0),
+      otHours: calculateChange(filteredData?.otHoursChange || 0),
+    },
     selectedPeriod: filteredData?.selectedPeriod
   });
 
@@ -377,6 +402,21 @@ const HRStats: React.FC<HRStatsProps> = ({ timePeriod, selectedDepartment = 'All
                     : `${stat.change > 0 ? "+" : ""}${stat.change.toFixed(2)}% ${comparisonLabel}`}
               </span>
             </div> */}
+            <div className="flex items-center gap-1 mt-2">
+              <span
+                className={`text-sm font-medium ${
+                  stat.change > 0
+                    ? 'text-teal-600'
+                    : stat.change < 0
+                      ? 'text-red-600'
+                      : 'text-gray-500'
+                }`}
+              >
+                {stat.change === 0
+                  ? `No change ${comparisonLabel.toLowerCase()}`
+                  : `${stat.change > 0 ? '+' : ''}${stat.change.toFixed(2)}% ${comparisonLabel}`}
+              </span>
+            </div>
           </div>
         ))}
       </div>
