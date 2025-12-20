@@ -2770,22 +2770,46 @@ def calculate_simple_payroll_ultra_fast(request):
                 INNER JOIN employee_shifts es ON e.employee_id = es.employee_id
                 WHERE e.tenant_id = %s AND e.is_active = true
             ),
-            -- Aggregate attendance
-            attendance_summary AS (
+            -- Monthly attendance aggregated (uploaded Excel) - preferred when available
+            monthly_attendance AS (
                 SELECT 
                     employee_id,
                     SUM(COALESCE(present_days, 0)) as present_days,
                     SUM(COALESCE(absent_days, 0)) as absent_days,
                     SUM(COALESCE(ot_hours, 0)) as ot_hours,
                     SUM(COALESCE(late_minutes, 0)) as late_minutes,
-                    MAX(COALESCE(total_working_days, 0)) as uploaded_working_days,
-                    MAX(COALESCE(holiday_days, 0)) as holiday_days
+                    MAX(COALESCE(total_working_days, 0)) as uploaded_working_days
                 FROM excel_data_attendance 
                 WHERE tenant_id = %s 
                     AND EXTRACT(YEAR FROM date) = %s 
                     AND EXTRACT(MONTH FROM date) = %s
                 GROUP BY employee_id
-                HAVING SUM(COALESCE(present_days, 0)) > 0 OR SUM(COALESCE(absent_days, 0)) > 0
+            ),
+            -- Daily attendance aggregated for the month (fallback when monthly is missing)
+            daily_attendance AS (
+                SELECT 
+                    employee_id,
+                    SUM(CASE WHEN attendance_status IN ('PRESENT','PAID_LEAVE') THEN 1 ELSE 0 END) as present_days,
+                    SUM(CASE WHEN attendance_status = 'ABSENT' THEN 1 ELSE 0 END) as absent_days,
+                    SUM(COALESCE(ot_hours, 0)) as ot_hours,
+                    SUM(COALESCE(late_minutes, 0)) as late_minutes
+                FROM excel_data_dailyattendance 
+                WHERE tenant_id = %s 
+                    AND EXTRACT(YEAR FROM date) = %s 
+                    AND EXTRACT(MONTH FROM date) = %s
+                GROUP BY employee_id
+            ),
+            -- Unified attendance summary (prefer monthly values, fallback to daily aggregates)
+            attendance_summary AS (
+                SELECT 
+                    COALESCE(ma.employee_id, da.employee_id) as employee_id,
+                    COALESCE(ma.present_days, da.present_days, 0) as present_days,
+                    COALESCE(ma.absent_days, da.absent_days, 0) as absent_days,
+                    COALESCE(ma.ot_hours, da.ot_hours, 0) as ot_hours,
+                    COALESCE(ma.late_minutes, da.late_minutes, 0) as late_minutes,
+                    COALESCE(ma.uploaded_working_days, 0) as uploaded_working_days
+                FROM monthly_attendance ma
+                FULL OUTER JOIN daily_attendance da ON ma.employee_id = da.employee_id
             ),
             -- Calculate holidays for each employee in this month (respecting DOJ and off days)
             employee_holidays AS (
@@ -2913,7 +2937,8 @@ def calculate_simple_payroll_ultra_fast(request):
             params = [
                 tenant.id,  # employee_shifts
                 break_time, break_time, average_days, break_time, average_days, tenant.id,  # ot_rates
-                tenant.id, year, month_num,  # attendance_summary
+                tenant.id, year, month_num,  # monthly_attendance
+                tenant.id, year, month_num,  # daily_attendance
                 year, month_num, tenant.id,  # employee_holidays
                 tenant.id,  # weekly_attendance tenant
                 year, month_num,  # weekly_attendance year/month
