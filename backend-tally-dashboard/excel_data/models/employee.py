@@ -2,6 +2,7 @@ from django.db import models
 from django.conf import settings
 from .tenant import TenantAwareModel
 from datetime import datetime, timedelta
+import uuid
 
 
 class EmployeeProfile(TenantAwareModel):
@@ -186,3 +187,57 @@ class EmployeeProfile(TenantAwareModel):
     @property
     def full_name(self):
         return f"{self.first_name} {self.last_name}"
+
+
+class BulkUpdateLog(TenantAwareModel):
+    """
+    Audit trail for bulk update operations on employees.
+    Stores old values to enable reverting changes.
+    """
+    action_id = models.UUIDField(default=uuid.uuid4, unique=True, editable=False, db_index=True)
+    performed_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        related_name='bulk_updates'
+    )
+    performed_at = models.DateTimeField(auto_now_add=True, db_index=True)
+    
+    ACTION_TYPE_CHOICES = [
+        ('bulk_update', 'Bulk Update'),
+        ('activate', 'Activate Employees'),
+        ('deactivate', 'Deactivate Employees'),
+        ('delete', 'Delete Employees'),
+    ]
+    action_type = models.CharField(max_length=50, choices=ACTION_TYPE_CHOICES)
+    employee_count = models.IntegerField()
+    
+    # JSON field to store the changes
+    # Format: {
+    #     'employee_ids': [1, 2, 3],
+    #     'old_values': [{'id': 1, 'department': 'Sales', ...}, ...],
+    #     'new_values': {'department': 'Engineering', ...}
+    # }
+    changes = models.JSONField()
+    
+    # Revert tracking
+    reverted = models.BooleanField(default=False, db_index=True)
+    reverted_at = models.DateTimeField(null=True, blank=True)
+    reverted_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='bulk_update_reverts'
+    )
+    
+    class Meta:
+        ordering = ['-performed_at']
+        indexes = [
+            models.Index(fields=['-performed_at', 'tenant']),
+            models.Index(fields=['action_id']),
+            models.Index(fields=['reverted', 'tenant']),
+        ]
+    
+    def __str__(self):
+        return f"{self.action_type} - {self.employee_count} employees - {self.performed_at}"

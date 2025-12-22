@@ -1,5 +1,5 @@
 // Payroll Overview Screen - Redesigned with Modern UI
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
   View,
   Text,
@@ -34,6 +34,21 @@ const formatMonthName = (month: string): string => {
     'SEPTEMBER': 'September', 'OCTOBER': 'October', 'NOVEMBER': 'November', 'DECEMBER': 'December',
   };
   return monthMap[month?.toUpperCase()] || month || 'N/A';
+};
+
+// Helper to get month index (0-11) from various month representations
+const getMonthIndex = (name?: string): number => {
+  if (!name) return 0;
+  const m = name.toUpperCase();
+  const map: Record<string, number> = {
+    'JAN': 0, 'FEB': 1, 'MAR': 2, 'APR': 3, 'MAY': 4, 'JUN': 5,
+    'JUL': 6, 'AUG': 7, 'SEP': 8, 'OCT': 9, 'NOV': 10, 'DEC': 11,
+    'JANUARY': 0, 'FEBRUARY': 1, 'MARCH': 2, 'APRIL': 3, 'JUNE': 5,
+    'JULY': 6, 'AUGUST': 7, 'SEPTEMBER': 8, 'OCTOBER': 9, 'NOVEMBER': 10, 'DECEMBER': 11,
+  };
+  if (map[m] !== undefined) return map[m];
+  const idx = new Date(Date.parse(`${name} 1, 2000`)).getMonth();
+  return isNaN(idx) ? 0 : idx;
 };
 
 export default function PayrollScreen() {
@@ -74,10 +89,16 @@ export default function PayrollScreen() {
   // Screen dimensions for responsive design
   const screenWidth = Dimensions.get('window').width;
   
-  // Animation values
-  const fadeAnim = new Animated.Value(0);
-  const slideAnim = new Animated.Value(50);
-  const scaleAnim = new Animated.Value(0.9);
+  // Animation values (persist across renders)
+  const fadeAnim = useRef(new Animated.Value(0)).current;
+  const slideAnim = useRef(new Animated.Value(50)).current;
+  const scaleAnim = useRef(new Animated.Value(0.9)).current;
+ 
+  // Control how much detail to show in Overview cards
+  const showOverviewCardDetails = false;
+  const showOverviewEmployeeCards = true;
+  const showOverviewMetrics = true;
+  const showDetailedMetrics = false;
   
   // Available years - generate a range from current year going back 10 years and forward 2 years
   const currentYear = new Date().getFullYear();
@@ -113,6 +134,15 @@ export default function PayrollScreen() {
     { value: 'DECEMBER', label: 'December' },
   ];
 
+  // Total days in the selected month (for display)
+  const totalDaysInSelectedPeriod = React.useMemo(() => {
+    if (!selectedPeriod) return 0;
+    const monthName = selectedPeriod.month || (selectedPeriod as any).month_display || '';
+    const mi = getMonthIndex(monthName);
+    const y = selectedPeriod.year || new Date().getFullYear();
+    return new Date(y, mi + 1, 0).getDate();
+  }, [selectedPeriod]);
+
   // Get period for selected year/month
   const getPeriodForSelection = (year: number, month: string) => {
     return periods.find(
@@ -122,15 +152,18 @@ export default function PayrollScreen() {
     );
   };
 
-  // Check if period needs calculation
-  const needsCalculation = selectedPeriod && (
+  // Check if period needs calculation (support both overview and periods-list shapes)
+  const totalEmployees = (selectedPeriod?.total_employees ?? (selectedPeriod as any)?.calculated_count ?? 0);
+  const paidEmployeesSel = (selectedPeriod?.paid_employees ?? (selectedPeriod as any)?.paid_count ?? 0);
+  const pendingCount = (selectedPeriod?.pending_employees ?? (selectedPeriod as any)?.pending_count ?? Math.max(0, totalEmployees - paidEmployeesSel));
+  const needsCalculation = !!selectedPeriod && (
     selectedPeriod.status === 'PENDING' || 
-    (selectedPeriod.total_employees === 0 && selectedPeriod.data_source !== 'UPLOADED')
+    (totalEmployees === 0 && selectedPeriod.data_source !== 'UPLOADED')
   );
 
   // Check if all salaries are paid
-  const allPaid = selectedPeriod && selectedPeriod.paid_employees === selectedPeriod.total_employees && selectedPeriod.total_employees > 0;
-  const hasUnpaidSalaries = selectedPeriod && selectedPeriod.pending_employees > 0;
+  const allPaid = !!selectedPeriod && paidEmployeesSel === totalEmployees && totalEmployees > 0;
+  const hasUnpaidSalaries = !!selectedPeriod && pendingCount > 0;
 
   // Calculate payroll
   const handleCalculatePayroll = async () => {
@@ -294,55 +327,63 @@ export default function PayrollScreen() {
     if (!selectedPeriod) return;
     try {
       setLoadingSalaries(true);
-      const response = await payrollService.getCalculatedSalaries(selectedPeriod.id, 1);
-      const salariesList = response.results || [];
-      setSalaries(salariesList);
+      const all: CalculatedSalary[] = [];
+      let page = 1;
+      while (page <= 50) {
+        const response = await payrollService.getCalculatedSalaries(selectedPeriod.id, page);
+        const list = response.results || [];
+        all.push(...list);
+        const hasNext = (response as any)?.next;
+        if (!hasNext || list.length === 0) break;
+        page += 1;
+      }
+      setSalaries(all);
       
       // Calculate comprehensive stats like frontend
-      const total = salariesList.length;
-      const totalBaseSalary = salariesList.reduce((sum, s) => {
+      const total = all.length;
+      const totalBaseSalary = all.reduce((sum, s) => {
         const baseSalary = typeof s.basic_salary === 'string' 
           ? parseFloat(s.basic_salary) 
           : (s.basic_salary || 0);
         return sum + baseSalary;
       }, 0);
       
-      const totalGrossSalary = salariesList.reduce((sum, s) => {
+      const totalGrossSalary = all.reduce((sum, s) => {
         const grossSalary = typeof s.gross_salary === 'string' 
           ? parseFloat(s.gross_salary) 
           : (s.gross_salary || 0);
         return sum + grossSalary;
       }, 0);
       
-      const totalOTCharges = salariesList.reduce((sum, s) => {
+      const totalOTCharges = all.reduce((sum, s) => {
         const otCharges = typeof s.ot_charges === 'string' 
           ? parseFloat(s.ot_charges) 
           : (s.ot_charges || 0);
         return sum + otCharges;
       }, 0);
       
-      const totalLateDeduction = salariesList.reduce((sum, s) => {
+      const totalLateDeduction = all.reduce((sum, s) => {
         const lateDeduction = typeof s.late_deduction === 'string' 
           ? parseFloat(s.late_deduction) 
           : (s.late_deduction || 0);
         return sum + lateDeduction;
       }, 0);
       
-      const totalTDS = salariesList.reduce((sum, s) => {
+      const totalTDS = all.reduce((sum, s) => {
         const tdsAmount = typeof s.tds_amount === 'string' 
           ? parseFloat(s.tds_amount) 
           : (s.tds_amount || 0);
         return sum + tdsAmount;
       }, 0);
       
-      const totalNetSalary = salariesList.reduce((sum, s) => {
+      const totalNetSalary = all.reduce((sum, s) => {
         const netPayable = typeof s.net_payable === 'string' 
           ? parseFloat(s.net_payable) 
           : (s.net_payable || 0);
         return sum + netPayable;
       }, 0);
       
-      const paidEmployees = salariesList.filter(s => s.is_paid).length;
+      const paidEmployees = all.filter(s => s.is_paid).length;
       const pendingEmployees = total - paidEmployees;
       
       const averageSalary = total > 0 ? totalNetSalary / total : 0;
@@ -393,32 +434,10 @@ export default function PayrollScreen() {
       {/* Modern Card-Based Header Inspired by Web Dashboard */}
       <View style={[styles.headerCard, { backgroundColor: colors.surface }]}>
         {/* Header Title Section */}
-        <View style={styles.headerTitleSection}>
-          <Animated.Text 
-            style={[
-              styles.headerTitleText, 
-              { 
-                color: colors.text,
-                opacity: fadeAnim,
-                transform: [{ translateY: slideAnim }]
-              }
-            ]}
-          >
-            Payroll Management
-          </Animated.Text>
-          <Animated.Text 
-            style={[
-              styles.headerSubtitleText, 
-              { 
-                color: colors.textSecondary,
-                opacity: fadeAnim,
-                transform: [{ translateY: slideAnim }]
-              }
-            ]}
-          >
-            Calculate and manage employee salaries
-          </Animated.Text>
-        </View>
+        
+          
+          
+      
         
         {/* Advance Button */}
         <TouchableOpacity
@@ -918,6 +937,7 @@ export default function PayrollScreen() {
 
       {/* Salaries List */}
       {viewMode === 'overview' ? (
+        showOverviewEmployeeCards ? (
         <ScrollView 
           style={styles.salariesList}
           refreshControl={
@@ -973,6 +993,7 @@ export default function PayrollScreen() {
               </Text>
             </Animated.View>
           ) : (
+            showOverviewEmployeeCards ? (
             salaries.map((salary) => (
               <View
                 key={salary.id}
@@ -1042,100 +1063,152 @@ export default function PayrollScreen() {
                       </LinearGradient>
                     </View>
 
-                    {/* Salary Details Grid */}
-                    <View style={styles.salaryDetailsGrid}>
-                      <View style={styles.detailColumn}>
-                        <View style={styles.detailItemModern}>
-                          <Text style={[styles.detailLabelModern, { color: colors.textSecondary }]}>Base Salary</Text>
-                          <Text style={[styles.detailValueModern, { color: colors.text }]}>
-                            ₹{parseFloat(salary.basic_salary?.toString() || '0').toLocaleString('en-IN')}
-                          </Text>
+                    {showOverviewCardDetails && (
+                      <View style={styles.salaryDetailsGrid}>
+                        <View style={styles.detailColumn}>
+                          <View style={styles.detailItemModern}>
+                            <Text style={[styles.detailLabelModern, { color: colors.textSecondary }]}>Base Salary</Text>
+                            <Text style={[styles.detailValueModern, { color: colors.text }]}>
+                              ₹{parseFloat(salary.basic_salary?.toString() || '0').toLocaleString('en-IN')}
+                            </Text>
+                          </View>
+                          <View style={styles.detailItemModern}>
+                            <Text style={[styles.detailLabelModern, { color: colors.textSecondary }]}>Gross Salary</Text>
+                            <Text style={[styles.detailValueModern, { color: colors.text }]}>
+                              ₹{parseFloat(salary.gross_salary?.toString() || '0').toLocaleString('en-IN')}
+                            </Text>
+                          </View>
                         </View>
-                        <View style={styles.detailItemModern}>
-                          <Text style={[styles.detailLabelModern, { color: colors.textSecondary }]}>Gross Salary</Text>
-                          <Text style={[styles.detailValueModern, { color: colors.text }]}>
-                            ₹{parseFloat(salary.gross_salary?.toString() || '0').toLocaleString('en-IN')}
-                          </Text>
+                        
+                        <View style={styles.detailColumn}>
+                          <View style={styles.detailItemModern}>
+                            <Text style={[styles.detailLabelModern, { color: colors.textSecondary }]}>TDS Amount</Text>
+                            <Text style={[styles.detailValueModern, { color: colors.error }]}>
+                              ₹{parseFloat(salary.tds_amount?.toString() || '0').toLocaleString('en-IN')}
+                            </Text>
+                          </View>
+                          <View style={styles.detailItemModern}>
+                            <Text style={[styles.detailLabelModern, { color: colors.textSecondary }]}>Advance</Text>
+                            <Text style={[styles.detailValueModern, { color: colors.warning }]}>
+                              ₹{parseFloat(salary.advance_deduction_amount?.toString() || '0').toLocaleString('en-IN')}
+                            </Text>
+                          </View>
                         </View>
                       </View>
-                      
-                      <View style={styles.detailColumn}>
-                        <View style={styles.detailItemModern}>
-                          <Text style={[styles.detailLabelModern, { color: colors.textSecondary }]}>TDS Amount</Text>
-                          <Text style={[styles.detailValueModern, { color: colors.error }]}>
-                            ₹{parseFloat(salary.tds_amount?.toString() || '0').toLocaleString('en-IN')}
-                          </Text>
-                        </View>
-                        <View style={styles.detailItemModern}>
-                          <Text style={[styles.detailLabelModern, { color: colors.textSecondary }]}>Advance</Text>
-                          <Text style={[styles.detailValueModern, { color: colors.warning }]}>
-                            ₹{parseFloat(salary.advance_deduction_amount?.toString() || '0').toLocaleString('en-IN')}
-                          </Text>
-                        </View>
-                      </View>
-                    </View>
+                    )}
 
-                    {/* Enhanced Attendance Summary */}
-                    <LinearGradient
-                      colors={['transparent', `${colors.primary}05` ]}
-                      start={{ x: 0, y: 0 }}
-                      end={{ x: 0, y: 1 }}
-                      style={[styles.attendanceSummary, { borderTopColor: colors.border }]}
-                    >
-                      <View style={styles.attendanceItem}>
-                        <LinearGradient
-                          colors={[`${colors.success}20`, `${colors.success}10` ]}
-                          start={{ x: 0, y: 0 }}
-                          end={{ x: 1, y: 1 }}
-                          style={[styles.attendanceIconContainer]}
-                        >
-                          <Ionicons name="checkmark-circle" size={16} color={colors.success} />
-                        </LinearGradient>
-                        <Text style={[styles.attendanceLabel, { color: colors.textSecondary }]}>Present</Text>
-                        <Text style={[styles.attendanceValue, { color: colors.text }]}>{salary.present_days || 0}</Text>
-                      </View>
-                      <View style={styles.attendanceItem}>
-                        <LinearGradient
-                          colors={[`${colors.error}20`, `${colors.error}10` ]}
-                          start={{ x: 0, y: 0 }}
-                          end={{ x: 1, y: 1 }}
-                          style={[styles.attendanceIconContainer]}
-                        >
-                          <Ionicons name="close-circle" size={16} color={colors.error} />
-                        </LinearGradient>
-                        <Text style={[styles.attendanceLabel, { color: colors.textSecondary }]}>Absent</Text>
-                        <Text style={[styles.attendanceValue, { color: colors.text }]}>{salary.absent_days || 0}</Text>
-                      </View>
-                      <View style={styles.attendanceItem}>
-                        <LinearGradient
-                          colors={[`${colors.info}20`, `${colors.info}10` ]}
-                          start={{ x: 0, y: 0 }}
-                          end={{ x: 1, y: 1 }}
-                          style={[styles.attendanceIconContainer]}
-                        >
-                          <Ionicons name="time" size={16} color={colors.info} />
-                        </LinearGradient>
-                        <Text style={[styles.attendanceLabel, { color: colors.textSecondary }]}>OT Hours</Text>
-                        <Text style={[styles.attendanceValue, { color: colors.text }]}>{salary.ot_hours || 0}</Text>
-                      </View>
-                      <View style={styles.attendanceItem}>
-                        <LinearGradient
-                          colors={[`${colors.warning}20`, `${colors.warning}10` ]}
-                          start={{ x: 0, y: 0 }}
-                          end={{ x: 1, y: 1 }}
-                          style={[styles.attendanceIconContainer]}
-                        >
-                          <Ionicons name="warning" size={16} color={colors.warning} />
-                        </LinearGradient>
-                        <Text style={[styles.attendanceLabel, { color: colors.textSecondary }]}>Late (Min)</Text>
-                        <Text style={[styles.attendanceValue, { color: colors.text }]}>{salary.late_minutes || 0}</Text>
-                      </View>
-                    </LinearGradient>
+                    {showOverviewMetrics && (
+                      <LinearGradient
+                        colors={['transparent', `${colors.primary}05` ]}
+                        start={{ x: 0, y: 0 }}
+                        end={{ x: 0, y: 1 }}
+                        style={[styles.attendanceSummary, { borderTopColor: colors.border }]}
+                      >
+                        <View style={styles.attendanceItem}>
+                          <LinearGradient
+                            colors={[`${colors.success}20`, `${colors.success}10` ]}
+                            start={{ x: 0, y: 0 }}
+                            end={{ x: 1, y: 1 }}
+                            style={[styles.attendanceIconContainer]}
+                          >
+                            <Ionicons name="checkmark-circle" size={16} color={colors.success} />
+                          </LinearGradient>
+                          <Text style={[styles.attendanceLabel, { color: colors.textSecondary }]}>Present</Text>
+                          <Text style={[styles.attendanceValue, { color: colors.text }]}>{salary.present_days || 0}</Text>
+                        </View>
+                        <View style={styles.attendanceItem}>
+                          <LinearGradient
+                            colors={[`${colors.error}20`, `${colors.error}10` ]}
+                            start={{ x: 0, y: 0 }}
+                            end={{ x: 1, y: 1 }}
+                            style={[styles.attendanceIconContainer]}
+                          >
+                            <Ionicons name="close-circle" size={16} color={colors.error} />
+                          </LinearGradient>
+                          <Text style={[styles.attendanceLabel, { color: colors.textSecondary }]}>Absent</Text>
+                          <Text style={[styles.attendanceValue, { color: colors.text }]}>{salary.absent_days || 0}</Text>
+                        </View>
+                        <View style={styles.attendanceItem}>
+                          <LinearGradient
+                            colors={[`${colors.info}20`, `${colors.info}10` ]}
+                            start={{ x: 0, y: 0 }}
+                            end={{ x: 1, y: 1 }}
+                            style={[styles.attendanceIconContainer]}
+                          >
+                            <Ionicons name="time" size={16} color={colors.info} />
+                          </LinearGradient>
+                          <Text style={[styles.attendanceLabel, { color: colors.textSecondary }]}>OT Hours</Text>
+                          <Text style={[styles.attendanceValue, { color: colors.text }]}>{salary.ot_hours || 0}</Text>
+                        </View>
+                        <View style={styles.attendanceItem}>
+                          <LinearGradient
+                            colors={[`${colors.warning}20`, `${colors.warning}10` ]}
+                            start={{ x: 0, y: 0 }}
+                            end={{ x: 1, y: 1 }}
+                            style={[styles.attendanceIconContainer]}
+                          >
+                            <Ionicons name="warning" size={16} color={colors.warning} />
+                          </LinearGradient>
+                          <Text style={[styles.attendanceLabel, { color: colors.textSecondary }]}>Late (Min)</Text>
+                          <Text style={[styles.attendanceValue, { color: colors.text }]}>{salary.late_minutes || 0}</Text>
+                        </View>
+                        <View style={styles.attendanceItem}>
+                          <LinearGradient
+                            colors={[`${colors.info}20`, `${colors.info}10` ]}
+                            start={{ x: 0, y: 0 }}
+                            end={{ x: 1, y: 1 }}
+                            style={[styles.attendanceIconContainer]}
+                          >
+                            <Ionicons name="calendar" size={16} color={colors.info} />
+                          </LinearGradient>
+                          <Text style={[styles.attendanceLabel, { color: colors.textSecondary }]}>Working</Text>
+                          <Text style={[styles.attendanceValue, { color: colors.text }]}>{salary.total_working_days || 0}</Text>
+                        </View>
+                        <View style={styles.attendanceItem}>
+                          <LinearGradient
+                            colors={[`${colors.success}20`, `${colors.success}10` ]}
+                            start={{ x: 0, y: 0 }}
+                            end={{ x: 1, y: 1 }}
+                            style={[styles.attendanceIconContainer]}
+                          >
+                            <Ionicons name="sunny" size={16} color={colors.success} />
+                          </LinearGradient>
+                          <Text style={[styles.attendanceLabel, { color: colors.textSecondary }]}>Holidays</Text>
+                          <Text style={[styles.attendanceValue, { color: colors.text }]}>{salary.holiday_days || 0}</Text>
+                        </View>
+                        <View style={styles.attendanceItem}>
+                          <LinearGradient
+                            colors={[`${colors.warning}20`, `${colors.warning}10` ]}
+                            start={{ x: 0, y: 0 }}
+                            end={{ x: 1, y: 1 }}
+                            style={[styles.attendanceIconContainer]}
+                          >
+                            <Ionicons name="alert-circle" size={16} color={colors.warning} />
+                          </LinearGradient>
+                          <Text style={[styles.attendanceLabel, { color: colors.textSecondary }]}>Penalty</Text>
+                          <Text style={[styles.attendanceValue, { color: colors.text }]}>{(salary as any).weekly_penalty_days ?? 0}</Text>
+                        </View>
+                        <View style={styles.attendanceItem}>
+                          <LinearGradient
+                            colors={[`${colors.primary}20`, `${colors.primary}10` ]}
+                            start={{ x: 0, y: 0 }}
+                            end={{ x: 1, y: 1 }}
+                            style={[styles.attendanceIconContainer]}
+                          >
+                            <Ionicons name="calendar" size={16} color={colors.primary} />
+                          </LinearGradient>
+                          <Text style={[styles.attendanceLabel, { color: colors.textSecondary }]}>Total Days</Text>
+                          <Text style={[styles.attendanceValue, { color: colors.text }]}>{totalDaysInSelectedPeriod}</Text>
+                        </View>
+                      </LinearGradient>
+                    )}
                 </TouchableOpacity>
               </View>
             ))
+            ) : null
           )}
         </ScrollView>
+        ) : null
       ) : (
         /* Detailed View */
         <ScrollView 
@@ -1173,104 +1246,157 @@ export default function PayrollScreen() {
             </View>
           </View>
 
-          {/* Detailed Table */}
-          <View style={[styles.detailedTableContainer, { backgroundColor: colors.surface }]}>
-            {/* Table Header */}
-            <View style={[styles.tableHeader, { backgroundColor: `${colors.primary}10`, borderColor: colors.border }]}>
-              <View style={styles.headerCell}>
-                <Text style={[styles.headerCellText, { color: colors.primary }]}>Employee</Text>
+          {/* Detailed Table (horizontally scrollable) */}
+          <ScrollView horizontal showsHorizontalScrollIndicator={true} contentContainerStyle={{ minWidth: 1100 }}>
+            <View style={[styles.detailedTableContainer, { backgroundColor: colors.surface }]}>
+              {/* Table Header */}
+              <View style={[styles.tableHeader, { backgroundColor: `${colors.primary}10`, borderColor: colors.border }]}>
+                <View style={styles.headerCell}>
+                  <Text style={[styles.headerCellText, { color: colors.primary }]}>Employee</Text>
+                </View>
+                <View style={styles.headerCell}>
+                  <Text style={[styles.headerCellText, { color: colors.primary }]}>Base</Text>
+                </View>
+                <View style={styles.headerCell}>
+                  <Text style={[styles.headerCellText, { color: colors.primary }]}>Gross</Text>
+                </View>
+                <View style={styles.headerCell}>
+                  <Text style={[styles.headerCellText, { color: colors.primary }]}>TDS</Text>
+                </View>
+                <View style={styles.headerCell}>
+                  <Text style={[styles.headerCellText, { color: colors.primary }]}>Advance</Text>
+                </View>
+                <View style={styles.headerCell}>
+                  <Text style={[styles.headerCellText, { color: colors.primary }]}>Net</Text>
+                </View>
+                <View style={styles.headerCell}>
+                  <Text style={[styles.headerCellText, { color: colors.primary }]}>Status</Text>
+                </View>
+                {showDetailedMetrics && (
+                  <>
+                    <View style={styles.headerCell}>
+                      <Text style={[styles.headerCellText, { color: colors.primary }]}>Present</Text>
+                    </View>
+                    <View style={styles.headerCell}>
+                      <Text style={[styles.headerCellText, { color: colors.primary }]}>Absent</Text>
+                    </View>
+                    <View style={styles.headerCell}>
+                      <Text style={[styles.headerCellText, { color: colors.primary }]}>OT (hrs)</Text>
+                    </View>
+                    <View style={styles.headerCell}>
+                      <Text style={[styles.headerCellText, { color: colors.primary }]}>Late (min)</Text>
+                    </View>
+                    <View style={styles.headerCell}>
+                      <Text style={[styles.headerCellText, { color: colors.primary }]}>Working</Text>
+                    </View>
+                    <View style={styles.headerCell}>
+                      <Text style={[styles.headerCellText, { color: colors.primary }]}>Holidays</Text>
+                    </View>
+                    <View style={styles.headerCell}>
+                      <Text style={[styles.headerCellText, { color: colors.primary }]}>Penalty</Text>
+                    </View>
+                  </>
+                )}
               </View>
-              <View style={styles.headerCell}>
-                <Text style={[styles.headerCellText, { color: colors.primary }]}>Base</Text>
-              </View>
-              <View style={styles.headerCell}>
-                <Text style={[styles.headerCellText, { color: colors.primary }]}>Gross</Text>
-              </View>
-              <View style={styles.headerCell}>
-                <Text style={[styles.headerCellText, { color: colors.primary }]}>TDS</Text>
-              </View>
-              <View style={styles.headerCell}>
-                <Text style={[styles.headerCellText, { color: colors.primary }]}>Advance</Text>
-              </View>
-              <View style={styles.headerCell}>
-                <Text style={[styles.headerCellText, { color: colors.primary }]}>Net</Text>
-              </View>
-              <View style={styles.headerCell}>
-                <Text style={[styles.headerCellText, { color: colors.primary }]}>Status</Text>
-              </View>
-            </View>
 
-            {/* Table Rows */}
-            {salaries.map((salary, index) => (
-              <TouchableOpacity
-                key={salary.id}
-                style={[
-                  styles.tableRow, 
-                  { 
-                    backgroundColor: index % 2 === 0 ? `${colors.background}30` : 'transparent',
-                    borderColor: colors.border 
-                  }
-                ]}
-                onPress={() => router.push(`/payroll/${salary.id}`)}
-                activeOpacity={0.7}
-              >
-                <View style={styles.rowCell}>
-                  <View>
-                    <Text style={[styles.rowCellPrimaryText, { color: colors.text }]}>
-                      {salary.employee_name || 'Unknown'}
-                    </Text>
-                    <Text style={[styles.rowCellSecondaryText, { color: colors.textSecondary }]}>
-                      {salary.employee_id || 'N/A'}
+              {/* Table Rows */}
+              {salaries.map((salary, index) => (
+                <TouchableOpacity
+                  key={salary.id}
+                  style={[
+                    styles.tableRow, 
+                    { 
+                      backgroundColor: index % 2 === 0 ? `${colors.background}30` : 'transparent',
+                      borderColor: colors.border 
+                    }
+                  ]}
+                  onPress={() => router.push(`/payroll/${salary.id}`)}
+                  activeOpacity={0.7}
+                >
+                  <View style={styles.rowCell}>
+                    <View>
+                      <Text style={[styles.rowCellPrimaryText, { color: colors.text }]}>
+                        {salary.employee_name || 'Unknown'}
+                      </Text>
+                      <Text style={[styles.rowCellSecondaryText, { color: colors.textSecondary }]}>
+                        {salary.employee_id || 'N/A'}
+                      </Text>
+                    </View>
+                  </View>
+                  
+                  <View style={styles.rowCell}>
+                    <Text style={[styles.rowCellAmountText, { color: colors.text }]}>
+                      ₹{parseFloat(salary.basic_salary?.toString() || '0').toLocaleString('en-IN')}
                     </Text>
                   </View>
-                </View>
-                
-                <View style={styles.rowCell}>
-                  <Text style={[styles.rowCellAmountText, { color: colors.text }]}>
-                    ₹{parseFloat(salary.basic_salary?.toString() || '0').toLocaleString('en-IN')}
-                  </Text>
-                </View>
-                
-                <View style={styles.rowCell}>
-                  <Text style={[styles.rowCellAmountText, { color: colors.text }]}>
-                    ₹{parseFloat(salary.gross_salary?.toString() || '0').toLocaleString('en-IN')}
-                  </Text>
-                </View>
-                
-                <View style={styles.rowCell}>
-                  <Text style={[styles.rowCellAmountText, { color: colors.error }]}>
-                    ₹{parseFloat(salary.tds_amount?.toString() || '0').toLocaleString('en-IN')}
-                  </Text>
-                </View>
-                
-                <View style={styles.rowCell}>
-                  <Text style={[styles.rowCellAmountText, { color: colors.warning }]}>
-                    ₹{parseFloat(salary.advance_deduction_amount?.toString() || '0').toLocaleString('en-IN')}
-                  </Text>
-                </View>
-                
-                <View style={styles.rowCell}>
-                  <Text style={[styles.rowCellAmountText, { color: colors.primary, fontWeight: '700' }]}>
-                    ₹{parseFloat(salary.net_payable?.toString() || '0').toLocaleString('en-IN')}
-                  </Text>
-                </View>
-                
-                <View style={styles.rowCell}>
-                  {salary.is_paid ? (
-                    <View style={[styles.statusCellPaid, { backgroundColor: colors.success }]}>
-                      <FontAwesome name="check" size={10} color="white" />
-                      <Text style={styles.statusCellTextPaid}>Paid</Text>
-                    </View>
-                  ) : (
-                    <View style={[styles.statusCellPending, { backgroundColor: colors.warning }]}>
-                      <FontAwesome name="clock" size={10} color="white" />
-                      <Text style={styles.statusCellTextPending}>Pending</Text>
-                    </View>
+                  
+                  <View style={styles.rowCell}>
+                    <Text style={[styles.rowCellAmountText, { color: colors.text }]}>
+                      ₹{parseFloat(salary.gross_salary?.toString() || '0').toLocaleString('en-IN')}
+                    </Text>
+                  </View>
+                  
+                  <View style={styles.rowCell}>
+                    <Text style={[styles.rowCellAmountText, { color: colors.error }]}>
+                      ₹{parseFloat(salary.tds_amount?.toString() || '0').toLocaleString('en-IN')}
+                    </Text>
+                  </View>
+                  
+                  <View style={styles.rowCell}>
+                    <Text style={[styles.rowCellAmountText, { color: colors.warning }]}>
+                      ₹{parseFloat(salary.advance_deduction_amount?.toString() || '0').toLocaleString('en-IN')}
+                    </Text>
+                  </View>
+                  
+                  <View style={styles.rowCell}>
+                    <Text style={[styles.rowCellAmountText, { color: colors.primary, fontWeight: '700' }]}>
+                      ₹{parseFloat(salary.net_payable?.toString() || '0').toLocaleString('en-IN')}
+                    </Text>
+                  </View>
+                  
+                  <View style={styles.rowCell}>
+                    {salary.is_paid ? (
+                      <View style={[styles.statusCellPaid, { backgroundColor: colors.success }]}>
+                        <FontAwesome name="check" size={10} color="white" />
+                        <Text style={styles.statusCellTextPaid}>Paid</Text>
+                      </View>
+                    ) : (
+                      <View style={[styles.statusCellPending, { backgroundColor: colors.warning }]}>
+                        <Ionicons name="time" size={10} color="white" />
+                        <Text style={styles.statusCellTextPending}>Pending</Text>
+                      </View>
+                    )}
+                  </View>
+
+                  {showDetailedMetrics && (
+                    <>
+                      <View style={styles.rowCell}>
+                        <Text style={[styles.rowCellAmountText, { color: colors.text }]}>{salary.present_days || 0}</Text>
+                      </View>
+                      <View style={styles.rowCell}>
+                        <Text style={[styles.rowCellAmountText, { color: colors.text }]}>{salary.absent_days || 0}</Text>
+                      </View>
+                      <View style={styles.rowCell}>
+                        <Text style={[styles.rowCellAmountText, { color: colors.text }]}>{salary.ot_hours || 0}</Text>
+                      </View>
+                      <View style={styles.rowCell}>
+                        <Text style={[styles.rowCellAmountText, { color: colors.text }]}>{salary.late_minutes || 0}</Text>
+                      </View>
+                      <View style={styles.rowCell}>
+                        <Text style={[styles.rowCellAmountText, { color: colors.text }]}>{salary.total_working_days || 0}</Text>
+                      </View>
+                      <View style={styles.rowCell}>
+                        <Text style={[styles.rowCellAmountText, { color: colors.text }]}>{salary.holiday_days || 0}</Text>
+                      </View>
+                      <View style={styles.rowCell}>
+                        <Text style={[styles.rowCellAmountText, { color: colors.text }]}>{(salary as any).weekly_penalty_days ?? 0}</Text>
+                      </View>
+                    </>
                   )}
-                </View>
-              </TouchableOpacity>
-            ))}
-          </View>
+                </TouchableOpacity>
+              ))}
+            </View>
+          </ScrollView>
 
           {/* Summary Footer */}
           <View style={[styles.summaryFooter, { backgroundColor: colors.surface, borderColor: colors.border }]}>

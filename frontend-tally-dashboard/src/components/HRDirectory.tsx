@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Search, Eye, Edit, Plus, Download, MoreVertical, Trash2, ChevronDown } from 'lucide-react';
+import { Search, Eye, Edit, Plus, Download, MoreVertical, Trash2, ChevronDown, Clock } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { exportToExcel, EmployeeData } from '../utils/excelExport';
 import { apiCall } from '../services/api';
@@ -8,6 +8,7 @@ import { logger } from '../utils/logger';
 import Dropdown, { DropdownOption } from './Dropdown';
 import { getDropdownOptions, DropdownOptions } from '../services/dropdownService';
 import CustomDateInputWithOverlay from './CustomDateInputWithOverlay';
+import RecentBulkActions from './RecentBulkActions';
 
 interface AttendanceRecord {
   employee_id: string;
@@ -83,6 +84,9 @@ const HRDirectory: React.FC = () => {
   const [bulkUpdateField, setBulkUpdateField] = useState<string>('');
   const [bulkUpdateValue, setBulkUpdateValue] = useState<any>('');
   const [bulkUpdating, setBulkUpdating] = useState(false);
+  
+  // Recent bulk actions modal state
+  const [showRecentActions, setShowRecentActions] = useState(false);
 
   // Dropdown options state
   const [dropdownOptions, setDropdownOptions] = useState<DropdownOptions>({
@@ -878,9 +882,12 @@ const HRDirectory: React.FC = () => {
 
   // Handle bulk update submission
   const handleBulkUpdateSubmit = async () => {
-    const selectedIds = Array.from(selectedEmployees);
+    // Filter selected IDs to only include employees that are currently visible (match current filters)
+    const visibleEmployeeIds = new Set(filteredEmployees.map(emp => emp.id));
+    const selectedIds = Array.from(selectedEmployees).filter(id => visibleEmployeeIds.has(id));
+    
     if (selectedIds.length === 0) {
-      alert('Please select at least one employee');
+      alert('No employees selected from the current filtered view. Please select at least one employee.');
       return;
     }
 
@@ -1277,13 +1284,19 @@ const HRDirectory: React.FC = () => {
             </div>
             
             {/* Bulk Actions Dropdown - Only show when employees are selected */}
-            {hasSelectedEmployees && (
+            {hasSelectedEmployees && (() => {
+              // Calculate visible selected count
+              const visibleSelectedCount = Array.from(selectedEmployees).filter(id => 
+                filteredEmployees.some(emp => emp.id === id)
+              ).length;
+              
+              return (
               <div className="relative bulk-actions-dropdown">
                 <button
                   onClick={() => setShowBulkActionsDropdown(!showBulkActionsDropdown)}
                   className="flex items-center gap-2 px-3 py-2 bg-white border border-gray-200 text-gray-700 rounded-lg text-sm hover:bg-gray-50 transition-colors"
                 >
-                  Bulk Actions ({selectedEmployees.size})
+                  Bulk Actions ({visibleSelectedCount}{visibleSelectedCount !== selectedEmployees.size ? ` of ${selectedEmployees.size}` : ''})
                   <ChevronDown size={16} className={showBulkActionsDropdown ? 'rotate-180' : ''} />
                 </button>
                 {showBulkActionsDropdown && (
@@ -1371,7 +1384,8 @@ const HRDirectory: React.FC = () => {
                   </div>
                 )}
               </div>
-            )}
+              );
+            })()}
             
             <button 
               className="flex items-center gap-2 px-3 py-2 bg-[#1A6262] text-white rounded-lg text-sm hover:bg-[#155252]"
@@ -1386,6 +1400,15 @@ const HRDirectory: React.FC = () => {
               Filter
             </button>
             
+            <button 
+              className="flex items-center gap-2 px-3 py-2 border border-teal-200 bg-teal-50 text-teal-700 rounded-lg text-sm hover:bg-teal-100 transition-colors"
+              onClick={() => setShowRecentActions(true)}
+              title="View recent bulk actions and undo changes"
+            >
+              <Clock size={16} />
+              Recent Actions
+            </button>
+            
             <div className="relative">
               <button 
                 className="p-2 border border-gray-200 rounded-lg"
@@ -1393,10 +1416,10 @@ const HRDirectory: React.FC = () => {
               >
                 <MoreVertical size={16} />
               </button>
-              
+
               {showMenu && (
-                <div className="absolute right-0 mt-2 w-48 bg-white rounded-lg shadow-lg border border-gray-200 divide-y divide-gray-100">
-                  <button 
+                <div className="absolute right-0 mt-2 w-48 bg-white rounded-lg shadow-lg border border-gray-200 divide-y divide-gray-100 z-50">
+                  <button
                     className="w-full px-4 py-2.5 text-left text-sm text-gray-700 hover:bg-gray-50 flex items-center gap-2"
                     onClick={handleExport}
                   >
@@ -1874,7 +1897,13 @@ const HRDirectory: React.FC = () => {
       )}
 
       {/* Bulk Update Modal */}
-      {showBulkUpdateModal && (
+      {showBulkUpdateModal && (() => {
+        // Calculate visible selected count once to avoid repetition
+        const visibleSelectedCount = Array.from(selectedEmployees).filter(id => 
+          filteredEmployees.some(emp => emp.id === id)
+        ).length;
+        
+        return (
         <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
           <div className="bg-white rounded-lg shadow-xl max-w-md w-full max-h-[90vh] flex flex-col overflow-hidden">
             <div className="flex items-center justify-between p-6 border-b border-gray-200">
@@ -1897,7 +1926,7 @@ const HRDirectory: React.FC = () => {
 
             <div className="p-6 overflow-y-auto flex-1">
               <p className="text-sm text-gray-600 mb-4">
-                Updating <strong>{selectedEmployees.size}</strong> employee{selectedEmployees.size !== 1 ? 's' : ''}
+                Updating <strong>{visibleSelectedCount}</strong> employee{visibleSelectedCount !== 1 ? 's' : ''}
               </p>
 
               <div className="space-y-4">
@@ -2130,7 +2159,18 @@ const HRDirectory: React.FC = () => {
             </div>
           </div>
         </div>
-      )}
+        );
+      })()}
+
+      {/* Recent Bulk Actions Modal */}
+      <RecentBulkActions
+        isOpen={showRecentActions}
+        onClose={() => setShowRecentActions(false)}
+        onActionReverted={() => {
+          // Refresh employee data after reverting an action
+          refreshEmployeeData(false, true);
+        }}
+      />
     </div>
   );
 };

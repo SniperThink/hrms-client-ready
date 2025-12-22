@@ -4139,6 +4139,14 @@ class EmployeeProfileViewSet(viewsets.ModelViewSet):
             if not set_clauses:
                 return Response({"error": "No valid updates to process"}, status=400)
 
+            # Fetch old values before update for audit trail
+            from ..models import BulkUpdateLog
+            update_fields = [field for field, _ in updates.items() if field in allowed_fields]
+            old_values = list(EmployeeProfile.objects.filter(
+                tenant=tenant,
+                id__in=employee_ids
+            ).values('id', *update_fields))
+
             # Build the SQL query
             # Convert employee_ids to a list of placeholders
             id_placeholders = ','.join(['%s'] * len(employee_ids))
@@ -4157,6 +4165,19 @@ class EmployeeProfileViewSet(viewsets.ModelViewSet):
                 with connection.cursor() as cursor:
                     cursor.execute(sql, params)
                     updated_count = cursor.rowcount
+                
+                # Create audit log
+                bulk_log = BulkUpdateLog.objects.create(
+                    tenant=tenant,
+                    performed_by=request.user,
+                    action_type='bulk_update',
+                    employee_count=updated_count,
+                    changes={
+                        'employee_ids': employee_ids,
+                        'old_values': old_values,
+                        'new_values': updates
+                    }
+                )
 
             # Clear relevant caches
             from django.core.cache import cache
@@ -4181,7 +4202,8 @@ class EmployeeProfileViewSet(viewsets.ModelViewSet):
             return Response({
                 "success": True,
                 "updated_count": updated_count,
-                "message": f"Successfully updated {updated_count} employee(s)"
+                "message": f"Successfully updated {updated_count} employee(s)",
+                "action_id": str(bulk_log.action_id)
             })
 
         except Exception as e:
@@ -4189,6 +4211,152 @@ class EmployeeProfileViewSet(viewsets.ModelViewSet):
             logger = logging.getLogger(__name__)
             logger.error(f"Error in bulk_update: {str(e)}", exc_info=True)
             return Response({"error": f"Bulk update failed: {str(e)}"}, status=500)
+
+    @action(detail=False, methods=['post'], url_path='revert-bulk-update')
+    def revert_bulk_update(self, request):
+        """
+        Revert a bulk update operation by restoring old values
+        Expected payload:
+        {
+            "action_id": "uuid-string"
+        }
+        """
+        try:
+            from django.db import transaction
+            from ..models import BulkUpdateLog
+            from django.utils import timezone
+            
+            tenant = getattr(request, 'tenant', None)
+            if not tenant:
+                return Response({"error": "No tenant found"}, status=400)
+            
+            action_id = request.data.get('action_id')
+            if not action_id:
+                return Response({"error": "action_id is required"}, status=400)
+            
+            # Get the bulk update log
+            try:
+                bulk_log = BulkUpdateLog.objects.get(
+                    tenant=tenant,
+                    action_id=action_id
+                )
+            except BulkUpdateLog.DoesNotExist:
+                return Response({"error": "Bulk update action not found"}, status=404)
+            
+            # Check if already reverted
+            if bulk_log.reverted:
+                return Response({
+                    "error": "This action has already been reverted",
+                    "reverted_at": bulk_log.reverted_at,
+                    "reverted_by": bulk_log.reverted_by.email if bulk_log.reverted_by else None
+                }, status=400)
+            
+            # Get old values from the log
+            old_values = bulk_log.changes.get('old_values', [])
+            
+            if not old_values:
+                return Response({"error": "No old values found to revert"}, status=400)
+            
+            # Revert each employee's values
+            reverted_count = 0
+            with transaction.atomic():
+                for old_data in old_values:
+                    employee_id = old_data.pop('id')
+                    # Update employee with old values
+                    EmployeeProfile.objects.filter(
+                        tenant=tenant,
+                        id=employee_id
+                    ).update(**old_data)
+                    reverted_count += 1
+                
+                # Mark as reverted
+                bulk_log.reverted = True
+                bulk_log.reverted_at = timezone.now()
+                bulk_log.reverted_by = request.user
+                bulk_log.save()
+            
+            # Clear relevant caches
+            from django.core.cache import cache
+            cache_keys = [
+                f"directory_data_{tenant.id}",
+                f"directory_data_full_{tenant.id}",
+                f"payroll_overview_{tenant.id}",
+                f"attendance_all_records_{tenant.id}"
+            ]
+            
+            for key in cache_keys:
+                cache.delete(key)
+            
+            return Response({
+                "success": True,
+                "reverted_count": reverted_count,
+                "message": f"Successfully reverted changes for {reverted_count} employee(s)",
+                "action_id": str(bulk_log.action_id),
+                "original_action_date": bulk_log.performed_at,
+                "reverted_by": request.user.email
+            })
+        
+        except Exception as e:
+            import logging
+            logger = logging.getLogger(__name__)
+            logger.error(f"Error in revert_bulk_update: {str(e)}", exc_info=True)
+            return Response({"error": f"Revert failed: {str(e)}"}, status=500)
+
+    @action(detail=False, methods=['get'], url_path='bulk-update-history')
+    def bulk_update_history(self, request):
+        """
+        Get recent bulk update actions for the current tenant
+        Query params:
+        - limit: Number of records to return (default: 10)
+        - include_reverted: Include reverted actions (default: false)
+        """
+        try:
+            from ..models import BulkUpdateLog
+            
+            tenant = getattr(request, 'tenant', None)
+            if not tenant:
+                return Response({"error": "No tenant found"}, status=400)
+            
+            limit = int(request.query_params.get('limit', 10))
+            include_reverted = request.query_params.get('include_reverted', 'false').lower() == 'true'
+            
+            # Query bulk update logs
+            logs = BulkUpdateLog.objects.filter(tenant=tenant)
+            
+            if not include_reverted:
+                logs = logs.filter(reverted=False)
+            
+            logs = logs.order_by('-performed_at')[:limit]
+            
+            # Format response
+            history = []
+            for log in logs:
+                history.append({
+                    'action_id': str(log.action_id),
+                    'action_type': log.action_type,
+                    'employee_count': log.employee_count,
+                    'performed_at': log.performed_at,
+                    'performed_by': log.performed_by.email if log.performed_by else None,
+                    'reverted': log.reverted,
+                    'reverted_at': log.reverted_at,
+                    'reverted_by': log.reverted_by.email if log.reverted_by else None,
+                    'changes_summary': {
+                        'fields_updated': list(log.changes.get('new_values', {}).keys()),
+                        'employee_count': len(log.changes.get('employee_ids', []))
+                    }
+                })
+            
+            return Response({
+                "success": True,
+                "history": history,
+                "count": len(history)
+            })
+        
+        except Exception as e:
+            import logging
+            logger = logging.getLogger(__name__)
+            logger.error(f"Error in bulk_update_history: {str(e)}", exc_info=True)
+            return Response({"error": f"Failed to fetch history: {str(e)}"}, status=500)
 
     @action(detail=False, methods=['post'])
     def create_missing_employees(self, request):

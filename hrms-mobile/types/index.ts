@@ -131,9 +131,11 @@ export interface CalculatedSalary {
   employee_ot_rate: number;
   employee_tds_rate: number;
   total_working_days: number;
+  total_days_in_month?: number;
   present_days: number;
   absent_days: number;
   holiday_days: number;
+  paid_holidays?: number;
   weekly_penalty_days: number;
   ot_hours: number;
   late_minutes: number;

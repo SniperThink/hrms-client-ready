@@ -38,6 +38,7 @@ from .email_verification import (
 # Employee Models
 from .employee import (
     EmployeeProfile,
+    BulkUpdateLog,
 )
 
 # Attendance Models
@@ -96,6 +97,7 @@ __all__ = [
     
     # Employee Models
     'EmployeeProfile',
+    'BulkUpdateLog',
     
     # Leave Models
     'Leave',
