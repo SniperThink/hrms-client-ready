@@ -1,6 +1,6 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { useLocation } from 'react-router-dom';
-import { Search, Bell, Moon, Sun, Zap } from 'lucide-react';
+import { Search, Bell, Moon, Sun, Zap, Info } from 'lucide-react';
 import { logout } from '../services/authService';
 import { apiGet } from '../services/api';
 import ImpersonationBanner from './ImpersonationBanner';
@@ -209,8 +209,10 @@ const HRHeader: React.FC<HRHeaderProps> = ({ pageName }) => {
   const [notificationOpen, setNotificationOpen] = useState(false);
   const [dropdownOpen, setDropdownOpen] = useState(false);
   const [remainingCredits, setRemainingCredits] = useState<number | null>(null);
+  const [showCreditsTooltip, setShowCreditsTooltip] = useState(false);
   const dropdownRef = useRef<HTMLDivElement>(null);
   const notificationRef = useRef<HTMLDivElement>(null);
+  const creditsRef = useRef<HTMLDivElement>(null);
   
   // Fetch remaining credits on component mount and when forced
   const fetchCredits = async (forceRefresh = false) => {
@@ -260,6 +262,9 @@ const HRHeader: React.FC<HRHeaderProps> = ({ pageName }) => {
       }
       if (notificationRef.current && !notificationRef.current.contains(event.target as Node)) {
         setNotificationOpen(false);
+      }
+      if (creditsRef.current && !creditsRef.current.contains(event.target as Node)) {
+        setShowCreditsTooltip(false);
       }
     };
     
@@ -314,22 +319,66 @@ const HRHeader: React.FC<HRHeaderProps> = ({ pageName }) => {
             {/* Credits Display - Hide for superusers */}
             {!isSuperUser && remainingCredits !== null && (
               <div 
-                className={`flex items-center px-3 py-1.5 rounded-full text-sm font-medium ${
-                  remainingCredits < 5 
-                    ? 'bg-red-50 dark:bg-red-900/30 text-red-700 dark:text-red-300' 
-                    : 'bg-teal-50 dark:bg-teal-900/30 text-teal-700 dark:text-teal-300'
-                }`}
+                ref={creditsRef}
+                className="relative"
+                onMouseEnter={() => setShowCreditsTooltip(true)}
+                onMouseLeave={() => setShowCreditsTooltip(false)}
               >
-                <Zap 
-                  className={`w-4 h-4 mr-1.5 ${
-                    remainingCredits < 5 ? 'text-red-500' : 'text-teal-500'
-                  }`} 
-                />
-                {remainingCredits === 1 ? '1 Credit Available' : `${remainingCredits} Credits Available`}
-                {remainingCredits < 5 && (
-                  <span className="ml-2 text-xs font-normal">
-                    (Expiring soon! Contact admin)
-                  </span>
+                <div 
+                  className={`flex items-center px-3 py-1.5 rounded-full text-sm font-medium cursor-help ${
+                    remainingCredits < 5 
+                      ? 'bg-red-50 dark:bg-red-900/30 text-red-700 dark:text-red-300' 
+                      : 'bg-teal-50 dark:bg-teal-900/30 text-teal-700 dark:text-teal-300'
+                  }`}
+                >
+                  <Zap 
+                    className={`w-4 h-4 mr-1.5 ${
+                      remainingCredits < 5 ? 'text-red-500' : 'text-teal-500'
+                    }`} 
+                  />
+                  {remainingCredits === 1 ? '1 Credit Available' : `${remainingCredits} Credits Available`}
+                  {remainingCredits < 5 && (
+                    <span className="ml-2 text-xs font-normal">
+                      (Expiring soon! Contact admin)
+                    </span>
+                  )}
+                </div>
+
+                {/* Credits Tooltip */}
+                {showCreditsTooltip && (
+                  <div className="absolute right-0 mt-2 w-80 bg-white dark:bg-gray-800 rounded-lg shadow-xl z-50 border border-gray-200 dark:border-gray-700 p-4">
+                    <div className="flex items-start gap-3">
+                      <Info className="w-5 h-5 text-teal-600 dark:text-teal-400 flex-shrink-0 mt-0.5" />
+                      <div className="flex-1">
+                        <h4 className="font-semibold text-gray-900 dark:text-white mb-2">What are Credits?</h4>
+                        <p className="text-sm text-gray-700 dark:text-gray-300 mb-3">
+                          Credits represent <strong>days of tool access availability</strong>. Each credit equals one day of access to the HR system features and tools.
+                        </p>
+                        
+                        <div className="bg-teal-50 dark:bg-teal-900/20 border border-teal-200 dark:border-teal-800 rounded-md p-3 mb-3">
+                          <h5 className="text-sm font-semibold text-teal-900 dark:text-teal-200 mb-2">How Credits Work:</h5>
+                          <ul className="text-sm text-teal-800 dark:text-teal-300 space-y-1">
+                            <li className="flex items-start gap-2">
+                              <span className="mt-1">•</span>
+                              <span>One credit is deducted <strong>per day</strong> automatically</span>
+                            </li>
+                            <li className="flex items-start gap-2">
+                              <span className="mt-1">•</span>
+                              <span>Deduction happens at the end of each calendar day</span>
+                            </li>
+                            <li className="flex items-start gap-2">
+                              <span className="mt-1">•</span>
+                              <span>When credits reach zero, tool access will be disabled</span>
+                            </li>
+                          </ul>
+                        </div>
+
+                        <p className="text-sm text-gray-600 dark:text-gray-400 border-t border-gray-200 dark:border-gray-700 pt-3">
+                          <strong>Low Credits Warning:</strong> When you have fewer than 5 days remaining, you'll see an expiry warning. Contact your administrator to add more credits and extend your access.
+                        </p>
+                      </div>
+                    </div>
+                  </div>
                 )}
               </div>
             )}

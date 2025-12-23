@@ -708,6 +708,10 @@ const HRAttendanceLog: React.FC = () => {
         // Employee has off day - can't mark as absent, use 'off' instead
         value = 'off';
       }
+      if (entry && hasOffDay && value === 'unmarked') {
+        // Employee has off day - unmarked should be 'off' instead
+        value = 'off';
+      }
     }
     setAttendanceEntries(prev => {
       const newMap = new Map(prev);
@@ -1745,8 +1749,14 @@ const HRAttendanceLog: React.FC = () => {
                               <div className="flex gap-2">
                                 <button
                                   onClick={() => {
-                                    // Toggle: if already present, unmark it; otherwise mark as present
-                                    const newStatus = entry.status === 'present' ? 'unmarked' : 'present';
+                                    // Toggle: if already present, mark as off (for off-day) or unmark; otherwise mark as present
+                                    let newStatus: string;
+                                    if (entry.status === 'present') {
+                                      // If already present and has off day, toggle back to off
+                                      newStatus = hasOffDay ? 'off' : 'unmarked';
+                                    } else {
+                                      newStatus = 'present';
+                                    }
                                     updateAttendanceEntry(employee.employee_id, 'status', newStatus);
                                   }}
                                   disabled={hasExcelAttendance || isHoliday}
