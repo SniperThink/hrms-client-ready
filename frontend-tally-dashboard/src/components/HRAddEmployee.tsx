@@ -78,12 +78,25 @@ const HRAddEmployee: React.FC = () => {
   const [countryOptions, setCountryOptions] = useState<DropdownOption[]>([]);
   const [stateOptions, setStateOptions] = useState<DropdownOption[]>([]);
   const [cityOptions, setCityOptions] = useState<DropdownOption[]>([]);
+  
+  // Store all employees for counting by department
+  const [allEmployees, setAllEmployees] = useState<EmployeeFormState[]>([]);
 
-  // Convert to dropdown format
-  const departmentOptions: DropdownOption[] = dropdownOptions.departments.map(dept => ({
-    value: dept,
-    label: dept
-  }));
+  // Convert to dropdown format with employee count
+  const departmentOptions: DropdownOption[] = React.useMemo(() => {
+    // Count employees by department
+    const departmentCounts = new Map<string, number>();
+    allEmployees.forEach(emp => {
+      if (emp.department) {
+        departmentCounts.set(emp.department, (departmentCounts.get(emp.department) || 0) + 1);
+      }
+    });
+    
+    return dropdownOptions.departments.map(dept => ({
+      value: dept,
+      label: `${dept} (${departmentCounts.get(dept) || 0})`
+    }));
+  }, [dropdownOptions.departments, allEmployees]);
 
   const locationOptions: DropdownOption[] = dropdownOptions.locations.map(loc => ({
     value: loc,
@@ -142,6 +155,26 @@ const HRAddEmployee: React.FC = () => {
     };
 
     loadLocationData();
+  }, []);
+
+  // Load all employees for department count
+  useEffect(() => {
+    const loadAllEmployees = async () => {
+      try {
+        const response = await apiCall('/api/excel/employees/?page_size=1000', { method: 'GET' });
+        if (response.ok) {
+          const data = await response.json();
+          const employees = Array.isArray(data) ? data : (data?.results || []);
+          setAllEmployees(employees);
+          logger.info('✅ Loaded all employees for department count:', employees.length);
+        }
+      } catch (error) {
+        logger.error('Error loading all employees:', error);
+        // Continue without employee counts if fetch fails
+      }
+    };
+
+    loadAllEmployees();
   }, []);
 
   // Handle country change

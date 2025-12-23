@@ -1034,11 +1034,20 @@ const HRDirectory: React.FC = () => {
         combined.add(dept);
       }
     });
+    
+    // Count employees by department
+    const departmentCounts = new Map<string, number>();
+    employees.forEach(emp => {
+      if (emp.department) {
+        departmentCounts.set(emp.department, (departmentCounts.get(emp.department) || 0) + 1);
+      }
+    });
+    
     return Array.from(combined).sort((a, b) => a.localeCompare(b)).map(dept => ({
       value: dept,
-      label: dept
+      label: `${dept} (${departmentCounts.get(dept) || 0})`
     }));
-  }, [dropdownOptions.departments, departmentOptions]);
+  }, [dropdownOptions.departments, departmentOptions, employees]);
 
   const bulkDesignationOptions: DropdownOption[] = React.useMemo(() => {
     const combined = new Set<string>();

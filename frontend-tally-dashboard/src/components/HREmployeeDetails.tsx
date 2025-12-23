@@ -124,12 +124,25 @@ const HREmployeeDetails: React.FC = () => {
   const [selectedCountry, setSelectedCountry] = useState<string>('');
   const [selectedState, setSelectedState] = useState<string>('');
   const [selectedCity, setSelectedCity] = useState<string>('');
+  
+  // Store all employees for counting by department
+  const [allEmployees, setAllEmployees] = useState<EmployeeProfileData[]>([]);
 
-  // Convert to dropdown format
-  const departmentOptions: DropdownOption[] = dropdownOptions.departments.map(dept => ({
-    value: dept,
-    label: dept
-  }));
+  // Convert to dropdown format with employee count
+  const departmentOptions: DropdownOption[] = React.useMemo(() => {
+    // Count employees by department
+    const departmentCounts = new Map<string, number>();
+    allEmployees.forEach(emp => {
+      if (emp.department) {
+        departmentCounts.set(emp.department, (departmentCounts.get(emp.department) || 0) + 1);
+      }
+    });
+    
+    return dropdownOptions.departments.map(dept => ({
+      value: dept,
+      label: `${dept} (${departmentCounts.get(dept) || 0})`
+    }));
+  }, [dropdownOptions.departments, allEmployees]);
 
   // Static dropdown options
   const maritalStatusOptions: DropdownOption[] = [
@@ -246,6 +259,23 @@ const HREmployeeDetails: React.FC = () => {
     };
 
     loadLocationData();
+  }, []);
+
+  // Load all employees for department count
+  useEffect(() => {
+    const loadAllEmployees = async () => {
+      try {
+        const data = await apiRequest('/api/excel/employees/?page_size=1000') as { results?: EmployeeProfileData[] };
+        const employees = Array.isArray(data) ? data : (data?.results || []);
+        setAllEmployees(employees);
+        logger.info('✅ Loaded all employees for department count:', employees.length);
+      } catch (error) {
+        logger.error('Error loading all employees:', error);
+        // Continue without employee counts if fetch fails
+      }
+    };
+
+    loadAllEmployees();
   }, []);
 
   // Ensure saved country is in options when employee data loads
