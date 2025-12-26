@@ -132,6 +132,9 @@ export const logout = async () => {
   } finally {
     // Clear all auth data including session_key
     localStorage.clear();
+    // Clear PIN verification flags from sessionStorage
+    sessionStorage.removeItem('pin_verified');
+    sessionStorage.removeItem('awaiting_pin');
     window.location.href = '/login';
   }
 };

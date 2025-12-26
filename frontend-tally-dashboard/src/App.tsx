@@ -80,6 +80,15 @@ function PrivateRoute({ children }: { children: JSX.Element }) {
     return <Navigate to="/login" replace />;
   }
 
+  // Check if PIN verification is required
+  const pinVerified = sessionStorage.getItem('pin_verified');
+  const user = localStorage.getItem('user');
+  
+  // If user exists but PIN not verified, redirect to login (which will show PIN screen)
+  if (user && !pinVerified) {
+    return <Navigate to="/login" replace />;
+  }
+
   return (
     <>
       {children}
@@ -701,6 +710,8 @@ function AppContent({ dark, setDark }: { dark: boolean; setDark: (v: boolean) =>
                         <Route path="/hr-management/settings" element={<HRSettings />} />
                         {/* Super Admin Route */}
                         <Route path="/super-admin" element={<SuperAdminDashboard />} />
+                        {/* Redirect root to hr-management */}
+                        <Route path="/" element={<Navigate to="/hr-management" replace />} />
                       </Routes>
                     </div>
                   </main>

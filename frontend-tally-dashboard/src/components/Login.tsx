@@ -53,6 +53,18 @@ const Login: React.FC = () => {
       const savedTenant = localStorage.getItem('tenant');
       const accessToken = localStorage.getItem('access');
       
+      // Check session flags first
+      const pinVerified = sessionStorage.getItem('pin_verified');
+      const awaitingPin = sessionStorage.getItem('awaiting_pin');
+      
+      console.log('🔍 Session check:', { 
+        hasUser: !!savedUser, 
+        hasTenant: !!savedTenant, 
+        hasToken: !!accessToken,
+        pinVerified: !!pinVerified,
+        awaitingPin: !!awaitingPin 
+      });
+      
       if (savedUser && savedTenant && accessToken) {
         const user = JSON.parse(savedUser);
         logger.info('Found existing session for:', user.email);
@@ -62,21 +74,41 @@ const Login: React.FC = () => {
           const pinCheck = await checkPINRequired(user.email);
           
           if (pinCheck.pin_required) {
-            logger.info('Existing session - showing PIN entry');
-            setEmail(user.email);
-            setExistingSession(true);
-            setShowPINEntry(true);
-            setCheckingSession(false);
+            // Show PIN entry if:
+            // 1. PIN not verified yet, OR
+            // 2. We're currently awaiting PIN (refresh on PIN screen)
+            if (!pinVerified || awaitingPin) {
+              logger.info('Existing session - showing PIN entry (verified:', pinVerified, 'awaiting:', awaitingPin, ')');
+              setEmail(user.email);
+              setExistingSession(true);
+              setShowPINEntry(true);
+              // Set flag to preserve PIN screen on refresh
+              sessionStorage.setItem('awaiting_pin', 'true');
+              setCheckingSession(false);
+              return;
+            }
+            // PIN is verified - proceed to dashboard
+            logger.info('PIN already verified in this session, proceeding to dashboard');
+            const from = (location.state as any)?.from?.pathname;
+            const destination = (from && from !== '/' && from !== '/login') ? from : '/hr-management';
+            navigate(destination, { replace: true });
+            return;
+          } else {
+            // No PIN required - proceed to dashboard
+            logger.info('No PIN required, proceeding to dashboard');
+            const from = (location.state as any)?.from?.pathname;
+            const destination = (from && from !== '/' && from !== '/login') ? from : '/hr-management';
+            navigate(destination, { replace: true });
             return;
           }
         } catch (err) {
           logger.error('PIN check failed for existing session:', err);
+          // On error, proceed to dashboard (graceful degradation)
+          const from = (location.state as any)?.from?.pathname;
+          const destination = (from && from !== '/' && from !== '/login') ? from : '/hr-management';
+          navigate(destination, { replace: true });
+          return;
         }
-        
-        // No PIN required - go directly to dashboard
-        const from = (location.state as any)?.from?.pathname || '/';
-        navigate(from, { replace: true });
-        return;
       }
     } catch (error) {
       logger.info('No existing session found');
@@ -123,7 +155,20 @@ const Login: React.FC = () => {
   };
 
   const handlePINSuccess = () => {
-    if (tempLoginData) {
+    // Mark PIN as verified in this browser session
+    sessionStorage.setItem('pin_verified', 'true');
+    // Clear the awaiting_pin flag
+    sessionStorage.removeItem('awaiting_pin');
+    
+    if (existingSession) {
+      // For existing session, navigate to dashboard
+      const from = (location.state as any)?.from?.pathname;
+      // Default to /hr-management if no specific path
+      const destination = (from && from !== '/' && from !== '/login') ? from : '/hr-management';
+      // Force a full page reload to ensure all components initialize properly
+      window.location.href = destination;
+    } else if (tempLoginData) {
+      // For new login, complete the login process
       completeLogin(tempLoginData);
       setShowPINEntry(false);
       setTempLoginData(null);
@@ -135,6 +180,9 @@ const Login: React.FC = () => {
     setTempLoginData(null);
     setEmail('');
     setPassword('');
+    setExistingSession(false);
+    // Clear the awaiting_pin flag when going back
+    sessionStorage.removeItem('awaiting_pin');
   };
 
   const handleSubmit = async (e: React.FormEvent) => {
