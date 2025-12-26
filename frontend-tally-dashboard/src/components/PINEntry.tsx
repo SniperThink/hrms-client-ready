@@ -9,9 +9,10 @@ interface PINEntryProps {
   onBack?: () => void;
   userName?: string;
   companyName?: string;
+  existingSession?: boolean;
 }
 
-const PINEntry: React.FC<PINEntryProps> = ({ email, onSuccess, onBack, userName, companyName }) => {
+const PINEntry: React.FC<PINEntryProps> = ({ email, onSuccess, onBack, userName, companyName, existingSession = false }) => {
   const [pin, setPin] = useState(['', '', '', '']);
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);

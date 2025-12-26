@@ -138,13 +138,23 @@ export const logout = async () => {
 
 // Check if PIN is required for user
 export async function checkPINRequired(email: string): Promise<{ pin_required: boolean }> {
-  const res = await fetch(`${API_BASE}/pin/check-required/`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ email }),
-  });
-  if (!res.ok) throw new Error("Failed to check PIN requirement");
-  return res.json();
+  try {
+    const res = await fetch(`${API_BASE}/pin/check-required/`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ email }),
+    });
+    if (!res.ok) {
+      // PIN feature not configured or backend not available
+      console.log('PIN check failed, assuming PIN not required');
+      return { pin_required: false };
+    }
+    return res.json();
+  } catch (error) {
+    // Network error or endpoint not available
+    console.log('PIN check failed, assuming PIN not required');
+    return { pin_required: false };
+  }
 }
 
 // Health check

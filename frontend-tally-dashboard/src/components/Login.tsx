@@ -27,6 +27,8 @@ const Login: React.FC = () => {
   const [recoveryConfirmationLoading, setRecoveryConfirmationLoading] = useState(false);
   const [showPINEntry, setShowPINEntry] = useState(false);
   const [tempLoginData, setTempLoginData] = useState<any>(null);
+  const [checkingSession, setCheckingSession] = useState(true);
+  const [existingSession, setExistingSession] = useState(false);
 
   useEffect(() => {
     // Check for success message from navigation state
@@ -39,6 +41,49 @@ const Login: React.FC = () => {
       navigate(location.pathname, { replace: true });
     }
   }, [location, navigate]);
+
+  useEffect(() => {
+    // Check for existing session on mount
+    checkExistingSession();
+  }, []);
+
+  const checkExistingSession = async () => {
+    try {
+      const savedUser = localStorage.getItem('user');
+      const savedTenant = localStorage.getItem('tenant');
+      const accessToken = localStorage.getItem('access');
+      
+      if (savedUser && savedTenant && accessToken) {
+        const user = JSON.parse(savedUser);
+        logger.info('Found existing session for:', user.email);
+        
+        // Check if PIN is required
+        try {
+          const pinCheck = await checkPINRequired(user.email);
+          
+          if (pinCheck.pin_required) {
+            logger.info('Existing session - showing PIN entry');
+            setEmail(user.email);
+            setExistingSession(true);
+            setShowPINEntry(true);
+            setCheckingSession(false);
+            return;
+          }
+        } catch (err) {
+          logger.error('PIN check failed for existing session:', err);
+        }
+        
+        // No PIN required - go directly to dashboard
+        const from = (location.state as any)?.from?.pathname || '/';
+        navigate(from, { replace: true });
+        return;
+      }
+    } catch (error) {
+      logger.info('No existing session found');
+    } finally {
+      setCheckingSession(false);
+    }
+  };
 
   const completeLogin = (response: any) => {
     localStorage.setItem('access', response.access);
@@ -191,14 +236,43 @@ const Login: React.FC = () => {
     }
   };
 
+  // Show loading screen while checking session
+  if (checkingSession) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-gray-50">
+        <div className="text-center">
+          <div className="inline-block animate-spin rounded-full h-12 w-12 border-b-2 border-teal-600 mb-4"></div>
+          <p className="text-gray-600">Loading...</p>
+        </div>
+      </div>
+    );
+  }
+
   // Show PIN entry screen if required
   if (showPINEntry) {
-    // Extract user name and company name from temp login data
-    const userName = tempLoginData?.user?.name || 
-                     `${tempLoginData?.user?.first_name || ''} ${tempLoginData?.user?.last_name || ''}`.trim() || 
-                     tempLoginData?.user?.email?.split('@')[0] || 
-                     'User';
-    const companyName = tempLoginData?.tenant?.name || '';
+    // For existing session, get user data from localStorage
+    let userName = 'User';
+    let companyName = '';
+    
+    if (existingSession) {
+      const savedUser = localStorage.getItem('user');
+      const savedTenant = localStorage.getItem('tenant');
+      if (savedUser) {
+        const user = JSON.parse(savedUser);
+        userName = user.name || `${user.first_name || ''} ${user.last_name || ''}`.trim() || user.email?.split('@')[0] || 'User';
+      }
+      if (savedTenant) {
+        const tenant = JSON.parse(savedTenant);
+        companyName = tenant.name || '';
+      }
+    } else {
+      // New login - use temp data
+      userName = tempLoginData?.user?.name || 
+                 `${tempLoginData?.user?.first_name || ''} ${tempLoginData?.user?.last_name || ''}`.trim() || 
+                 tempLoginData?.user?.email?.split('@')[0] || 
+                 'User';
+      companyName = tempLoginData?.tenant?.name || '';
+    }
     
     return (
       <PINEntry
@@ -207,6 +281,7 @@ const Login: React.FC = () => {
         onBack={handlePINBack}
         userName={userName}
         companyName={companyName}
+        existingSession={existingSession}
       />
     );
   }

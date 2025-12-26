@@ -1,5 +1,5 @@
 // Login Screen
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   View,
   Text,
@@ -17,6 +17,7 @@ import { useRouter } from 'expo-router';
 import { useAppDispatch } from '@/store/hooks';
 import { setUser, setTenant } from '@/store/slices/authSlice';
 import { authService, LoginCredentials } from '@/services/authService';
+import { storage } from '@/utils/storage';
 import Colors from '@/constants/Colors';
 import { useColorScheme } from '@/components/useColorScheme';
 import FontAwesome from '@expo/vector-icons/FontAwesome';
@@ -34,6 +35,62 @@ export default function LoginScreen() {
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
   const [loading, setLoading] = useState(false);
+  const [checkingSession, setCheckingSession] = useState(true);
+
+  // Check for existing session on mount
+  useEffect(() => {
+    checkExistingSession();
+  }, []);
+
+  const checkExistingSession = async () => {
+    try {
+      const savedUser = await storage.getUser();
+      const savedTenant = await storage.getTenant();
+      const accessToken = await storage.getAccessToken();
+      
+      if (savedUser && savedTenant && accessToken) {
+        console.log('Found existing session for:', savedUser.email);
+        
+        // Check if PIN is required
+        try {
+          const pinCheck = await authService.checkPINRequired(savedUser.email);
+          
+          if (pinCheck.pin_required) {
+            console.log('Existing session - navigating to PIN entry');
+            // Navigate directly to PIN entry
+            const userName = savedUser.name || 
+                            `${savedUser.first_name || ''} ${savedUser.last_name || ''}`.trim() || 
+                            savedUser.email?.split('@')[0] || 
+                            'User';
+            const companyName = savedTenant.name || '';
+            
+            router.replace({
+              pathname: '/(auth)/pin-entry',
+              params: {
+                email: savedUser.email,
+                userName,
+                companyName,
+                existingSession: 'true',
+              },
+            });
+            return;
+          }
+        } catch (err) {
+          console.log('PIN check failed for existing session:', err);
+        }
+        
+        // No PIN required - go directly to dashboard
+        dispatch(setUser(savedUser));
+        dispatch(setTenant(savedTenant));
+        router.replace('/(drawer)');
+        return;
+      }
+    } catch (error) {
+      console.log('No existing session found');
+    } finally {
+      setCheckingSession(false);
+    }
+  };
 
   const handleLogin = async () => {
     if (!email || !password) {
@@ -48,13 +105,48 @@ export default function LoginScreen() {
         password,
       };
 
-      const response = await authService.login(credentials);
+      console.log('Attempting login for:', email);
+      
+      // Retry logic for first-time connection issues
+      let response;
+      let retries = 0;
+      const maxRetries = 2;
+      
+      while (retries < maxRetries) {
+        try {
+          response = await authService.login(credentials);
+          console.log('Login successful, got response');
+          break;
+        } catch (loginError: any) {
+          retries++;
+          console.log(`Login attempt ${retries} failed:`, loginError.message);
+          console.log('Error details:', JSON.stringify(loginError, null, 2));
+          
+          if (retries >= maxRetries) {
+            throw loginError;
+          }
+          
+          // Wait a bit before retrying
+          await new Promise(resolve => setTimeout(resolve, 500));
+          console.log('Retrying login...');
+        }
+      }
+      
+      if (!response) {
+        throw new Error('Login failed after retries');
+      }
+
+      // Small delay to ensure login is fully processed
+      await new Promise(resolve => setTimeout(resolve, 100));
 
       // Check if PIN is required
       try {
+        console.log('Checking PIN requirement for:', email);
         const pinCheck = await authService.checkPINRequired(email);
+        console.log('PIN check result:', pinCheck);
         
         if (pinCheck.pin_required) {
+          console.log('PIN required - navigating to PIN entry screen');
           // Navigate to PIN entry screen with temp data
           const userName = response.user?.name || 
                           `${response.user?.first_name || ''} ${response.user?.last_name || ''}`.trim() || 
@@ -73,10 +165,14 @@ export default function LoginScreen() {
           });
           setLoading(false);
           return;
+        } else {
+          console.log('PIN not required - proceeding to dashboard');
         }
       } catch (err) {
         console.error('Error checking PIN requirement:', err);
         // Continue with normal login if PIN check fails
+        // This allows login to work even if PIN feature is not available on backend
+        console.warn('PIN check failed, proceeding with normal login');
       }
 
       // No PIN required - complete login
@@ -108,6 +204,18 @@ export default function LoginScreen() {
       setLoading(false);
     }
   };
+
+  // Show loading screen while checking for existing session
+  if (checkingSession) {
+    return (
+      <View style={[styles.container, { backgroundColor: colors.background }]}>
+        <View style={styles.loadingContainer}>
+          <ActivityIndicator size="large" color="#176d67" />
+          <Text style={[styles.loadingText, { color: colors.text }]}>Loading...</Text>
+        </View>
+      </View>
+    );
+  }
 
   return (
     <KeyboardAvoidingView

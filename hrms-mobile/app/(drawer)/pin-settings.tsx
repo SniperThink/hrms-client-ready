@@ -176,10 +176,13 @@ export default function PINSettingsScreen() {
                   style={[styles.pinInput, { borderColor: colors.border, color: colors.text, backgroundColor: colors.card }]}
                   value={digit}
                   onChangeText={(value) => handlePinChange(index, value, false)}
-                  keyboardType="number-pad"
+                  keyboardType="numeric"
+                  returnKeyType="done"
                   maxLength={1}
                   secureTextEntry
                   selectTextOnFocus
+                  autoComplete="off"
+                  textContentType="oneTimeCode"
                 />
               ))}
             </View>
@@ -194,10 +197,13 @@ export default function PINSettingsScreen() {
                   style={[styles.pinInput, { borderColor: colors.border, color: colors.text, backgroundColor: colors.card }]}
                   value={digit}
                   onChangeText={(value) => handlePinChange(index, value, true)}
-                  keyboardType="number-pad"
+                  keyboardType="numeric"
+                  returnKeyType="done"
                   maxLength={1}
                   secureTextEntry
                   selectTextOnFocus
+                  autoComplete="off"
+                  textContentType="oneTimeCode"
                 />
               ))}
             </View>

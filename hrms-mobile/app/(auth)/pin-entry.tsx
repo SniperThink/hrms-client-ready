@@ -11,11 +11,13 @@ import {
   KeyboardAvoidingView,
   Platform,
   ScrollView,
+  StatusBar,
 } from 'react-native';
 import { useRouter, useLocalSearchParams } from 'expo-router';
 import { useAppDispatch } from '@/store/hooks';
 import { setUser, setTenant } from '@/store/slices/authSlice';
 import { authService } from '@/services/authService';
+import { storage } from '@/utils/storage';
 import Colors from '@/constants/Colors';
 import { useColorScheme } from '@/components/useColorScheme';
 import FontAwesome from '@expo/vector-icons/FontAwesome';
@@ -33,6 +35,7 @@ export default function PINEntryScreen() {
   const userName = params.userName as string;
   const companyName = params.companyName as string;
   const tempLoginData = params.tempLoginData ? JSON.parse(params.tempLoginData as string) : null;
+  const existingSession = params.existingSession === 'true';
 
   const [pin, setPin] = useState(['', '', '', '']);
   const [loading, setLoading] = useState(false);
@@ -98,12 +101,20 @@ export default function PINEntryScreen() {
       const response = await authService.verifyPIN(email, fullPin);
 
       if (response.success) {
-        // Complete login with temp data
-        if (tempLoginData) {
+        // For existing session, user and tenant are already in storage
+        if (existingSession) {
+          const savedUser = await storage.getUser();
+          const savedTenant = await storage.getTenant();
+          if (savedUser && savedTenant) {
+            dispatch(setUser(savedUser));
+            dispatch(setTenant(savedTenant));
+          }
+        } else if (tempLoginData) {
+          // New login - use temp data
           dispatch(setUser(tempLoginData.user));
           dispatch(setTenant(tempLoginData.tenant));
-          router.replace('/(drawer)');
         }
+        router.replace('/(drawer)');
       }
     } catch (err: any) {
       const errorMessage = err.message || 'Invalid PIN. Please try again.';
@@ -121,33 +132,70 @@ export default function PINEntryScreen() {
     router.back();
   };
 
+  const handleNumberPress = (num: string) => {
+    if (loading) return;
+    
+    // Find first empty slot
+    const emptyIndex = pin.findIndex(d => d === '');
+    if (emptyIndex !== -1) {
+      const newPin = [...pin];
+      newPin[emptyIndex] = num;
+      setPin(newPin);
+      setError('');
+      
+      // Auto-submit when all 4 digits are entered
+      if (emptyIndex === 3) {
+        const fullPin = newPin.join('');
+        setTimeout(() => handleSubmit(fullPin), 100);
+      }
+    }
+  };
+
+  const handleBackspace = () => {
+    if (loading) return;
+    
+    // Find last filled slot
+    const lastFilledIndex = pin.findIndex(d => d === '') - 1;
+    const indexToClear = lastFilledIndex >= 0 ? lastFilledIndex : pin.length - 1;
+    
+    if (indexToClear >= 0 && pin[indexToClear] !== '') {
+      const newPin = [...pin];
+      newPin[indexToClear] = '';
+      setPin(newPin);
+      setError('');
+    }
+  };
+
   return (
-    <KeyboardAvoidingView
-      style={styles.container}
-      behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
-    >
-      <ScrollView contentContainerStyle={styles.scrollContent}>
-        <View style={[styles.content, { backgroundColor: colors.background }]}>
-          {/* Logo and Title */}
-          <View style={styles.header}>
-            <View style={styles.iconContainer}>
-              <FontAwesome name="lock" size={40} color="#176d67" />
+    <View style={styles.container}>
+      <StatusBar barStyle="light-content" backgroundColor="#176d67" />
+      
+      {/* Teal Header */}
+      <View style={styles.tealHeader}>
+        <SniperThinkLogo size={50} color="#fff" marginBottom={0} />
+        <Text style={styles.headerTitle}>SniperThink HRMS</Text>
+      </View>
+
+      <View style={[styles.content, { backgroundColor: colors.background }]}>
+            {/* User Info */}
+            <View style={styles.userInfo}>
+              <View style={styles.avatarContainer}>
+                <FontAwesome name="user-circle" size={50} color="#176d67" />
+              </View>
+              {userName && (
+                <Text style={[styles.welcomeText, { color: colors.text }]}>
+                  Welcome back, {userName}
+                </Text>
+              )}
+              {companyName && (
+                <Text style={[styles.companyText, { color: colors.textSecondary }]}>
+                  {companyName}
+                </Text>
+              )}
+              <Text style={[styles.subtitle, { color: colors.textSecondary }]}>
+                Enter your 4-digit PIN
+              </Text>
             </View>
-            <Text style={[styles.title, { color: '#176d67' }]}>Enter PIN</Text>
-            {userName && (
-              <Text style={[styles.welcomeText, { color: colors.text }]}>
-                Welcome back, {userName}
-              </Text>
-            )}
-            {companyName && (
-              <Text style={[styles.companyText, { color: colors.textSecondary }]}>
-                {companyName}
-              </Text>
-            )}
-            <Text style={[styles.subtitle, { color: colors.textSecondary }]}>
-              Enter your 4-digit PIN to continue
-            </Text>
-          </View>
 
           {/* PIN Input */}
           <View style={styles.pinContainer}>
@@ -166,11 +214,15 @@ export default function PINEntryScreen() {
                 value={digit}
                 onChangeText={(value) => handlePinChange(index, value)}
                 onKeyPress={({ nativeEvent: { key } }) => handleKeyPress(index, key)}
-                keyboardType="number-pad"
+                keyboardType="numeric"
+                returnKeyType="done"
                 maxLength={1}
                 secureTextEntry
                 selectTextOnFocus
-                editable={!loading}
+                editable={false}
+                showSoftInputOnFocus={false}
+                autoComplete="off"
+                textContentType="oneTimeCode"
               />
             ))}
           </View>
@@ -183,46 +235,85 @@ export default function PINEntryScreen() {
             </View>
           ) : null}
 
-          {/* Submit Button */}
-          <TouchableOpacity
-            style={[
-              styles.submitButton,
-              { backgroundColor: '#176d67' },
-              (loading || pin.some(d => !d)) && styles.submitButtonDisabled,
-            ]}
-            onPress={() => handleSubmit()}
-            disabled={loading || pin.some(d => !d)}
-          >
-            {loading ? (
-              <ActivityIndicator color="#fff" />
-            ) : (
-              <Text style={styles.submitButtonText}>Verify PIN</Text>
-            )}
-          </TouchableOpacity>
+          {/* Loading Indicator */}
+          {loading && (
+            <View style={styles.loadingContainer}>
+              <ActivityIndicator size="large" color="#176d67" />
+              <Text style={[styles.loadingText, { color: colors.textSecondary }]}>Verifying...</Text>
+            </View>
+          )}
 
-          {/* Back Button */}
+          {/* Custom Numeric Keypad */}
+          {!loading && (
+            <View style={styles.keypad}>
+              <View style={styles.keypadRow}>
+                {['1', '2', '3'].map((num) => (
+                  <TouchableOpacity
+                    key={num}
+                    style={styles.keypadButton}
+                    onPress={() => handleNumberPress(num)}
+                    activeOpacity={0.7}
+                  >
+                    <Text style={styles.keypadButtonText}>{num}</Text>
+                  </TouchableOpacity>
+                ))}
+              </View>
+              <View style={styles.keypadRow}>
+                {['4', '5', '6'].map((num) => (
+                  <TouchableOpacity
+                    key={num}
+                    style={styles.keypadButton}
+                    onPress={() => handleNumberPress(num)}
+                    activeOpacity={0.7}
+                  >
+                    <Text style={styles.keypadButtonText}>{num}</Text>
+                  </TouchableOpacity>
+                ))}
+              </View>
+              <View style={styles.keypadRow}>
+                {['7', '8', '9'].map((num) => (
+                  <TouchableOpacity
+                    key={num}
+                    style={styles.keypadButton}
+                    onPress={() => handleNumberPress(num)}
+                    activeOpacity={0.7}
+                  >
+                    <Text style={styles.keypadButtonText}>{num}</Text>
+                  </TouchableOpacity>
+                ))}
+              </View>
+              <View style={styles.keypadRow}>
+                <View style={styles.keypadButtonEmpty} />
+                <TouchableOpacity
+                  style={styles.keypadButton}
+                  onPress={() => handleNumberPress('0')}
+                  activeOpacity={0.7}
+                >
+                  <Text style={styles.keypadButtonText}>0</Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={styles.keypadButton}
+                  onPress={handleBackspace}
+                  activeOpacity={0.7}
+                >
+                  <FontAwesome name="arrow-left" size={24} color="#374151" />
+                </TouchableOpacity>
+              </View>
+            </View>
+          )}
+
+          {/* Not you? Login here */}
           <TouchableOpacity
-            style={[styles.backButton, { borderColor: colors.border }]}
+            style={styles.notYouButton}
             onPress={handleBack}
             disabled={loading}
           >
-            <Text style={[styles.backButtonText, { color: '#176d67' }]}>
-              Back to Login
+            <Text style={styles.notYouText}>
+              Not you? <Text style={styles.loginLink}>Login here</Text>
             </Text>
           </TouchableOpacity>
-
-          {/* Help Text */}
-          <View style={styles.helpContainer}>
-            <Text style={[styles.helpText, { color: colors.textSecondary }]}>
-              Forgot your PIN?
-            </Text>
-            <Text style={[styles.helpText, { color: colors.textSecondary }]}>
-              Contact your administrator for assistance.
-            </Text>
-          </View>
-        </View>
-      </ScrollView>
-    </KeyboardAvoidingView>
+      </View>
+    </View>
   );
 }
 
@@ -230,59 +321,64 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
   },
-  scrollContent: {
-    flexGrow: 1,
+  tealHeader: {
+    backgroundColor: '#176d67',
+    paddingTop: Platform.OS === 'ios' ? 60 : 40,
+    paddingBottom: 20,
+    paddingHorizontal: 20,
+    alignItems: 'center',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.1,
+    shadowRadius: 4,
+    elevation: 4,
+  },
+  headerTitle: {
+    color: '#fff',
+    fontSize: 20,
+    fontWeight: '600',
+    marginTop: 8,
   },
   content: {
     flex: 1,
-    padding: 24,
-    justifyContent: 'center',
+    padding: 20,
+    justifyContent: 'space-between',
   },
-  header: {
+  userInfo: {
     alignItems: 'center',
-    marginBottom: 40,
+    marginTop: 20,
+    marginBottom: 20,
   },
-  iconContainer: {
-    width: 80,
-    height: 80,
-    borderRadius: 40,
-    backgroundColor: '#e0f2f1',
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginBottom: 24,
-  },
-  title: {
-    fontSize: 32,
-    fontWeight: '600',
-    marginBottom: 8,
+  avatarContainer: {
+    marginBottom: 10,
   },
   welcomeText: {
-    fontSize: 18,
+    fontSize: 16,
     fontWeight: '500',
-    marginTop: 8,
-    marginBottom: 4,
+    marginTop: 4,
+    marginBottom: 2,
   },
   companyText: {
-    fontSize: 14,
-    marginBottom: 8,
+    fontSize: 13,
+    marginBottom: 4,
   },
   subtitle: {
-    fontSize: 16,
+    fontSize: 14,
     textAlign: 'center',
-    marginTop: 8,
+    marginTop: 4,
   },
   pinContainer: {
     flexDirection: 'row',
     justifyContent: 'center',
-    gap: 16,
-    marginBottom: 24,
+    gap: 12,
+    marginBottom: 16,
   },
   pinInput: {
-    width: 60,
-    height: 60,
+    width: 50,
+    height: 50,
     borderWidth: 2,
-    borderRadius: 12,
-    fontSize: 24,
+    borderRadius: 10,
+    fontSize: 20,
     fontWeight: 'bold',
     textAlign: 'center',
   },
@@ -293,44 +389,67 @@ const styles = StyleSheet.create({
     backgroundColor: '#fee2e2',
     padding: 12,
     borderRadius: 8,
-    marginBottom: 16,
+    marginBottom: 24,
     gap: 8,
   },
   errorText: {
     color: '#ef4444',
     fontSize: 14,
   },
-  submitButton: {
-    padding: 16,
-    borderRadius: 12,
+  loadingContainer: {
     alignItems: 'center',
+    marginTop: 20,
+    marginBottom: 20,
+  },
+  loadingText: {
+    marginTop: 12,
+    fontSize: 14,
+  },
+  notYouButton: {
+    alignItems: 'center',
+    marginTop: 32,
+    padding: 12,
+  },
+  notYouText: {
+    fontSize: 14,
+    color: '#6b7280',
+  },
+  loginLink: {
+    color: '#176d67',
+    fontWeight: '600',
+    textDecorationLine: 'underline',
+  },
+  keypad: {
+    marginBottom: 10,
+    paddingHorizontal: 30,
+  },
+  keypadRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-evenly',
     marginBottom: 12,
   },
-  submitButtonDisabled: {
-    opacity: 0.5,
-  },
-  submitButtonText: {
-    color: '#fff',
-    fontSize: 16,
-    fontWeight: '600',
-  },
-  backButton: {
-    padding: 16,
-    borderRadius: 12,
-    alignItems: 'center',
+  keypadButton: {
+    width: 65,
+    height: 65,
+    borderRadius: 32.5,
+    backgroundColor: '#ffffff',
     borderWidth: 1,
-    marginBottom: 24,
-  },
-  backButtonText: {
-    fontSize: 16,
-    fontWeight: '600',
-  },
-  helpContainer: {
+    borderColor: '#e5e7eb',
     alignItems: 'center',
-    gap: 4,
+    justifyContent: 'center',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.1,
+    shadowRadius: 3,
+    elevation: 3,
   },
-  helpText: {
-    fontSize: 14,
-    textAlign: 'center',
+  keypadButtonEmpty: {
+    width: 65,
+    height: 65,
+  },
+  keypadButtonText: {
+    fontSize: 28,
+    fontWeight: '500',
+    color: '#1f2937',
   },
 });
