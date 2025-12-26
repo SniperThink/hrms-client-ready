@@ -11,6 +11,9 @@ from ..views import (
 from ..views.auth import (
     RequestPasswordResetView, VerifyOTPView, ResetPasswordView, ChangePasswordView
 )
+from ..views.pin_auth import (
+    SetupPINView, VerifyPINView, DisablePINView, PINStatusView, CheckPINRequiredView
+)
 
 urlpatterns = [
     path('public/signup/', TenantSignupView.as_view(), name='tenant-signup'),
@@ -41,4 +44,11 @@ urlpatterns = [
     path('password-reset/verify-otp/', VerifyOTPView.as_view(), name='verify-password-reset-otp'),
     path('password-reset/reset/', ResetPasswordView.as_view(), name='reset-password'),
     path('password-reset/change/', ChangePasswordView.as_view(), name='change-password'),
+    
+    # PIN authentication management
+    path('pin/setup/', SetupPINView.as_view(), name='setup-pin'),
+    path('pin/verify/', VerifyPINView.as_view(), name='verify-pin'),
+    path('pin/disable/', DisablePINView.as_view(), name='disable-pin'),
+    path('pin/status/', PINStatusView.as_view(), name='pin-status'),
+    path('pin/check-required/', CheckPINRequiredView.as_view(), name='check-pin-required'),
 ]

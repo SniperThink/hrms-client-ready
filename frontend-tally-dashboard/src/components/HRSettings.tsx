@@ -4,6 +4,7 @@ import { apiGet, apiPatch, apiPost } from '../services/api';
 import ChangePasswordModal from './ChangePasswordModal';
 import DeleteAccountModal from './DeleteAccountModal';
 import HRHolidayManagement from './HRHolidayManagement';
+import PINSettings from './PINSettings';
 import { logger } from '../utils/logger';
 
 const API_ENDPOINTS = {
@@ -50,6 +51,7 @@ const HRSettings: React.FC = () => {
   const [success, setSuccess] = useState<string | null>(null);
   const [showChangePasswordModal, setShowChangePasswordModal] = useState(false);
   const [showDeleteAccountModal, setShowDeleteAccountModal] = useState(false);
+  const [showPINSettings, setShowPINSettings] = useState(false);
   const [activeTab, setActiveTab] = useState<'profile' | 'holidays' | 'salary'>('profile');
   const [averageDaysPerMonth, setAverageDaysPerMonth] = useState<number>(30.4);
   const [breakTime, setBreakTime] = useState<number>(0.5);
@@ -302,6 +304,12 @@ const HRSettings: React.FC = () => {
                 className="bg-teal-600 text-white px-6 py-2 rounded hover:bg-teal-700 transition-colors"
               >
                 Change Password
+              </button>
+              <button
+                onClick={() => setShowPINSettings(true)}
+                className="bg-indigo-600 text-white px-6 py-2 rounded hover:bg-indigo-700 transition-colors"
+              >
+                PIN Authentication Settings
               </button>
               {/* Only show delete button if user is admin (same logic as sidebar) */}
               {isAdmin && (
@@ -621,6 +629,12 @@ const HRSettings: React.FC = () => {
           setTimeout(() => setSuccess(null), 3000);
         }}
         userEmail={email}
+      />
+
+      {/* PIN Settings Modal */}
+      <PINSettings
+        isOpen={showPINSettings}
+        onClose={() => setShowPINSettings(false)}
       />
 
       {/* Delete Account Modal */}

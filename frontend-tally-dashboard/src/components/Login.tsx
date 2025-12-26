@@ -1,10 +1,11 @@
 import React, { useState, useEffect } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
-import { login } from '../services/authService';
+import { login, checkPINRequired } from '../services/authService';
 import { CheckCircle, Eye, EyeOff } from 'lucide-react';
 import { logger } from '../utils/logger';
 import AccountRecoveryWelcomeModal from './AccountRecoveryWelcomeModal';
 import AccountRecoveryConfirmationModal from './AccountRecoveryConfirmationModal';
+import PINEntry from './PINEntry';
 
 const Login: React.FC = () => {
   const navigate = useNavigate();
@@ -24,6 +25,8 @@ const Login: React.FC = () => {
     recoveryDeadline?: string;
   } | null>(null);
   const [recoveryConfirmationLoading, setRecoveryConfirmationLoading] = useState(false);
+  const [showPINEntry, setShowPINEntry] = useState(false);
+  const [tempLoginData, setTempLoginData] = useState<any>(null);
 
   useEffect(() => {
     // Check for success message from navigation state
@@ -36,6 +39,58 @@ const Login: React.FC = () => {
       navigate(location.pathname, { replace: true });
     }
   }, [location, navigate]);
+
+  const completeLogin = (response: any) => {
+    localStorage.setItem('access', response.access);
+    localStorage.setItem('refresh', response.refresh);
+    localStorage.setItem('user', JSON.stringify(response.user));
+    
+    // Store session_key if provided (for SSE force_logout filtering)
+    if (response.session_key) {
+      localStorage.setItem('session_key', response.session_key);
+      logger.info('✅ Session key stored:', response.session_key);
+    }
+    
+    // Store tenant information
+    if (response.tenant) {
+      localStorage.setItem('tenant', JSON.stringify(response.tenant));
+      logger.info(`Welcome to ${response.tenant.name}! Access URL: ${response.tenant.access_url}`);
+    }
+    
+    // Check if account was recovered - show welcome modal
+    if (response.account_recovered) {
+      const userName = response.user?.name || 
+                      `${response.user?.first_name || ''} ${response.user?.last_name || ''}`.trim() || 
+                      response.user?.email || 'there';
+      const tenantName = response.tenant?.name || 'your organization';
+      
+      setRecoveryData({
+        userName,
+        tenantName
+      });
+      setShowRecoveryModal(true);
+      // Don't navigate yet - wait for modal to be closed
+    } else {
+      // Navigate based on user role - superusers go to super admin dashboard
+      const isSuperUser = response.user?.is_superuser || false;
+      navigate(isSuperUser ? '/super-admin' : '/hr-management');
+    }
+  };
+
+  const handlePINSuccess = () => {
+    if (tempLoginData) {
+      completeLogin(tempLoginData);
+      setShowPINEntry(false);
+      setTempLoginData(null);
+    }
+  };
+
+  const handlePINBack = () => {
+    setShowPINEntry(false);
+    setTempLoginData(null);
+    setEmail('');
+    setPassword('');
+  };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -84,42 +139,28 @@ const Login: React.FC = () => {
         return;
       }
       
-      // Normal login flow - store authentication data
+      // Normal login flow - check if PIN is required
       if (response.access && response.refresh) {
-        localStorage.setItem('access', response.access);
-        localStorage.setItem('refresh', response.refresh);
-        localStorage.setItem('user', JSON.stringify(response.user));
-        
-        // Store session_key if provided (for SSE force_logout filtering)
-        if (response.session_key) {
-          localStorage.setItem('session_key', response.session_key);
-          logger.info( '✅ Session key stored:', response.session_key);
-        }
-        
-        // Store tenant information
-        if (response.tenant) {
-          localStorage.setItem('tenant', JSON.stringify(response.tenant));
-          logger.info( `Welcome to ${response.tenant.name}! Access URL: ${response.tenant.access_url}`);
-        }
-        
-        // Check if account was recovered - show welcome modal
-        if (response.account_recovered) {
-          const userName = response.user?.name || 
-                          `${response.user?.first_name || ''} ${response.user?.last_name || ''}`.trim() || 
-                          response.user?.email || 'there';
-          const tenantName = response.tenant?.name || 'your organization';
+        // Check if user has PIN enabled
+        try {
+          const pinCheck = await checkPINRequired(email);
           
-          setRecoveryData({
-            userName,
-            tenantName
-          });
-          setShowRecoveryModal(true);
-          // Don't navigate yet - wait for modal to be closed
-        } else {
-          // Navigate based on user role - superusers go to super admin dashboard
-          const isSuperUser = response.user?.is_superuser || false;
-          navigate(isSuperUser ? '/super-admin' : '/hr-management');
+          if (pinCheck.pin_required) {
+            // Store temp data and show PIN entry
+            setTempLoginData(response);
+            setShowPINEntry(true);
+            setLoading(false);
+            return;
+          }
+        } catch (err) {
+          logger.error('Error checking PIN requirement:', err);
+          // Continue with normal login if PIN check fails
+          // This allows login to work even if PIN feature is not available
+          console.warn('PIN check failed, proceeding with normal login');
         }
+        
+        // No PIN required - proceed with normal login
+        completeLogin(response);
       } else {
         setError('Invalid login response - missing tokens');
       }
@@ -149,6 +190,26 @@ const Login: React.FC = () => {
       setLoading(false);
     }
   };
+
+  // Show PIN entry screen if required
+  if (showPINEntry) {
+    // Extract user name and company name from temp login data
+    const userName = tempLoginData?.user?.name || 
+                     `${tempLoginData?.user?.first_name || ''} ${tempLoginData?.user?.last_name || ''}`.trim() || 
+                     tempLoginData?.user?.email?.split('@')[0] || 
+                     'User';
+    const companyName = tempLoginData?.tenant?.name || '';
+    
+    return (
+      <PINEntry
+        email={email}
+        onSuccess={handlePINSuccess}
+        onBack={handlePINBack}
+        userName={userName}
+        companyName={companyName}
+      />
+    );
+  }
 
   return (
     <div className="flex min-h-screen font-poppins">

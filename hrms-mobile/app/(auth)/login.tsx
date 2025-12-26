@@ -50,7 +50,36 @@ export default function LoginScreen() {
 
       const response = await authService.login(credentials);
 
-      // Update Redux store
+      // Check if PIN is required
+      try {
+        const pinCheck = await authService.checkPINRequired(email);
+        
+        if (pinCheck.pin_required) {
+          // Navigate to PIN entry screen with temp data
+          const userName = response.user?.name || 
+                          `${response.user?.first_name || ''} ${response.user?.last_name || ''}`.trim() || 
+                          response.user?.email?.split('@')[0] || 
+                          'User';
+          const companyName = response.tenant?.name || '';
+          
+          router.push({
+            pathname: '/(auth)/pin-entry',
+            params: {
+              email,
+              userName,
+              companyName,
+              tempLoginData: JSON.stringify(response),
+            },
+          });
+          setLoading(false);
+          return;
+        }
+      } catch (err) {
+        console.error('Error checking PIN requirement:', err);
+        // Continue with normal login if PIN check fails
+      }
+
+      // No PIN required - complete login
       dispatch(setUser(response.user));
       dispatch(setTenant(response.tenant));
 

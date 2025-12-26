@@ -1,5 +1,6 @@
 from django.db import models
 from django.contrib.auth.models import AbstractUser, BaseUserManager, Group, Permission
+from django.contrib.auth.hashers import make_password, check_password
 from django.utils import timezone
 from django.utils.timezone import timedelta
 from django.utils.translation import gettext_lazy as _
@@ -224,3 +225,86 @@ class PasswordResetOTP(models.Model):
     def is_expired(self):
         from django.utils import timezone
         return timezone.now() > self.expires_at
+
+
+class UserPIN(models.Model):
+    """Model to store user PIN for 2-layer authentication"""
+    user = models.OneToOneField(
+        CustomUser,
+        on_delete=models.CASCADE,
+        related_name='pin_auth',
+        help_text="User this PIN belongs to"
+    )
+    pin_hash = models.CharField(
+        max_length=128,
+        help_text="Hashed 4-digit PIN"
+    )
+    is_enabled = models.BooleanField(
+        default=False,
+        help_text="Whether PIN authentication is enabled"
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    failed_attempts = models.IntegerField(
+        default=0,
+        help_text="Number of consecutive failed PIN attempts"
+    )
+    locked_until = models.DateTimeField(
+        null=True,
+        blank=True,
+        help_text="PIN is locked until this time after too many failed attempts"
+    )
+    
+    class Meta:
+        app_label = 'excel_data'
+        db_table = 'user_pins'
+    
+    def set_pin(self, raw_pin):
+        """Hash and set the PIN"""
+        if not raw_pin or len(str(raw_pin)) != 4 or not str(raw_pin).isdigit():
+            raise ValueError("PIN must be exactly 4 digits")
+        self.pin_hash = make_password(str(raw_pin))
+        self.failed_attempts = 0
+        self.locked_until = None
+        self.save()
+    
+    def verify_pin(self, raw_pin):
+        """Verify the PIN and handle failed attempts"""
+        # Check if locked
+        if self.is_locked():
+            return False, "PIN is locked. Please try again later."
+        
+        # Verify PIN
+        if check_password(str(raw_pin), self.pin_hash):
+            # Reset failed attempts on success
+            self.failed_attempts = 0
+            self.locked_until = None
+            self.save()
+            return True, "PIN verified successfully"
+        else:
+            # Increment failed attempts
+            self.failed_attempts += 1
+            
+            # Lock after 5 failed attempts for 15 minutes
+            if self.failed_attempts >= 5:
+                self.locked_until = timezone.now() + timedelta(minutes=15)
+                self.save()
+                return False, "Too many failed attempts. PIN locked for 15 minutes."
+            
+            self.save()
+            remaining = 5 - self.failed_attempts
+            return False, f"Invalid PIN. {remaining} attempt(s) remaining."
+    
+    def is_locked(self):
+        """Check if PIN is currently locked"""
+        if self.locked_until and timezone.now() < self.locked_until:
+            return True
+        elif self.locked_until and timezone.now() >= self.locked_until:
+            # Auto-unlock if lock period has passed
+            self.locked_until = None
+            self.failed_attempts = 0
+            self.save()
+        return False
+    
+    def __str__(self):
+        return f"PIN for {self.user.email} ({'Enabled' if self.is_enabled else 'Disabled'})"

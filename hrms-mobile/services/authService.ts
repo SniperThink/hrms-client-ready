@@ -145,6 +145,31 @@ export const authService = {
   async getUserProfile(): Promise<CustomUser> {
     return await api.get<CustomUser>(API_ENDPOINTS.userProfile);
   },
+
+  // Check if PIN is required for user
+  async checkPINRequired(email: string): Promise<{ pin_required: boolean }> {
+    return await api.post('/pin/check-required/', { email });
+  },
+
+  // Verify PIN
+  async verifyPIN(email: string, pin: string): Promise<{ success: boolean; message: string }> {
+    return await api.post('/pin/verify/', { email, pin });
+  },
+
+  // Get PIN status
+  async getPINStatus(): Promise<{ has_pin: boolean; pin_enabled: boolean; is_locked: boolean; locked_until: string | null }> {
+    return await api.get('/pin/status/');
+  },
+
+  // Setup or change PIN
+  async setupPIN(pin: string, password: string): Promise<{ success: boolean; message: string; pin_enabled: boolean }> {
+    return await api.post('/pin/setup/', { pin, password });
+  },
+
+  // Disable PIN
+  async disablePIN(password: string): Promise<{ success: boolean; message: string; pin_enabled: boolean }> {
+    return await api.post('/pin/disable/', { password });
+  },
 };
 
 export default authService;

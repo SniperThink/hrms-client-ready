@@ -61,6 +61,7 @@ export default function MoreScreen() {
     {
       title: 'Account',
       items: [
+        { icon: 'lock', label: 'PIN Authentication', route: '/pin-settings', roles: [] },
         { icon: 'cog', label: 'Settings', route: '/settings', roles: ['admin', 'hr_manager', 'payroll_master'] },
         { icon: 'question-circle', label: 'Support', route: '/support', roles: ['admin', 'hr_manager', 'payroll_master'] },
         { icon: 'info-circle', label: 'About', route: '/about', roles: [] },

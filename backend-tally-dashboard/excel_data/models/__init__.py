@@ -28,6 +28,7 @@ from .auth import (
     InvitationToken,
     PasswordResetOTP,
     ActiveSession,
+    UserPIN,
 )
 
 # Email Verification Models
@@ -91,6 +92,7 @@ __all__ = [
     'InvitationToken',
     'PasswordResetOTP',
     'ActiveSession',
+    'UserPIN',
     
     # Email Verification Models
     'EmailVerification',
