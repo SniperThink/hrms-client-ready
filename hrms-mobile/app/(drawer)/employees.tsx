@@ -38,10 +38,86 @@ export default function EmployeesScreen() {
   const [selectedEmployee, setSelectedEmployee] = useState<EmployeeProfile | null>(null);
   const [showDetailsModal, setShowDetailsModal] = useState(false);
   const [isEditing, setIsEditing] = useState(false);
+  const [isLoadingMore, setIsLoadingMore] = useState(false);
+  const [lastFetchParams, setLastFetchParams] = useState({ search: '', department: '' });
 
+  // Automatically load all employees on mount and when filters change
   useEffect(() => {
-    loadEmployees(1, true);
+    // Check if we need to reload based on filter changes
+    const paramsChanged = 
+      lastFetchParams.search !== searchQuery || 
+      lastFetchParams.department !== selectedDepartment;
+    
+    // Only reload if filters changed OR no data cached
+    if (paramsChanged || employees.length === 0) {
+      loadAllEmployees();
+      setLastFetchParams({ search: searchQuery, department: selectedDepartment });
+    }
   }, [searchQuery, selectedDepartment]);
+
+  // Automatically load all pages in background
+  const loadAllEmployees = async () => {
+    try {
+      dispatch(setLoading(true));
+      dispatch(clearEmployees());
+      
+      // Load first page
+      const firstPage = await employeeService.getEmployees(1, searchQuery, selectedDepartment);
+      dispatch(setEmployees(firstPage.results));
+      dispatch(setPagination({
+        count: firstPage.count,
+        next: firstPage.next,
+        previous: firstPage.previous,
+      }));
+
+      // Check if we already have all data (cached scenario)
+      const totalCount = firstPage.count;
+      const loadedCount = firstPage.results.length;
+      
+      // If first page has all data, no need to load more
+      if (loadedCount >= totalCount) {
+        dispatch(setLoading(false));
+        setRefreshing(false);
+        return;
+      }
+
+      // Calculate total pages and load remaining pages automatically
+      const pageSize = firstPage.results.length || 20;
+      const totalPages = Math.ceil(totalCount / pageSize);
+      
+      if (totalPages > 1) {
+        setIsLoadingMore(true);
+        // Load all remaining pages in background
+        for (let page = 2; page <= totalPages; page++) {
+          try {
+            const response = await employeeService.getEmployees(page, searchQuery, selectedDepartment);
+            dispatch(addEmployees(response.results));
+            dispatch(setPagination({
+              count: response.count,
+              next: response.next,
+              previous: response.previous,
+            }));
+            
+            // Check if we've loaded all data
+            const currentLoadedCount = employees.length + response.results.length;
+            if (currentLoadedCount >= totalCount) {
+              console.log(`✅ All ${totalCount} employees loaded from cache/API`);
+              break;
+            }
+          } catch (error) {
+            console.error(`Error loading page ${page}:`, error);
+            break;
+          }
+        }
+        setIsLoadingMore(false);
+      }
+    } catch (error: any) {
+      Alert.alert('Error', error.message || 'Failed to load employees');
+    } finally {
+      dispatch(setLoading(false));
+      setRefreshing(false);
+    }
+  };
 
   const loadEmployees = async (page: number = 1, reset: boolean = false) => {
     try {
@@ -69,20 +145,20 @@ export default function EmployeesScreen() {
 
   const onRefresh = () => {
     setRefreshing(true);
-    loadEmployees(1, true);
-  };
-
-  const loadMore = () => {
-    if (pagination.next && !isLoading) {
-      const nextPage = parseInt(pagination.next.split('page=')[1]?.split('&')[0] || '2');
-      loadEmployees(nextPage, false);
-    }
+    loadAllEmployees();
   };
 
   const handleEmployeePress = (employee: EmployeeProfile) => {
     setSelectedEmployee(employee);
     setShowDetailsModal(true);
   };
+
+  // Sort employees alphabetically by first name
+  const sortedEmployees = [...employees].sort((a, b) => {
+    const nameA = (a.first_name || '').toLowerCase();
+    const nameB = (b.first_name || '').toLowerCase();
+    return nameA.localeCompare(nameB);
+  });
 
   const renderEmployeeItem = ({ item }: { item: EmployeeProfile }) => (
     <TouchableOpacity
@@ -131,10 +207,13 @@ export default function EmployeesScreen() {
   );
 
   const renderFooter = () => {
-    if (!isLoading) return null;
+    if (!isLoadingMore) return null;
     return (
       <View style={styles.footer}>
         <ActivityIndicator size="small" color={colors.primary} />
+        <Text style={[styles.loadingText, { color: colors.textSecondary }]}>
+          Loading all employees...
+        </Text>
       </View>
     );
   };
@@ -230,7 +309,7 @@ export default function EmployeesScreen() {
       )}
 
       {/* Employee List */}
-      {employees.length === 0 && !isLoading ? (
+      {sortedEmployees.length === 0 && !isLoading ? (
         <View style={styles.emptyContainer}>
           <FontAwesome name="users" size={48} color={colors.textLight} />
           <Text style={[styles.emptyText, { color: colors.textSecondary }]}>
@@ -245,15 +324,13 @@ export default function EmployeesScreen() {
         </View>
       ) : (
         <FlatList
-          data={employees}
+          data={sortedEmployees}
           renderItem={renderEmployeeItem}
           keyExtractor={(item) => item.id.toString()}
           contentContainerStyle={styles.listContent}
           refreshControl={
             <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.primary} />
           }
-          onEndReached={loadMore}
-          onEndReachedThreshold={0.5}
           ListFooterComponent={renderFooter}
         />
       )}
@@ -622,5 +699,10 @@ const styles = StyleSheet.create({
   detailValue: {
     fontSize: 14,
     fontWeight: '500',
+  },
+  loadingText: {
+    marginTop: 8,
+    fontSize: 13,
+    textAlign: 'center',
   },
 });

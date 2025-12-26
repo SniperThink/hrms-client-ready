@@ -1,4 +1,4 @@
-import { logout, hasKeepSignedIn } from "./authService";
+import { logout } from "./authService";
 
 class InactivityManager {
   private timeoutId: NodeJS.Timeout | null = null;
@@ -37,11 +37,6 @@ class InactivityManager {
   }
 
   private resetTimer() {
-    // Don't track inactivity if "keep signed in" is enabled
-    if (hasKeepSignedIn()) {
-      return;
-    }
-
     // Clear existing timers
     if (this.timeoutId) {
       clearTimeout(this.timeoutId);
@@ -77,9 +72,9 @@ class InactivityManager {
   }
 
   public start() {
-    // Only start if user is authenticated and doesn't have "keep signed in" enabled
+    // Only start if user is authenticated
     const hasToken = localStorage.getItem("access");
-    if (hasToken && !hasKeepSignedIn()) {
+    if (hasToken) {
       this.isActive = true;
       this.resetTimer();
     }

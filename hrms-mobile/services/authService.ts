@@ -7,7 +7,6 @@ import { AuthResponse, CustomUser, Tenant } from '@/types';
 export interface LoginCredentials {
   email: string;
   password: string;
-  keepSignedIn?: boolean;
   confirmRecovery?: boolean;
 }
 
@@ -54,9 +53,6 @@ export const authService = {
       }
       await storage.setUser(response.user);
       await storage.setTenant(response.tenant);
-      if (credentials.keepSignedIn) {
-        await storage.setKeepSignedIn(true);
-      }
 
       return response;
     } catch (error: any) {

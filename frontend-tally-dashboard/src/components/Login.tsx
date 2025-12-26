@@ -15,7 +15,6 @@ const Login: React.FC = () => {
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
   const [successMessage, setSuccessMessage] = useState('');
-  const [keepSignedIn, setKeepSignedIn] = useState(false);
   const [showRecoveryModal, setShowRecoveryModal] = useState(false);
   const [showRecoveryConfirmationModal, setShowRecoveryConfirmationModal] = useState(false);
   const [recoveryData, setRecoveryData] = useState<{ 
@@ -45,7 +44,7 @@ const Login: React.FC = () => {
     setSuccessMessage('');
     
     try {
-      const response = await login(email, password, keepSignedIn);
+      const response = await login(email, password);
       
       // Check if recovery confirmation is required FIRST (before any other checks)
       // This response won't have access/refresh tokens, so we need to handle it before checking for tokens
@@ -221,17 +220,7 @@ const Login: React.FC = () => {
               </div>
             </div>
             
-            <div className="flex items-center justify-between">
-              <div className="flex items-center">
-                <input 
-                  type="checkbox" 
-                  className="w-4 h-4 text-teal-600 border-gray-300 rounded focus:ring-teal-500" 
-                  id="keep-signed-in"
-                  checked={keepSignedIn}
-                  onChange={(e) => setKeepSignedIn(e.target.checked)}
-                />
-                <label htmlFor="keep-signed-in" className="ml-2 text-sm text-gray-500">Keep me signed in</label>
-              </div>
+            <div className="flex items-center justify-end">
               <button 
                 type="button" 
                 className="text-sm text-teal-600 hover:text-teal-900" 
@@ -295,7 +284,7 @@ const Login: React.FC = () => {
           setRecoveryConfirmationLoading(true);
           try {
             // Retry login with confirm_recovery flag
-            const response = await login(email, password, keepSignedIn, true);
+            const response = await login(email, password, true);
             
             // Store authentication data
             if (response.access && response.refresh) {

@@ -65,15 +65,6 @@ export const storage = {
     return tenant ? JSON.parse(tenant) : null;
   },
 
-  async setKeepSignedIn(value: boolean): Promise<void> {
-    await AsyncStorage.setItem(STORAGE_KEYS.KEEP_SIGNED_IN, JSON.stringify(value));
-  },
-
-  async getKeepSignedIn(): Promise<boolean> {
-    const value = await AsyncStorage.getItem(STORAGE_KEYS.KEEP_SIGNED_IN);
-    return value ? JSON.parse(value) : false;
-  },
-
   // Clear all storage
   async clearAll(): Promise<void> {
     await SecureStore.deleteItemAsync(STORAGE_KEYS.ACCESS_TOKEN);
@@ -81,7 +72,6 @@ export const storage = {
     await SecureStore.deleteItemAsync(STORAGE_KEYS.SESSION_KEY);
     await AsyncStorage.removeItem(STORAGE_KEYS.USER);
     await AsyncStorage.removeItem(STORAGE_KEYS.TENANT);
-    await AsyncStorage.removeItem(STORAGE_KEYS.KEEP_SIGNED_IN);
   },
 };
 

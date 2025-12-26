@@ -34,7 +34,6 @@ Create a **React Native mobile application** (or Flutter alternative) that mirro
 ### Authentication Flow
 1. **Login Screen**
    - Email + Password input
-   - "Keep Signed In" checkbox
    - Forgot Password link
    - Multi-tenant login (auto-detects tenant from email domain)
 

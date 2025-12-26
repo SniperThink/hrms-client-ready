@@ -30,7 +30,6 @@ export async function signupCompany(data: {
 export async function login(
   email: string,
   password: string,
-  keepSignedIn: boolean = false,
   confirmRecovery: boolean = false
 ): Promise<AuthResponse> {
   const res = await fetch(`${API_BASE}/public/login/`, {
@@ -46,13 +45,6 @@ export async function login(
     const error = new Error(data.error || "Login failed");
     (error as any).responseData = data;
     throw error;
-  }
-
-  // Store the "keep signed in" preference
-  if (keepSignedIn) {
-    localStorage.setItem("keepSignedIn", "true");
-  } else {
-    localStorage.removeItem("keepSignedIn");
   }
 
   return data;
@@ -143,11 +135,6 @@ export const logout = async () => {
     window.location.href = '/login';
   }
 };
-
-// Check if user has "keep signed in" enabled
-export function hasKeepSignedIn(): boolean {
-  return localStorage.getItem("keepSignedIn") === "true";
-}
 
 // Health check
 export async function healthCheck(): Promise<{

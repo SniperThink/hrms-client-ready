@@ -33,7 +33,6 @@ export default function LoginScreen() {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
-  const [keepSignedIn, setKeepSignedIn] = useState(false);
   const [loading, setLoading] = useState(false);
 
   const handleLogin = async () => {
@@ -47,7 +46,6 @@ export default function LoginScreen() {
       const credentials: LoginCredentials = {
         email,
         password,
-        keepSignedIn,
       };
 
       const response = await authService.login(credentials);
@@ -144,22 +142,8 @@ export default function LoginScreen() {
               </View>
             </View>
 
-            {/* Options Row */}
-            <View style={styles.optionsRow}>
-              <TouchableOpacity
-                style={styles.checkboxContainer}
-                onPress={() => setKeepSignedIn(!keepSignedIn)}
-              >
-                <View style={[styles.checkbox, { borderColor: colors.border, backgroundColor: keepSignedIn ? '#176d67' : 'transparent' }]}>
-                  {keepSignedIn && (
-                    <FontAwesome name="check" size={12} color="white" />
-                  )}
-                </View>
-                <Text style={[styles.checkboxLabel, { color: colors.textSecondary }]}>
-                  Keep me signed in
-                </Text>
-              </TouchableOpacity>
-
+            {/* Forgot Password */}
+            <View style={styles.forgotPasswordContainer}>
               <TouchableOpacity onPress={() => router.push('/(auth)/forgot-password')}>
                 <Text style={[styles.forgotPassword, { color: '#176d67' }]}>
                   Forgot password?
@@ -271,27 +255,9 @@ const styles = StyleSheet.create({
     top: 16,
     padding: 4,
   },
-  optionsRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
+  forgotPasswordContainer: {
+    alignItems: 'flex-end',
     marginBottom: 24,
-  },
-  checkboxContainer: {
-    flexDirection: 'row',
-    alignItems: 'center',
-  },
-  checkbox: {
-    width: 20,
-    height: 20,
-    borderWidth: 2,
-    borderRadius: 4,
-    marginRight: 8,
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  checkboxLabel: {
-    fontSize: 14,
   },
   forgotPassword: {
     fontSize: 14,

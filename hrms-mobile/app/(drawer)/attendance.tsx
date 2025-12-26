@@ -23,6 +23,7 @@ import Colors from '@/constants/Colors';
 import { useColorScheme } from '@/components/useColorScheme';
 import FontAwesome from '@expo/vector-icons/FontAwesome';
 import { format, startOfMonth, endOfMonth, eachDayOfInterval, isSameDay } from 'date-fns';
+import { Calendar } from 'react-native-calendars';
 
 // Employee interface
 interface Employee {
@@ -101,6 +102,31 @@ interface AttendanceRecord {
   late_minutes: number;
 }
 
+// KPI Totals interface
+interface KpiTotals {
+  total_employees?: number;
+  total_present?: number;
+  total_absent?: number;
+  total_ot_hours?: number;
+  total_late_minutes?: number;
+  total_present_days?: number;
+  total_working_days?: number;
+  avg_working_days?: number;
+  avg_present_days?: number;
+  avg_attendance_percentage?: number;
+  absentees_count?: number;
+  presentees_count?: number;
+  unmarked_count?: number;
+}
+
+// API Response interface
+interface AttendanceApiResponse {
+  results: AttendanceRecord[];
+  count?: number;
+  total_count?: number;
+  kpi_totals?: KpiTotals | null;
+}
+
 // Filter type
 type FilterType = 'one_day' | 'custom_month' | 'last_6_months' | 'last_12_months' | 'last_5_years' | 'custom_range';
 
@@ -128,18 +154,13 @@ const TrackAttendanceTab: React.FC<{
   const [showYearModal, setShowYearModal] = useState(false);
   const [showDateModal, setShowDateModal] = useState(false);
   
+  // Progressive loading state
+  const [progressiveLoadingComplete, setProgressiveLoadingComplete] = useState(false);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [totalCount, setTotalCount] = useState(0);
+  
   // KPI totals
-  const [kpiTotals, setKpiTotals] = useState<{
-    total_employees: number;
-    total_ot_hours: number;
-    total_late_minutes: number;
-    total_present_days: number;
-    total_working_days: number;
-    avg_attendance_percentage: number;
-    absentees_count?: number;
-    presentees_count?: number;
-    unmarked_count?: number;
-  } | null>(null);
+  const [kpiTotals, setKpiTotals] = useState<KpiTotals | null>(null);
 
   // Generate years
   const currentYear = new Date().getFullYear();
@@ -155,10 +176,13 @@ const TrackAttendanceTab: React.FC<{
     { value: 'custom_range', label: 'Custom Range' },
   ];
 
-  // Fetch attendance data
+  // PROGRESSIVE LOADING: Fetch attendance data
   const fetchAttendanceData = useCallback(async () => {
     try {
       setLoading(true);
+      setProgressiveLoadingComplete(false);
+      
+      console.log('🚀 PROGRESSIVE LOADING: Starting Track Attendance fetch');
       
       // Build query parameters
       const params = new URLSearchParams();
@@ -180,15 +204,25 @@ const TrackAttendanceTab: React.FC<{
         params.append('time_period', filterType);
       }
       
+      // STEP 1: Load initial batch (500 records)
       params.append('offset', '0');
-      params.append('limit', '0'); // Fetch all records
+      params.append('limit', '500');
+      params.append('initial', 'true');
       
       const url = `${API_ENDPOINTS.dailyAttendance}all_records/?${params.toString()}`;
-      const response = await api.get(url);
+      console.log('📋 Loading initial batch...');
+      const response = await api.get<AttendanceApiResponse>(url);
       
       if (response && response.results) {
-        setAttendanceData(response.results);
+        const firstBatch = response.results;
+        const total = response.count || response.total_count || firstBatch.length;
+        
+        console.log(`✅ Loaded ${firstBatch.length} of ${total} records`);
+        
+        setAttendanceData(firstBatch);
         setKpiTotals(response.kpi_totals || null);
+        setTotalCount(total);
+        setLoading(false); // User can start viewing immediately
         
         // Extract departments
         const deptSet = new Set<string>(['all']);
@@ -196,14 +230,67 @@ const TrackAttendanceTab: React.FC<{
           if (record.department) deptSet.add(record.department);
         });
         setDepartments(Array.from(deptSet));
+        
+        // STEP 2: Auto-trigger background loading if there are more records
+        if (firstBatch.length < total) {
+          const remainingCount = total - firstBatch.length;
+          console.log(`🔄 Auto-triggering background load for ${remainingCount} remaining records...`);
+          
+          setTimeout(async () => {
+            await loadRemainingRecords(params, firstBatch, total);
+          }, 100);
+        } else {
+          setProgressiveLoadingComplete(true);
+        }
+      } else {
+        setLoading(false);
       }
-      
-      setLoading(false);
     } catch (error) {
       console.error('Error fetching attendance data:', error);
       setLoading(false);
+      setProgressiveLoadingComplete(true);
     }
   }, [filterType, selectedMonth, selectedYear, selectedDate, rangeStartDate, rangeEndDate]);
+
+  // STEP 2: Load remaining records in background
+  const loadRemainingRecords = async (params: URLSearchParams, initialRecords: AttendanceRecord[], total: number) => {
+    try {
+      setLoadingMore(true);
+      console.log('📋 Background loading additional records...');
+      
+      // Remove initial flag and update limit
+      params.delete('initial');
+      params.set('offset', initialRecords.length.toString());
+      params.set('limit', '0'); // Fetch all remaining
+      
+      const url = `${API_ENDPOINTS.dailyAttendance}all_records/?${params.toString()}`;
+      const response = await api.get<AttendanceApiResponse>(url);
+      
+      if (response && response.results) {
+        const remainingRecords = response.results;
+        console.log(`✅ Loaded ${remainingRecords.length} additional records`);
+        
+        const allRecords = [...initialRecords, ...remainingRecords];
+        setAttendanceData(allRecords);
+        
+        // Update departments with all records
+        const deptSet = new Set<string>(['all']);
+        allRecords.forEach((record: AttendanceRecord) => {
+          if (record.department) deptSet.add(record.department);
+        });
+        setDepartments(Array.from(deptSet));
+        
+        console.log(`🎉 Progressive loading complete: ${allRecords.length} total records loaded`);
+        setProgressiveLoadingComplete(true);
+      }
+      
+      setLoadingMore(false);
+    } catch (error) {
+      console.error('❌ Background loading failed:', error);
+      setProgressiveLoadingComplete(true);
+      setLoadingMore(false);
+    }
+  };
 
   // Load data on mount and filter changes
   useEffect(() => {
@@ -242,12 +329,12 @@ const TrackAttendanceTab: React.FC<{
   // Calculate KPIs
   const isFiltered = searchQuery !== '' || selectedDepartment !== 'all';
   
-  const totalEmployees = kpiTotals && !isFiltered ? kpiTotals.total_employees : filteredData.length;
-  const totalOtHours = kpiTotals && !isFiltered ? kpiTotals.total_ot_hours : filteredData.reduce((sum, r) => sum + (typeof r.ot_hours === 'string' ? parseFloat(r.ot_hours) || 0 : r.ot_hours), 0);
-  const totalLateMinutes = kpiTotals && !isFiltered ? kpiTotals.total_late_minutes : filteredData.reduce((sum, r) => sum + r.late_minutes, 0);
-  const totalPresentDays = kpiTotals && !isFiltered ? kpiTotals.total_present_days : filteredData.reduce((sum, r) => sum + r.present_days, 0);
-  const totalWorkingDays = kpiTotals && !isFiltered ? kpiTotals.total_working_days : filteredData.reduce((sum, r) => sum + (r.total_working_days || 0), 0);
-  const avgPresentPerc = kpiTotals && !isFiltered ? kpiTotals.avg_attendance_percentage : (totalWorkingDays > 0 ? (totalPresentDays / totalWorkingDays) * 100 : 0);
+  const totalEmployees = kpiTotals && !isFiltered ? (kpiTotals.total_employees ?? filteredData.length) : filteredData.length;
+  const totalOtHours = kpiTotals && !isFiltered ? (kpiTotals.total_ot_hours ?? 0) : filteredData.reduce((sum, r) => sum + (typeof r.ot_hours === 'string' ? parseFloat(r.ot_hours) || 0 : r.ot_hours), 0);
+  const totalLateMinutes = kpiTotals && !isFiltered ? (kpiTotals.total_late_minutes ?? 0) : filteredData.reduce((sum, r) => sum + (r.late_minutes || 0), 0);
+  const totalPresentDays = kpiTotals && !isFiltered ? (kpiTotals.total_present_days ?? 0) : filteredData.reduce((sum, r) => sum + (r.present_days || 0), 0);
+  const totalWorkingDays = kpiTotals && !isFiltered ? (kpiTotals.total_working_days ?? 0) : filteredData.reduce((sum, r) => sum + (r.total_working_days || 0), 0);
+  const avgPresentPerc = kpiTotals && !isFiltered ? (kpiTotals.avg_attendance_percentage ?? 0) : (totalWorkingDays > 0 ? (totalPresentDays / totalWorkingDays) * 100 : 0);
   const avgWorkingDays = totalEmployees > 0 ? totalWorkingDays / totalEmployees : 0;
   const avgPresentDays = totalEmployees > 0 ? totalPresentDays / totalEmployees : 0;
 
@@ -406,15 +493,38 @@ const TrackAttendanceTab: React.FC<{
             </Text>
           </View>
         ) : (
-          <ScrollView style={styles.attendanceCardsContainer}>
-            {filteredData.map((record) => {
+          <FlatList
+            data={filteredData}
+            keyExtractor={(item) => item.id?.toString() || item.employee_id}
+            style={styles.attendanceCardsContainer}
+            removeClippedSubviews={true}
+            maxToRenderPerBatch={20}
+            updateCellsBatchingPeriod={100}
+            initialNumToRender={15}
+            windowSize={5}
+            ListFooterComponent={
+              loadingMore ? (
+                <View style={{ padding: 16, alignItems: 'center' }}>
+                  <ActivityIndicator size="small" color={colors.primary} />
+                  <Text style={{ color: colors.textSecondary, marginTop: 8, fontSize: 12 }}>
+                    Loading more records...
+                  </Text>
+                </View>
+              ) : progressiveLoadingComplete && filteredData.length > 0 ? (
+                <View style={{ padding: 16, alignItems: 'center' }}>
+                  <Text style={{ color: colors.textSecondary, fontSize: 12 }}>
+                    ✓ All {filteredData.length} records loaded
+                  </Text>
+                </View>
+              ) : null
+            }
+            renderItem={({ item: record }) => {
               const attendancePercentage = record.total_working_days > 0 
                 ? (record.present_days / record.total_working_days) * 100 
                 : 0;
 
               return (
                 <View
-                  key={record.id}
                   style={[
                     styles.attendanceCard,
                     { backgroundColor: colors.surface, borderColor: colors.border },
@@ -557,8 +667,8 @@ const TrackAttendanceTab: React.FC<{
                   </View>
                 </View>
               );
-            })}
-          </ScrollView>
+            }}
+          />
         )
       )}
 
@@ -707,24 +817,57 @@ export default function AttendanceScreen() {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   
+  // Progressive loading state
+  const [progressiveLoadingComplete, setProgressiveLoadingComplete] = useState(false);
+  const [initialLoadComplete, setInitialLoadComplete] = useState(false);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [totalCount, setTotalCount] = useState(0);
+  
   // UI state
   const [showDatePicker, setShowDatePicker] = useState(false);
+  const [showCalendar, setShowCalendar] = useState(false);
   const [departments, setDepartments] = useState<string[]>(['All']);
   const [hasExcelAttendance, setHasExcelAttendance] = useState(false);
   const [isHoliday, setIsHoliday] = useState(false);
   const [holidayInfo, setHolidayInfo] = useState<{name: string; description?: string; type: string} | null>(null);
+  const [attendanceDates, setAttendanceDates] = useState<string[]>([]);
 
   // Handle date selection
   const handleDateSelect = (date: string) => {
     dispatch(setSelectedDate(date));
     setShowDatePicker(false);
+    setShowCalendar(false);
   };
 
-  // Fetch eligible employees for the selected date
+  // Fetch attendance dates for calendar dots
+  const fetchAttendanceDates = useCallback(async (month: string, year: number) => {
+    try {
+      const response: any = await api.get(`/api/attendance-dates/?month=${month}&year=${year}`);
+      if (response.dates && Array.isArray(response.dates)) {
+        setAttendanceDates(response.dates);
+      }
+    } catch (error) {
+      console.log('Attendance dates endpoint not available');
+      setAttendanceDates([]);
+    }
+  }, []);
+
+  // Fetch attendance dates when month changes
+  useEffect(() => {
+    if (selectedDate) {
+      const date = new Date(selectedDate);
+      const month = (date.getMonth() + 1).toString().padStart(2, '0');
+      const year = date.getFullYear();
+      fetchAttendanceDates(month, year);
+    }
+  }, [selectedDate, fetchAttendanceDates]);
+
+  // PROGRESSIVE LOADING: Fetch eligible employees for the selected date
   const fetchEligibleEmployees = useCallback(async () => {
     try {
       setLoading(true);
       setError(null);
+      setProgressiveLoadingComplete(false);
       
       if (!selectedDate) {
         setError('Please select a date');
@@ -732,81 +875,146 @@ export default function AttendanceScreen() {
         return;
       }
       
-      // Fetch eligible employees from backend
-      let response;
+      console.log('🚀 PROGRESSIVE LOADING: Starting for', selectedDate);
+      
+      // STEP 1: Load initial batch of employees (fast response)
+      console.log('📋 Loading initial employee data...');
+      let initialResponse;
       try {
-        response = await attendanceService.getEligibleEmployees(selectedDate);
+        // Try progressive loading endpoint first
+        initialResponse = await api.get(`/api/eligible-employees/?date=${selectedDate}&initial=true`);
       } catch (err: any) {
-        console.log('Eligible employees endpoint not available, using employees endpoint');
+        console.log('Progressive endpoint not available, using standard endpoint');
         // Fallback to regular employees endpoint
-        response = await api.get(`${API_ENDPOINTS.employees}?is_active=true`);
+        initialResponse = await api.get(`${API_ENDPOINTS.employees}?is_active=true`);
       }
       
-      // Check for Excel attendance and holidays (with error handling)
+      const initialData: any = initialResponse;
+      const firstBatch = initialData.eligible_employees || initialData.results || [];
+      const dayNameFromAPI = initialData.day_name || '';
+      const totalEmployees = initialData.total_count || firstBatch.length;
+      
+      console.log(`✅ Loaded ${firstBatch.length} of ${totalEmployees} employees`);
+      
+      // Check for Excel attendance and holidays
       try {
         const [excelResponse, holidayResponse] = await Promise.all([
           attendanceService.checkExcelAttendance(selectedDate).catch(() => ({ has_excel: false })),
           attendanceService.checkHoliday(selectedDate).catch(() => ({ is_holiday: false })),
         ]);
         
-        setHasExcelAttendance(excelResponse?.has_excel || false);
+        setHasExcelAttendance(excelResponse?.has_excel || initialData.has_excel_attendance || false);
         setIsHoliday(holidayResponse?.is_holiday || false);
         setHolidayInfo(holidayResponse?.holiday_info || null);
       } catch (err) {
         console.log('Excel/holiday check endpoints not available, using defaults');
-        setHasExcelAttendance(false);
+        setHasExcelAttendance(initialData.has_excel_attendance || false);
         setIsHoliday(false);
         setHolidayInfo(null);
       }
       
-      if (response && response.results) {
-        const employees = response.results.map((emp: any) => ({
-          id: emp.id,
-          employee_id: emp.employee_id,
-          first_name: emp.first_name,
-          last_name: emp.last_name,
-          name: emp.first_name && emp.last_name ? `${emp.first_name} ${emp.last_name}` : emp.name,
-          email: emp.email,
-          department: emp.department,
-          is_active: emp.is_active,
-          shift_start_time: emp.shift_start_time || '09:00',
-          shift_end_time: emp.shift_end_time || '18:00',
-          default_status: emp.default_status || 'present',
-          late_minutes: emp.late_minutes || 0,
-          ot_hours: emp.ot_hours || 0,
-          has_off_day: emp.has_off_day || false,
-          off_monday: emp.off_monday || false,
-          off_tuesday: emp.off_tuesday || false,
-          off_wednesday: emp.off_wednesday || false,
-          off_thursday: emp.off_thursday || false,
-          off_friday: emp.off_friday || false,
-          off_saturday: emp.off_saturday || false,
-          off_sunday: emp.off_sunday || false,
-          current_attendance: emp.current_attendance,
-        }));
+      // Set initial employees immediately for instant UI update
+      const employees = firstBatch.map((emp: any) => ({
+        id: emp.id,
+        employee_id: emp.employee_id,
+        first_name: emp.first_name,
+        last_name: emp.last_name,
+        name: emp.first_name && emp.last_name ? `${emp.first_name} ${emp.last_name}` : emp.name,
+        email: emp.email,
+        department: emp.department,
+        is_active: emp.is_active,
+        shift_start_time: emp.shift_start_time || '09:00',
+        shift_end_time: emp.shift_end_time || '18:00',
+        default_status: emp.default_status || 'present',
+        late_minutes: emp.late_minutes || 0,
+        ot_hours: emp.ot_hours || 0,
+        has_off_day: emp.has_off_day || false,
+        off_monday: emp.off_monday || false,
+        off_tuesday: emp.off_tuesday || false,
+        off_wednesday: emp.off_wednesday || false,
+        off_thursday: emp.off_thursday || false,
+        off_friday: emp.off_friday || false,
+        off_saturday: emp.off_saturday || false,
+        off_sunday: emp.off_sunday || false,
+        current_attendance: emp.current_attendance,
+      }));
+      
+      setEligibleEmployees(employees);
+      setDayName(dayNameFromAPI);
+      initializeAttendanceEntries(employees);
+      setLoading(false); // User can start working immediately
+      setInitialLoadComplete(true);
+      setTotalCount(totalEmployees);
+      
+      // Extract departments
+      const deptSet = new Set(['All']);
+      employees.forEach((emp: Employee) => {
+        if (emp.department) deptSet.add(emp.department);
+      });
+      setDepartments(Array.from(deptSet));
+      
+      // STEP 2: Auto-trigger background loading if there are more employees
+      if (initialData.progressive_loading?.has_more) {
+        const remainingCount = initialData.progressive_loading.remaining_employees;
+        console.log(`🔄 Auto-triggering background load for ${remainingCount} remaining employees...`);
         
-        setEligibleEmployees(employees);
-        initializeAttendanceEntries(employees);
-        
-        // Extract departments
-        const deptSet = new Set(['All']);
-        employees.forEach((emp: Employee) => {
-          if (emp.department) deptSet.add(emp.department);
-        });
-        setDepartments(Array.from(deptSet));
+        const delay = initialData.progressive_loading.recommended_delay_ms || 100;
+        setTimeout(async () => {
+          await loadRemainingEmployees(selectedDate, employees);
+        }, delay);
       } else {
-        setEligibleEmployees([]);
-        setAttendanceEntries(new Map());
-        setDepartments(['All']);
+        setProgressiveLoadingComplete(true);
       }
       
-      setLoading(false);
+      setError(null);
     } catch (err: any) {
       console.error('Error fetching eligible employees:', err);
       setError(err.message || 'Failed to load employees');
       setLoading(false);
     }
   }, [selectedDate]);
+
+  // STEP 2: Load remaining employees in background
+  const loadRemainingEmployees = async (date: string, initialEmployees: Employee[]) => {
+    try {
+      setLoadingMore(true);
+      console.log(`📋 Background loading additional data for ${date}...`);
+      
+      const response: any = await api.get(`/api/eligible-employees/?date=${date}&remaining=true`);
+      const remainingEmployees = response.eligible_employees || response.results || [];
+      
+      console.log(`✅ Loaded ${remainingEmployees.length} additional employees`);
+      
+      const allEmployees = [...initialEmployees, ...remainingEmployees.map((emp: any) => ({
+        id: emp.id,
+        employee_id: emp.employee_id,
+        first_name: emp.first_name,
+        last_name: emp.last_name,
+        name: emp.first_name && emp.last_name ? `${emp.first_name} ${emp.last_name}` : emp.name,
+        email: emp.email,
+        department: emp.department,
+        is_active: emp.is_active,
+        shift_start_time: emp.shift_start_time || '09:00',
+        shift_end_time: emp.shift_end_time || '18:00',
+        default_status: emp.default_status || 'present',
+        late_minutes: emp.late_minutes || 0,
+        ot_hours: emp.ot_hours || 0,
+        has_off_day: emp.has_off_day || false,
+        current_attendance: emp.current_attendance,
+      }))];
+      
+      setEligibleEmployees(allEmployees);
+      initializeAttendanceEntries(allEmployees);
+      
+      console.log(`🎉 Progressive loading complete: ${allEmployees.length} total records loaded`);
+      setProgressiveLoadingComplete(true);
+      setLoadingMore(false);
+    } catch (error) {
+      console.error('❌ Background loading failed:', error);
+      setProgressiveLoadingComplete(true);
+      setLoadingMore(false);
+    }
+  };
 
   // Initialize attendance entries for employees
   const initializeAttendanceEntries = (employees: Employee[]) => {
@@ -869,18 +1077,32 @@ export default function AttendanceScreen() {
       department: emp.department || 'General',
       status: status,
       clock_in: (() => {
-        const minutes = emp.late_minutes || 0;
-        const origShiftStart = emp.shift_start_time || '09:00';
-        const [h, m] = origShiftStart.split(':').map(Number);
-        const date = new Date(0, 0, 0, h, m + minutes);
-        return date.toTimeString().slice(0, 5);
+        try {
+          const minutes = emp.late_minutes || 0;
+          const origShiftStart = emp.shift_start_time || '09:00';
+          const parts = origShiftStart.split(':');
+          if (parts.length < 2) return '09:00';
+          const [h, m] = parts.map(Number);
+          if (isNaN(h) || isNaN(m)) return '09:00';
+          const date = new Date(0, 0, 0, h, m + minutes);
+          return date.toTimeString().slice(0, 5);
+        } catch (e) {
+          return '09:00';
+        }
       })(),
       clock_out: (() => {
-        const hours = emp.ot_hours || 0;
-        const origShiftEnd = emp.shift_end_time || '18:00';
-        const [h, m] = origShiftEnd.split(':').map(Number);
-        const date = new Date(0, 0, 0, h + hours, m);
-        return date.toTimeString().slice(0, 5);
+        try {
+          const hours = emp.ot_hours || 0;
+          const origShiftEnd = emp.shift_end_time || '18:00';
+          const parts = origShiftEnd.split(':');
+          if (parts.length < 2) return '18:00';
+          const [h, m] = parts.map(Number);
+          if (isNaN(h) || isNaN(m)) return '18:00';
+          const date = new Date(0, 0, 0, h + hours, m);
+          return date.toTimeString().slice(0, 5);
+        } catch (e) {
+          return '18:00';
+        }
       })(),
       ot_hours: emp.ot_hours || 0,
       late_minutes: emp.late_minutes || 0,
@@ -892,18 +1114,21 @@ export default function AttendanceScreen() {
     };
   };
 
-  // Update attendance entry
-  const updateAttendanceEntry = (employeeId: string, field: keyof AttendanceEntry, value: string | number | boolean) => {
+  // Update attendance entry with batching for better performance
+  const updateAttendanceEntry = useCallback((employeeId: string, field: keyof AttendanceEntry, value: string | number | boolean) => {
     setAttendanceEntries(prev => {
+      const entry = prev.get(employeeId);
+      if (!entry) return prev;
+      
+      // Only update if value actually changed
+      if (entry[field] === value) return prev;
+      
       const newMap = new Map(prev);
-      const entry = newMap.get(employeeId);
-      if (entry) {
-        const updated = { ...entry, [field]: value } as AttendanceEntry;
-        newMap.set(employeeId, updated);
-      }
+      const updated = { ...entry, [field]: value } as AttendanceEntry;
+      newMap.set(employeeId, updated);
       return newMap;
     });
-  };
+  }, []);
 
   // Initialize selected date if not set
   useEffect(() => {
@@ -978,7 +1203,7 @@ export default function AttendanceScreen() {
     });
   }, [sortedEmployees]);
 
-  // Memoized table row component for better performance
+  // Memoized table row component with custom comparison for better performance
   const AttendanceTableRow = memo(({ employee, entry, hasOffDay, colors, updateAttendanceEntry, hasExcelAttendance, isHoliday }: {
     employee: Employee;
     entry: AttendanceEntry;
@@ -1119,6 +1344,19 @@ export default function AttendanceScreen() {
         </View>
       </View>
     );
+  }, (prevProps, nextProps) => {
+    // Custom comparison to prevent unnecessary re-renders
+    return (
+      prevProps.employee.employee_id === nextProps.employee.employee_id &&
+      prevProps.entry.status === nextProps.entry.status &&
+      prevProps.entry.clock_in === nextProps.entry.clock_in &&
+      prevProps.entry.clock_out === nextProps.entry.clock_out &&
+      prevProps.entry.ot_hours === nextProps.entry.ot_hours &&
+      prevProps.entry.late_minutes === nextProps.entry.late_minutes &&
+      prevProps.hasOffDay === nextProps.hasOffDay &&
+      prevProps.hasExcelAttendance === nextProps.hasExcelAttendance &&
+      prevProps.isHoliday === nextProps.isHoliday
+    );
   });
 
   // Save attendance
@@ -1155,7 +1393,7 @@ export default function AttendanceScreen() {
       
       // Save attendance to backend with error handling
       try {
-        await attendanceService.saveAttendance(validAttendanceData);
+        await attendanceService.saveAttendance(selectedDate, validAttendanceData);
         Alert.alert('Success', 'Attendance saved successfully!');
         setError(null);
       } catch (saveErr: any) {
@@ -1236,16 +1474,89 @@ export default function AttendanceScreen() {
       {/* Tab Content */}
       {activeTab === 'log' ? (
         <>
-          {/* Date Selection and Filters */}
-          <ScrollView style={styles.filtersContainer}>
-        {/* Filters moved to header: date + search */}
+          {/* Date Selection Button */}
+          <View style={styles.dateButtonSection}>
+            <TouchableOpacity
+              style={[styles.dateButton, { backgroundColor: colors.surface, borderColor: colors.border }]}
+              onPress={() => setShowCalendar(!showCalendar)}
+            >
+              <FontAwesome name="calendar" size={16} color={colors.primary} />
+              <Text style={[styles.dateButtonText, { color: colors.text }]}>
+                {selectedDate ? new Date(selectedDate).toLocaleDateString('en-US', { 
+                  weekday: 'short',
+                  year: 'numeric', 
+                  month: 'short', 
+                  day: 'numeric' 
+                }) : 'Select Date'}
+              </Text>
+              <FontAwesome name={showCalendar ? "chevron-up" : "chevron-down"} size={12} color={colors.textSecondary} />
+            </TouchableOpacity>
+          </View>
 
-        {/* Department Filter */}
-        <View style={styles.departmentSection}>
-          <Text style={[styles.sectionLabel, { color: colors.text }]}>Department</Text>
-          <ScrollView horizontal showsHorizontalScrollIndicator={false}>
-            <View style={styles.departmentButtons}>
-              {departments.map((dept) => (
+          {/* Calendar Modal */}
+          {showCalendar && (
+            <View style={styles.calendarSection}>
+              <Calendar
+                current={selectedDate || undefined}
+                onDayPress={(day) => {
+                  handleDateSelect(day.dateString);
+                  console.log('Selected date:', day.dateString);
+                  console.log('Attendance dates:', attendanceDates);
+                }}
+                markedDates={{
+                  ...attendanceDates.reduce((acc, date) => ({
+                    ...acc,
+                    [date]: {
+                      marked: true,
+                      dotColor: '#14b8a6', // Teal-500
+                    }
+                  }), {}),
+                  ...(selectedDate ? {
+                    [selectedDate]: {
+                      selected: true,
+                      selectedColor: '#0d9488', // Teal-600
+                      marked: attendanceDates.includes(selectedDate),
+                      dotColor: '#ffffff', // White dot on selected date
+                    }
+                  } : {})
+                }}
+                maxDate={new Date().toISOString().split('T')[0]}
+                theme={{
+                  backgroundColor: colors.background,
+                  calendarBackground: colors.surface,
+                  textSectionTitleColor: colors.text,
+                  selectedDayBackgroundColor: '#0d9488',
+                  selectedDayTextColor: '#ffffff',
+                  todayTextColor: '#14b8a6',
+                  dayTextColor: colors.text,
+                  textDisabledColor: colors.textLight,
+                  dotColor: '#14b8a6',
+                  selectedDotColor: '#ffffff',
+                  arrowColor: colors.primary,
+                  monthTextColor: colors.text,
+                  indicatorColor: colors.primary,
+                  textDayFontWeight: '400',
+                  textMonthFontWeight: '600',
+                  textDayHeaderFontWeight: '500',
+                  textDayFontSize: 14,
+                  textMonthFontSize: 16,
+                  textDayHeaderFontSize: 12,
+                }}
+                style={[styles.calendar, { backgroundColor: colors.surface }]}
+              />
+            </View>
+          )}
+
+          {/* Department Filter with Save Button */}
+          <View style={[styles.departmentSection, { paddingHorizontal: 16, paddingTop: 8 }]}>
+            <Text style={[styles.sectionLabel, { color: colors.text }]}>Department</Text>
+            <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+              <FlatList
+                horizontal
+                showsHorizontalScrollIndicator={false}
+                data={departments}
+                keyExtractor={(item) => item}
+                renderItem={({ item: dept }) => (
                 <TouchableOpacity
                   key={dept}
                   style={[
@@ -1266,53 +1577,64 @@ export default function AttendanceScreen() {
                     {dept}
                   </Text>
                 </TouchableOpacity>
-              ))}
+                )}
+              />
+              {!loading && sortedEmployees.length > 0 && !hasExcelAttendance && !isHoliday && (
+              <TouchableOpacity
+                style={[styles.compactSaveButton, { backgroundColor: colors.primary, marginLeft: 12 }]}
+                onPress={saveAttendance}
+                disabled={saving}
+              >
+                {saving ? (
+                  <ActivityIndicator size="small" color="white" />
+                ) : (
+                  <FontAwesome name="save" size={14} color="white" />
+                )}
+                <Text style={styles.compactSaveButtonText}>
+                  {saving ? 'Saving...' : 'Save'}
+                </Text>
+              </TouchableOpacity>
+            )}
+          </View>
+        </View>
+
+          {/* Bulk Actions */}
+          <View style={[styles.bulkActionsSection, { paddingHorizontal: 16 }]}>
+            <Text style={[styles.sectionLabel, { color: colors.text }]}>Bulk Actions</Text>
+            <View style={styles.bulkButtons}>
+              <TouchableOpacity
+                style={[styles.bulkButton, { backgroundColor: colors.success }]}
+                onPress={markAllPresent}
+                disabled={hasExcelAttendance || isHoliday}
+              >
+                <FontAwesome name="check-circle" size={16} color="white" />
+                <Text style={styles.bulkButtonText}>Mark All Present</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[styles.bulkButton, { backgroundColor: colors.error }]}
+                onPress={markAllAbsent}
+                disabled={hasExcelAttendance || isHoliday}
+              >
+                <FontAwesome name="times-circle" size={16} color="white" />
+                <Text style={styles.bulkButtonText}>Mark All Absent</Text>
+              </TouchableOpacity>
             </View>
-          </ScrollView>
-        </View>
-
-        {/* Bulk Actions */}
-        <View style={styles.bulkActionsSection}>
-          <Text style={[styles.sectionLabel, { color: colors.text }]}>Bulk Actions</Text>
-          <View style={styles.bulkButtons}>
-            <TouchableOpacity
-              style={[styles.bulkButton, { backgroundColor: colors.success }]}
-              onPress={markAllPresent}
-              disabled={hasExcelAttendance || isHoliday}
-            >
-              <FontAwesome name="check-circle" size={16} color="white" />
-              <Text style={styles.bulkButtonText}>Mark All Present</Text>
-            </TouchableOpacity>
-            <TouchableOpacity
-              style={[styles.bulkButton, { backgroundColor: colors.error }]}
-              onPress={markAllAbsent}
-              disabled={hasExcelAttendance || isHoliday}
-            >
-              <FontAwesome name="times-circle" size={16} color="white" />
-              <Text style={styles.bulkButtonText}>Mark All Absent</Text>
-            </TouchableOpacity>
           </View>
-        </View>
 
-        {/* Holiday/Excel Warning */}
-        {(hasExcelAttendance || isHoliday) && (
-          <View style={[styles.warningBox, { backgroundColor: colors.warning + '20', borderColor: colors.warning }]}>
-            <FontAwesome name="exclamation-triangle" size={16} color={colors.warning} />
-            <Text style={[styles.warningText, { color: colors.warning }]}>
-              {hasExcelAttendance 
-                ? 'Attendance interface is disabled: Excel data uploaded for this month'
-                : `Cannot mark attendance on holiday: ${holidayInfo?.name || 'Holiday'}`
-              }
-            </Text>
-          </View>
-        )}
+          {/* Holiday/Excel Warning */}
+          {(hasExcelAttendance || isHoliday) && (
+            <View style={[styles.warningBox, { backgroundColor: colors.warning + '20', borderColor: colors.warning, marginHorizontal: 16 }]}>
+              <FontAwesome name="exclamation-triangle" size={16} color={colors.warning} />
+              <Text style={[styles.warningText, { color: colors.warning }]}>
+                {hasExcelAttendance 
+                  ? 'Attendance interface is disabled: Excel data uploaded for this month'
+                  : `Cannot mark attendance on holiday: ${holidayInfo?.name || 'Holiday'}`
+                }
+              </Text>
+            </View>
+          )}
 
-        {/* Employee List */}
-        <View style={styles.employeeListSection}>
-          <Text style={[styles.sectionLabel, { color: colors.text }]}>
-            Employees ({sortedEmployees.length})
-          </Text>
-          
+          {/* Employee List - Single FlatList with NO nested ScrollViews */}
           {loading ? (
             <View style={styles.loadingContainer}>
               <ActivityIndicator size="large" color={colors.primary} />
@@ -1333,85 +1655,81 @@ export default function AttendanceScreen() {
               </Text>
             </View>
           ) : (
-            <ScrollView horizontal showsHorizontalScrollIndicator={true}>
-              <View>
-                {/* Table Header */}
-                <View style={[styles.tableHeader, { backgroundColor: colors.primary }]}>
-                  <Text style={[styles.headerCell, { width: 150, color: 'white' }]}>Employee</Text>
-                  <Text style={[styles.headerCell, { width: 80, color: 'white' }]}>Clock In</Text>
-                  <Text style={[styles.headerCell, { width: 80, color: 'white' }]}>Clock Out</Text>
-                  <Text style={[styles.headerCell, { width: 100, color: 'white' }]}>Status</Text>
-                  <Text style={[styles.headerCell, { width: 70, color: 'white' }]}>OT Hours</Text>
-                  <Text style={[styles.headerCell, { width: 80, color: 'white' }]}>Late Min</Text>
+            <View style={{ flex: 1, paddingHorizontal: 16 }}>
+              <ScrollView horizontal showsHorizontalScrollIndicator={true} style={styles.tableScrollContainer}>
+              <FlatList
+                data={sortedEmployees}
+                keyExtractor={(item) => item.employee_id}
+                ListHeaderComponent={() => (
+                  <View style={[styles.tableHeader, { backgroundColor: colors.primary }]}>
+                    <Text style={[styles.headerCell, { width: 150, color: 'white' }]}>Employee</Text>
+                    <Text style={[styles.headerCell, { width: 80, color: 'white' }]}>Clock In</Text>
+                    <Text style={[styles.headerCell, { width: 80, color: 'white' }]}>Clock Out</Text>
+                    <Text style={[styles.headerCell, { width: 100, color: 'white' }]}>Status</Text>
+                    <Text style={[styles.headerCell, { width: 70, color: 'white' }]}>OT Hours</Text>
+                    <Text style={[styles.headerCell, { width: 80, color: 'white' }]}>Late Min</Text>
+                  </View>
+                )}
+                stickyHeaderIndices={[0]}
+                getItemLayout={(data, index) => ({
+                  length: 60,
+                  offset: 60 * index,
+                  index,
+                })}
+                removeClippedSubviews={true}
+                maxToRenderPerBatch={20}
+                updateCellsBatchingPeriod={100}
+                initialNumToRender={20}
+                windowSize={5}
+                maintainVisibleContentPosition={{
+                  minIndexForVisible: 0,
+                }}
+                onScrollToIndexFailed={() => {}}
+              ListFooterComponent={
+                loadingMore ? (
+                  <View style={{ padding: 16, alignItems: 'center' }}>
+                    <ActivityIndicator size="small" color={colors.primary} />
+                    <Text style={{ color: colors.textSecondary, marginTop: 8, fontSize: 12 }}>
+                      Loading more employees...
+                    </Text>
+                  </View>
+                ) : progressiveLoadingComplete && sortedEmployees.length > 0 ? (
+                  <View style={{ padding: 16, alignItems: 'center' }}>
+                    <Text style={{ color: colors.textSecondary, fontSize: 12 }}>
+                      ✓ All {sortedEmployees.length} employees loaded
+                    </Text>
+                  </View>
+                ) : null
+              }
+              renderItem={({ item: employee }) => {
+                const entry = attendanceEntries.get(employee.employee_id);
+                if (!entry) return null;
+
+                const hasOffDay = entry.has_off_day !== undefined ? entry.has_off_day : (employee.has_off_day || false);
+
+                return (
+                  <AttendanceTableRow
+                    employee={employee}
+                    entry={entry}
+                    hasOffDay={hasOffDay}
+                    colors={colors}
+                    updateAttendanceEntry={updateAttendanceEntry}
+                    hasExcelAttendance={hasExcelAttendance}
+                    isHoliday={isHoliday}
+                  />
+                );
+              }}
+              ListEmptyComponent={() => (
+                <View style={styles.emptyContainer}>
+                  <Text style={[styles.emptyText, { color: colors.textSecondary }]}>
+                    No employees found
+                  </Text>
                 </View>
-
-                {/* Table Body - Optimized with FlatList */}
-                <FlatList
-                  data={sortedEmployees}
-                  keyExtractor={(item) => item.employee_id}
-                  getItemLayout={(data, index) => ({
-                    length: 60, // Approximate height of each row
-                    offset: 60 * index,
-                    index,
-                  })}
-                  removeClippedSubviews={true}
-                  maxToRenderPerBatch={10}
-                  updateCellsBatchingPeriod={50}
-                  initialNumToRender={15}
-                  windowSize={10}
-                  renderItem={({ item: employee }) => {
-                    const entry = attendanceEntries.get(employee.employee_id);
-                    if (!entry) return null;
-
-                    const hasOffDay = entry.has_off_day !== undefined ? entry.has_off_day : (employee.has_off_day || false);
-
-                    return (
-                      <AttendanceTableRow
-                        employee={employee}
-                        entry={entry}
-                        hasOffDay={hasOffDay}
-                        colors={colors}
-                        updateAttendanceEntry={updateAttendanceEntry}
-                        hasExcelAttendance={hasExcelAttendance}
-                        isHoliday={isHoliday}
-                      />
-                    );
-                  }}
-                  ListEmptyComponent={() => (
-                    <View style={styles.emptyContainer}>
-                      <Text style={[styles.emptyText, { color: colors.textSecondary }]}>
-                        No employees found
-                      </Text>
-                    </View>
-                  )}
-                />
-              </View>
-            </ScrollView>
-          )}
-        </View>
-
-        {/* Save Button */}
-        {!loading && sortedEmployees.length > 0 && !hasExcelAttendance && !isHoliday && (
-          <View style={styles.saveSection}>
-            <TouchableOpacity
-              style={[styles.saveButton, { backgroundColor: colors.primary }]}
-              onPress={saveAttendance}
-              disabled={saving}
-            >
-              {saving ? (
-                <ActivityIndicator size="small" color="white" />
-              ) : (
-                <FontAwesome name="save" size={16} color="white" />
               )}
-              <Text style={styles.saveButtonText}>
-                {saving ? 'Saving...' : 'Save Attendance'}
-              </Text>
-            </TouchableOpacity>
-          </View>
-        )}
-
-        <View style={{ height: 32 }} />
-        </ScrollView>
+            />
+              </ScrollView>
+            </View>
+          )}
         </>
       ) : (
         /* Track Attendance Tab - Redesigned to match web dashboard */
@@ -1707,12 +2025,66 @@ const styles = StyleSheet.create({
     borderRadius: 8,
     gap: 8,
   },
+  // Top save button styles
+  topSaveSection: {
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+    borderBottomWidth: 1,
+  },
+  topSaveButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: 14,
+    borderRadius: 8,
+    gap: 8,
+    elevation: 2,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.2,
+    shadowRadius: 2,
+  },
+  // Compact save button styles
+  compactSaveButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: 6,
+    gap: 6,
+  },
+  compactSaveButtonText: {
+    color: 'white',
+    fontSize: 13,
+    fontWeight: '600',
+  },
   saveButtonText: {
     color: 'white',
     fontSize: 16,
     fontWeight: '600',
   },
+  // Calendar styles
+  dateButtonSection: {
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+  },
+  calendarSection: {
+    marginBottom: 16,
+    paddingHorizontal: 16,
+  },
+  calendar: {
+    borderRadius: 12,
+    elevation: 2,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.1,
+    shadowRadius: 4,
+  },
   // Table styles
+  tableScrollContainer: {
+    flex: 1,
+  },
   tableHeader: {
     flexDirection: 'row',
     paddingVertical: 12,
@@ -2028,11 +2400,6 @@ const styles = StyleSheet.create({
   kpiValue: {
     fontSize: 18,
     fontWeight: '700',
-  },
-  // Old wide table styles kept for reference (no longer used for tracker)
-  tableScrollContainer: {
-    flex: 1,
-    paddingHorizontal: 16,
   },
   percentageBadge: {
     paddingHorizontal: 8,

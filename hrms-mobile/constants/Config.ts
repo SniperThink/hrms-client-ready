@@ -92,7 +92,6 @@ export const STORAGE_KEYS = {
   SESSION_KEY: 'session_key',
   USER: 'user',
   TENANT: 'tenant',
-  KEEP_SIGNED_IN: 'keep_signed_in',
 };
 
 // JWT Token Settings

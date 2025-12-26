@@ -26,7 +26,7 @@
 - [x] **Secure Storage** - Token and user data storage utilities
 
 ### ✅ Authentication Screens
-- [x] **Login Screen** - Email/password login with "Keep Signed In" option
+- [x] **Login Screen** - Email/password login
 - [x] **Signup Screen** - Company registration with subdomain selection
 - [x] **Forgot Password Screen** - 3-step flow (Request OTP → Verify → Reset)
 

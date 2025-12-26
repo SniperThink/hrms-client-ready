@@ -73,9 +73,12 @@ export const attendanceService = {
     return await api.get(`${API_ENDPOINTS.employees}eligible_for_attendance/?${params.toString()}`);
   },
 
-  // Save attendance data
-  async saveAttendance(attendanceData: any[]): Promise<any> {
-    return await api.post(`${API_ENDPOINTS.dailyAttendance}bulk_create/`, { attendance_records: attendanceData });
+  // Save attendance data - using bulk-update-attendance endpoint (same as web dashboard)
+  async saveAttendance(date: string, attendanceData: any[]): Promise<any> {
+    return await api.post('/api/bulk-update-attendance/', {
+      date: date,
+      attendance_records: attendanceData
+    });
   },
 
   // Check if Excel attendance was uploaded for a date
